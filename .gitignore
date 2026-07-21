@@ -1,0 +1,44 @@
+# Environments
+.env
+.venv/
+venv/
+.python-version.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Package manager
+uv.lock.tmp
+
+# Databases & data caches
+*.db
+*.sqlite
+*.sqlite3
+data/
+*.parquet
+.cache/
+
+# Testing & tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+htmlcov/
+.coverage
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
