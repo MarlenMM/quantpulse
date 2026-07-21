@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -99,6 +99,25 @@ class MacroIndicator(Base):
     date: Mapped[date] = mapped_column(Date, primary_key=True)
     indicator_name: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[float] = mapped_column(Float)
+
+
+class PatternSignal(Base):
+    """Detected chart/candlestick patterns (Section 13).
+
+    Shared by candlestick detection (Phase 2, native library detectors) and
+    the geometric chart-pattern algorithms (Phase 2's Opus half, e.g.
+    head-and-shoulders) -- both normalize to this same shape.
+    """
+
+    __tablename__ = "pattern_signals"
+    __table_args__ = (UniqueConstraint("symbol", "date", "pattern_type"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"))
+    date: Mapped[date] = mapped_column(Date)
+    pattern_type: Mapped[str] = mapped_column(String(50))
+    direction: Mapped[str] = mapped_column(String(10))
+    confidence: Mapped[float] = mapped_column(Float)
 
 
 class RefreshLog(Base):
