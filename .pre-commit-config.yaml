@@ -1,0 +1,24 @@
+# Hooks run via `uv run` against the project's own locked versions
+# (pyproject.toml / uv.lock) instead of pre-commit's separate hook envs,
+# so local checks and CI never drift out of sync.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        types: [python]
+        pass_filenames: false
