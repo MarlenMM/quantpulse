@@ -7,7 +7,10 @@ import yfinance as yf
 
 from quantpulse.config import get_settings
 from quantpulse.ingestion.cache import cached_dataframe, cached_json
+from quantpulse.ingestion.circuit_breaker import get_breaker
 from quantpulse.ingestion.rate_limit import SimpleRateLimiter
+
+_SOURCE = "yfinance"
 
 # yfinance is an unofficial wrapper with no documented rate limit, but Section 5
 # says it "can break/rate-limit without notice" -- self-throttle rather than hammer it.
@@ -37,7 +40,8 @@ def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
 
     def _fetch() -> pd.DataFrame:
         _rate_limiter.wait()
-        raw = yf.Ticker(symbol).history(period=period, auto_adjust=False)
+        with get_breaker(_SOURCE).guard():
+            raw = yf.Ticker(symbol).history(period=period, auto_adjust=False)
         df = raw.rename(
             columns={
                 "Open": "open",
@@ -53,8 +57,13 @@ def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
         df.insert(0, "symbol", symbol)
         return df.reset_index()
 
+    # `period` must be in the cache key: a 5d nightly pull and a max/10y seed
+    # backfill for the same symbol are different data and must not collide.
     return cached_dataframe(
-        f"price_history_{symbol}", _fetch, _cache_dir("price_history"), ttl=timedelta(hours=12)
+        f"price_history_{symbol}_{period}",
+        _fetch,
+        _cache_dir("price_history"),
+        ttl=timedelta(hours=12),
     )
 
 
@@ -67,7 +76,8 @@ def fetch_fundamentals(symbol: str) -> dict[str, Any]:
 
     def _fetch() -> dict[str, Any]:
         _rate_limiter.wait()
-        info = yf.Ticker(symbol).info
+        with get_breaker(_SOURCE).guard():
+            info = yf.Ticker(symbol).info
         return {"symbol": symbol, **{k: info.get(v) for k, v in _FUNDAMENTAL_FIELDS.items()}}
 
     return cached_json(
@@ -80,14 +90,15 @@ def fetch_analyst_consensus(symbol: str) -> dict[str, Any]:
 
     def _fetch() -> dict[str, Any]:
         _rate_limiter.wait()
-        ticker = yf.Ticker(symbol)
-        recs = ticker.recommendations
+        with get_breaker(_SOURCE).guard():
+            ticker = yf.Ticker(symbol)
+            recs = ticker.recommendations
+            info = ticker.info
         current = None
         if recs is not None and not recs.empty:
             this_month = recs[recs["period"] == "0m"]
             if not this_month.empty:
                 current = this_month.iloc[0]
-        info = ticker.info
         return {
             "symbol": symbol,
             "strong_buy": int(current["strongBuy"]) if current is not None else 0,

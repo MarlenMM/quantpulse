@@ -43,3 +43,22 @@ def fetch_sp500_constituents() -> pd.DataFrame:
     df["asset_type"] = "equity"
     df["is_active"] = True
     return df.reset_index(drop=True)
+
+
+def fetch_sp500_date_added() -> pd.DataFrame:
+    """Current constituents with the date each was added, as [symbol, added_date].
+
+    Used only by the seed script's fallback path (Section 5): when no
+    point-in-time historical dataset is available, this at least gives real
+    add-dates for today's survivors. Rows whose date can't be parsed are
+    dropped rather than guessed.
+    """
+    cache_dir = Path(get_settings().ingestion_cache_dir) / "wikipedia"
+    raw = cached_dataframe("sp500_date_added", _fetch_raw, cache_dir, ttl=timedelta(days=1))
+
+    df = raw.rename(columns={"Symbol": "symbol", "Date added": "added_date"})[
+        ["symbol", "added_date"]
+    ].copy()
+    df["symbol"] = df["symbol"].str.replace(".", "-", regex=False)
+    df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce").dt.date
+    return df.dropna(subset=["added_date"]).reset_index(drop=True)
