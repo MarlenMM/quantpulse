@@ -31,6 +31,21 @@ def test_match_themes_is_sorted_and_deterministic() -> None:
     assert tm.match_themes(text) == sorted(tm.match_themes(text))
 
 
+def test_canonical_plan_examples_still_match_after_keyword_tightening() -> None:
+    # The plan's own Tier-2 examples must keep matching their basket.
+    assert "semiconductors" in tm.match_themes("New semiconductor export controls announced")
+    assert "banks" in tm.match_themes("Regulators raise bank capital requirements")
+
+
+def test_broad_off_domain_phrasing_does_not_over_propagate() -> None:
+    # Precision guard (the Opus concern): a bare "export controls" or "capital
+    # requirements" story in an unrelated domain must NOT drag in chip/bank names.
+    assert "semiconductors" not in tm.match_themes("US tightens steel export controls on imports")
+    assert "banks" not in tm.match_themes(
+        "Insurers face higher capital requirements under new rules"
+    )
+
+
 # --- basket config integrity --------------------------------------------------
 
 

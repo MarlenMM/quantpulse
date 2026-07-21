@@ -82,11 +82,14 @@ THEMATIC_BASKETS: tuple[ThematicBasket, ...] = (
     _basket(
         "semiconductors",
         ["NVDA", "AMD", "INTC", "TSM", "AVGO", "MU", "QCOM", "AMAT", "LRCX", "ASML"],
+        # Deliberately NO bare "export controls": that fires on any
+        # export-controls story (steel, arms, ...), over-propagating to chip
+        # names. "semiconductor export controls" still matches via
+        # "semiconductor"/"chip export", so precision is gained for free.
         [
             "semiconductor",
             "chipmaker",
             "chip export",
-            "export controls",
             "foundry",
             "wafer",
             "chip act",
@@ -110,7 +113,9 @@ THEMATIC_BASKETS: tuple[ThematicBasket, ...] = (
     _basket(
         "banks",
         ["JPM", "BAC", "WFC", "C", "GS", "MS"],
-        ["bank capital", "capital requirements", "regional bank", "basel", "bank stress"],
+        # NOT bare "capital requirements" (insurers and others have those too);
+        # "bank capital" already covers the plan's "bank capital requirements".
+        ["bank capital", "regional bank", "basel", "bank stress"],
     ),
 )
 
