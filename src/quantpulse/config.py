@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     # Section 6.5/6.6: on-disk response cache for ingestion clients.
     ingestion_cache_dir: str = ".cache"
 
+    # Sections 5 & 22: point-in-time S&P 500 membership (incl. removed names)
+    # so the cold-start backfill is survivorship-bias-aware. Defaults to a
+    # public interval-format dataset (ticker,start_date,end_date); override
+    # with a local path via historical_constituents_path, or blank the URL to
+    # force the documented-limitation fallback to today's constituents only.
+    historical_constituents_url: str = (
+        "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_ticker_start_end.csv"
+    )
+    historical_constituents_path: str | None = None
+
+    # Section 6.2: how far back the one-time cold-start backfill pulls prices.
+    seed_history_period: str = "max"
+
 
 @lru_cache
 def get_settings() -> Settings:

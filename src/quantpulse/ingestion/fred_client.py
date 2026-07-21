@@ -5,13 +5,16 @@ import pandas as pd
 
 from quantpulse.config import get_settings
 from quantpulse.ingestion.cache import cached_dataframe
+from quantpulse.ingestion.circuit_breaker import get_breaker
 from quantpulse.ingestion.http import get_json
-from quantpulse.ingestion.rate_limit import SimpleRateLimiter
+from quantpulse.ingestion.rate_limit import TokenBucketRateLimiter
 
 _BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
+_SOURCE = "fred"
 
-# Section 5: ~120 req/min free tier. 0.6s keeps a comfortable margin.
-_rate_limiter = SimpleRateLimiter(min_interval_seconds=0.6)
+# Section 5: ~120 req/min free tier. A token bucket (capacity 100, refilled
+# over 60s) allows bursting through a batch of series then throttling.
+_rate_limiter = TokenBucketRateLimiter(capacity=100, per_seconds=60.0)
 
 # Named series used elsewhere in the plan (Section 5, 28); fetch_series()
 # works with any other FRED series id too.
@@ -51,7 +54,8 @@ def fetch_series(
             params["observation_end"] = end_date.isoformat()
 
         _rate_limiter.wait()
-        result = get_json(_BASE_URL, params=params)
+        with get_breaker(_SOURCE).guard():
+            result = get_json(_BASE_URL, params=params)
         df = pd.DataFrame(result["observations"])
         # FRED marks missing observations with "."; drop them rather than
         # silently coercing to NaN-as-zero downstream.

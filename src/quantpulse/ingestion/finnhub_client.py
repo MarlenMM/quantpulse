@@ -4,13 +4,17 @@ from typing import Any
 
 from quantpulse.config import get_settings
 from quantpulse.ingestion.cache import cached_json
+from quantpulse.ingestion.circuit_breaker import get_breaker
 from quantpulse.ingestion.http import get_json
-from quantpulse.ingestion.rate_limit import SimpleRateLimiter
+from quantpulse.ingestion.rate_limit import TokenBucketRateLimiter
 
 _BASE_URL = "https://finnhub.io/api/v1"
+_SOURCE = "finnhub"
 
-# Section 5: ~60 calls/min free tier. 1.1s keeps a comfortable margin.
-_rate_limiter = SimpleRateLimiter(min_interval_seconds=1.1)
+# Section 5: ~60 calls/min free tier. A token bucket (capacity 55, refilled
+# over 60s) lets a batch burst up to the near-limit and then throttle to the
+# sustainable rate, using the whole free allowance without exceeding it.
+_rate_limiter = TokenBucketRateLimiter(capacity=55, per_seconds=60.0)
 
 
 def _cache_dir(subdir: str) -> Path:
@@ -22,7 +26,8 @@ def _get(path: str, params: dict[str, Any]) -> Any:
     if not settings.finnhub_api_key:
         raise ValueError("FINNHUB_API_KEY is not set")
     _rate_limiter.wait()
-    return get_json(f"{_BASE_URL}{path}", params={**params, "token": settings.finnhub_api_key})
+    with get_breaker(_SOURCE).guard():
+        return get_json(f"{_BASE_URL}{path}", params={**params, "token": settings.finnhub_api_key})
 
 
 def fetch_quote(symbol: str) -> dict[str, Any]:

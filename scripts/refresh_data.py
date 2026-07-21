@@ -34,6 +34,7 @@ from quantpulse.storage.models import (
     RefreshLog,
     Ticker,
 )
+from quantpulse.utils.log import configure_logging
 from quantpulse.utils.market_calendar import is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -195,7 +196,8 @@ def refresh_macro_indicators(session: Session) -> int:
 
 
 def run(job_name: str = "refresh_data") -> None:
-    logging.basicConfig(level=get_settings().log_level)
+    run_id = configure_logging(get_settings().log_level)
+    logger.info("%s starting (run_id=%s)", job_name, run_id)
     started_at = datetime.now()
     today = started_at.date()
     status = "success"

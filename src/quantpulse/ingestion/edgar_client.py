@@ -6,14 +6,17 @@ import pandas as pd
 
 from quantpulse.config import get_settings
 from quantpulse.ingestion.cache import cached_dataframe, cached_json
+from quantpulse.ingestion.circuit_breaker import get_breaker
 from quantpulse.ingestion.http import get_json
 from quantpulse.ingestion.rate_limit import SimpleRateLimiter
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_SOURCE = "edgar"
 
 # Section 5: "free, no key, generous fair-use rate". No documented number,
-# but SEC's own guidance is to stay well under ~10 req/sec.
+# but SEC's own guidance is to stay well under ~10 req/sec -- min-interval,
+# not a burst-allowing token bucket, is the polite fit for a fair-use source.
 _rate_limiter = SimpleRateLimiter(min_interval_seconds=0.2)
 
 
@@ -30,7 +33,8 @@ def fetch_cik_lookup() -> pd.DataFrame:
 
     def _fetch() -> pd.DataFrame:
         _rate_limiter.wait()
-        result = get_json(_TICKERS_URL, headers=_headers())
+        with get_breaker(_SOURCE).guard():
+            result = get_json(_TICKERS_URL, headers=_headers())
         df = pd.DataFrame(result.values())
         return df.rename(columns={"cik_str": "cik", "title": "name"})[["ticker", "cik", "name"]]
 
@@ -52,7 +56,8 @@ def fetch_company_facts(symbol: str) -> dict[str, Any]:
 
     def _fetch() -> dict[str, Any]:
         _rate_limiter.wait()
-        return dict(get_json(_COMPANY_FACTS_URL.format(cik=cik), headers=_headers()))
+        with get_breaker(_SOURCE).guard():
+            return dict(get_json(_COMPANY_FACTS_URL.format(cik=cik), headers=_headers()))
 
     return dict(
         cached_json(
