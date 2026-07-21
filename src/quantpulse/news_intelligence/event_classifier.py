@@ -51,6 +51,11 @@ _HYPOTHESIS_TEMPLATE = "This financial news article is about {}."
 # Below this top-label softmax score, the article is treated as `OTHER`
 # rather than force-fit into the best-but-weak label. 1/8 candidate labels =
 # 0.125 is pure chance; this threshold demands a clear plurality above it.
+# Empirically calibrated against real BART output on labeled headlines: clear,
+# correct classifications land ~0.45-0.95 (the weakest legitimate ones --
+# geopolitical/regulatory -- around 0.45-0.49), so 0.35 sits safely below the
+# real-classification band while still filtering genuine ambiguity. See the
+# opt-in integration test tests/integration/test_event_classifier_model.py.
 CONFIDENCE_THRESHOLD = 0.35
 
 

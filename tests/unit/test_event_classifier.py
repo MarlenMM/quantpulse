@@ -123,6 +123,30 @@ def test_classify_passes_expected_pipeline_arguments() -> None:
     assert kwargs["multi_label"] is False
 
 
+def test_full_label_distribution_is_retained_for_audit() -> None:
+    # scores must carry every returned label, not just the winner -- it's the
+    # audit trail behind the chosen event_type (Section 7.3's auditability aim).
+    full = {t: 1.0 / len(ec._CANDIDATE_PHRASES) for t in ec._CANDIDATE_PHRASES}
+    full[EventType.EARNINGS] = 0.6
+    fake = _FakePipeline(by_keyword={}, default=full)
+    with patch.object(ec, "_load_classifier", return_value=fake):
+        result = ec.classify("Apple reports results")
+    assert result.event_type is EventType.EARNINGS
+    assert set(result.scores) == set(ec._CANDIDATE_PHRASES)
+    assert EventType.OTHER not in result.scores  # OTHER is derived, never scored
+
+
+def test_score_just_above_threshold_stays_classified() -> None:
+    # A top score exactly at the threshold is classified (>=), not downgraded.
+    fake = _FakePipeline(
+        by_keyword={},
+        default={EventType.GEOPOLITICAL: ec.CONFIDENCE_THRESHOLD, EventType.LABOR: 0.1},
+    )
+    with patch.object(ec, "_load_classifier", return_value=fake):
+        result = ec.classify("A borderline headline")
+    assert result.event_type is EventType.GEOPOLITICAL
+
+
 # --- classify_articles() batch -----------------------------------------------
 
 
