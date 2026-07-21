@@ -45,7 +45,7 @@ def compute_backoff(
     return random.uniform(0.0, ceiling)
 
 
-def get_json(
+def _request_with_retries(
     url: str,
     *,
     params: dict[str, Any] | None = None,
@@ -53,8 +53,8 @@ def get_json(
     timeout: float = 15.0,
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
-) -> Any:
-    """GET `url` as JSON, retrying network errors and 429/5xx with exponential backoff.
+) -> requests.Response:
+    """GET `url`, retrying network errors and 429/5xx with exponential backoff.
 
     A 429 or 503 carrying a `Retry-After` header waits exactly that long
     instead of guessing — the polite behavior that keeps a free-tier key
@@ -76,5 +76,47 @@ def get_json(
             continue
 
         response.raise_for_status()
-        return response.json()
+        return response
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def get_json(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> Any:
+    """GET `url` and parse the response as JSON. See `_request_with_retries` for retry behavior."""
+    response = _request_with_retries(
+        url,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+    )
+    return response.json()
+
+
+def get_text(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> str:
+    """GET `url` as raw text (e.g. RSS/XML). See `_request_with_retries` for retry behavior."""
+    response = _request_with_retries(
+        url,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+    )
+    return response.text

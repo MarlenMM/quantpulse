@@ -3,13 +3,14 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from quantpulse.ingestion.http import get_json
+from quantpulse.ingestion.http import get_json, get_text
 
 
-def _response(status_code: int, json_data: object = None) -> Mock:
+def _response(status_code: int, json_data: object = None, text: str = "") -> Mock:
     response = Mock()
     response.status_code = status_code
     response.json.return_value = json_data
+    response.text = text
     if status_code >= 400:
         response.raise_for_status.side_effect = requests.HTTPError(response=response)
     else:
@@ -63,4 +64,22 @@ def test_retries_on_connection_error(mock_get: Mock, mock_sleep: Mock) -> None:
     mock_get.side_effect = [requests.ConnectionError("boom"), _response(200, {"ok": True})]
 
     assert get_json("http://example.com", max_retries=2) == {"ok": True}
+    assert mock_get.call_count == 2
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.get")
+def test_get_text_returns_raw_body_on_success(mock_get: Mock, mock_sleep: Mock) -> None:
+    mock_get.return_value = _response(200, text="<rss><channel/></rss>")
+
+    assert get_text("http://example.com") == "<rss><channel/></rss>"
+    mock_get.assert_called_once()
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.get")
+def test_get_text_retries_on_429_then_succeeds(mock_get: Mock, mock_sleep: Mock) -> None:
+    mock_get.side_effect = [_response(429), _response(200, text="ok")]
+
+    assert get_text("http://example.com", max_retries=2) == "ok"
     assert mock_get.call_count == 2
