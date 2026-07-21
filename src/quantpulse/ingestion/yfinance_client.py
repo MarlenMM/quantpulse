@@ -85,6 +85,45 @@ def fetch_fundamentals(symbol: str) -> dict[str, Any]:
     )
 
 
+def fetch_ffo_inputs(symbol: str) -> dict[str, Any]:
+    """Net income, D&A, and market cap -- the inputs to an FFO proxy for REITs (Section 7.2).
+
+    FFO = Net Income + Depreciation & Amortization is the standard, simplified
+    NAREIT approximation; the full definition also excludes gains/losses on
+    property sales, which needs additional line-item data kept out of scope
+    here. Only meaningful for the Real Estate sector's P/FFO substitution --
+    other sectors' scoring never calls this.
+    """
+
+    def _fetch() -> dict[str, Any]:
+        _rate_limiter.wait()
+        with get_breaker(_SOURCE).guard():
+            ticker = yf.Ticker(symbol)
+            cashflow = ticker.cashflow
+            market_cap = ticker.info.get("marketCap")
+
+        net_income = None
+        depreciation_amortization = None
+        if cashflow is not None and not cashflow.empty:
+            if "Net Income From Continuing Operations" in cashflow.index:
+                net_income = float(cashflow.loc["Net Income From Continuing Operations"].iloc[0])
+            if "Depreciation And Amortization" in cashflow.index:
+                depreciation_amortization = float(
+                    cashflow.loc["Depreciation And Amortization"].iloc[0]
+                )
+
+        return {
+            "symbol": symbol,
+            "net_income": net_income,
+            "depreciation_amortization": depreciation_amortization,
+            "market_cap": market_cap,
+        }
+
+    return cached_json(
+        f"ffo_inputs_{symbol}", _fetch, _cache_dir("ffo_inputs"), ttl=timedelta(days=7)
+    )
+
+
 def fetch_analyst_consensus(symbol: str) -> dict[str, Any]:
     """Current-month analyst rating counts + mean price target for `symbol`."""
 

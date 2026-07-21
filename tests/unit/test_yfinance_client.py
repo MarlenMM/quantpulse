@@ -99,6 +99,68 @@ def test_fetch_fundamentals_maps_info_fields(tmp_path: Path) -> None:
     }
 
 
+def test_fetch_ffo_inputs_reads_cashflow_and_market_cap(tmp_path: Path) -> None:
+    mock_ticker = MagicMock()
+    mock_ticker.cashflow = pd.DataFrame(
+        {"col": [1_000_000_000.0, 2_500_000_000.0]},
+        index=["Net Income From Continuing Operations", "Depreciation And Amortization"],
+    )
+    mock_ticker.info = {"marketCap": 60_000_000_000}
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        result = yfinance_client.fetch_ffo_inputs("O")
+
+    assert result == {
+        "symbol": "O",
+        "net_income": 1_000_000_000.0,
+        "depreciation_amortization": 2_500_000_000.0,
+        "market_cap": 60_000_000_000,
+    }
+
+
+def test_fetch_ffo_inputs_handles_missing_cashflow_rows(tmp_path: Path) -> None:
+    mock_ticker = MagicMock()
+    mock_ticker.cashflow = pd.DataFrame({"col": [1.0]}, index=["Some Other Row"])
+    mock_ticker.info = {"marketCap": 100}
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        result = yfinance_client.fetch_ffo_inputs("XYZ")
+
+    assert result["net_income"] is None
+    assert result["depreciation_amortization"] is None
+
+
+def test_fetch_ffo_inputs_handles_empty_cashflow(tmp_path: Path) -> None:
+    mock_ticker = MagicMock()
+    mock_ticker.cashflow = pd.DataFrame()
+    mock_ticker.info = {"marketCap": 100}
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        result = yfinance_client.fetch_ffo_inputs("XYZ")
+
+    assert result["net_income"] is None
+    assert result["depreciation_amortization"] is None
+    assert result["market_cap"] == 100
+
+
 def test_fetch_analyst_consensus_uses_current_month_row(tmp_path: Path) -> None:
     mock_ticker = MagicMock()
     mock_ticker.recommendations = pd.DataFrame(
