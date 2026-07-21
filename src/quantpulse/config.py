@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     reddit_client_secret: str | None = None
     reddit_user_agent: str | None = None
 
+    # SEC requires a descriptive User-Agent (name + contact email) on every
+    # EDGAR request, or it will throttle/reject the request.
+    sec_edgar_user_agent: str = "QuantPulse research contact-not-set@example.com"
+
+    # Section 6.5/6.6: on-disk response cache for ingestion clients.
+    ingestion_cache_dir: str = ".cache"
+
 
 @lru_cache
 def get_settings() -> Settings:
