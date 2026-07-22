@@ -130,3 +130,203 @@ class RefreshLog(Base):
     run_timestamp: Mapped[datetime] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(20))
     rows_updated: Mapped[int] = mapped_column(default=0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — News & Event Intelligence (Section 7.3, 13)
+#
+# The Phase-4 analysis modules (entity_extraction / event_classifier /
+# sentiment / thematic_mapping / market_regime) were built as pure functions
+# over in-memory frames; these tables are their persistence layer, landing
+# together with the writer that populates them (scripts/refresh_data.py) per
+# the project's "schema alongside its writer" convention.
+# ---------------------------------------------------------------------------
+
+
+class SentimentScore(Base):
+    """Tier-1 company-level decay-weighted sentiment (Section 7.3 step 4, Section 13).
+
+    One row per (symbol, as-of date, source): the decay-weighted average
+    polarity `AggregatedSentiment` produces. `total_weight` (sum of the decay
+    weights actually used) is where staleness shows up -- a value near 0 means
+    the score rests on old evidence -- so it's persisted alongside the score
+    rather than discarded (see `sentiment.aggregate_decayed_sentiment`).
+    """
+
+    __tablename__ = "sentiment_scores"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(30), primary_key=True, default="tier1_aggregate")
+    sentiment_score: Mapped[float] = mapped_column(Float)  # decay-weighted polarity, [-1, 1]
+    mention_volume: Mapped[int] = mapped_column(default=0)
+    total_weight: Mapped[float | None] = mapped_column(Float)
+
+
+class NewsEvent(Base):
+    """Every ingested article, tagged with tier/matched entities/event type (Section 13).
+
+    The raw material behind `sentiment_scores` (Tier 1) and the sector/macro
+    adjustments (Tiers 2-3). `article_id` is a stable hash of the source URL so
+    re-ingesting the same article dedupes rather than duplicating.
+    `matched_symbols` is the JSON list `entity_extraction.tag_articles`
+    produces (no FK -- an article can name tickers outside the tracked
+    universe).
+    """
+
+    __tablename__ = "news_events"
+
+    article_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tier: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(500))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    matched_symbols: Mapped[list[str] | None] = mapped_column(JSON)
+    matched_theme: Mapped[str | None] = mapped_column(String(50))
+    event_type: Mapped[str | None] = mapped_column(String(30))
+    sentiment_score: Mapped[float | None] = mapped_column(Float)  # per-article polarity, [-1, 1]
+    source: Mapped[str | None] = mapped_column(String(30))
+    source_url: Mapped[str | None] = mapped_column(String(1000))
+
+
+class ThematicBasket(Base):
+    """Config-driven ticker->theme membership (Section 7.3 step 5, Section 13).
+
+    Persisted form of `thematic_mapping.iter_basket_membership()`. No FK on
+    `symbol`: curated baskets deliberately include names outside the S&P 500
+    universe (e.g. TSM, ASML), which is the whole point of a thematic basket.
+    """
+
+    __tablename__ = "thematic_baskets"
+
+    theme_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), primary_key=True)
+
+
+class MarketRegime(Base):
+    """Daily Market Regime Index output (Section 5, 7.3 Tier 3, 28; Section 13).
+
+    The quantitative "build-your-own Fear/Greed" composite: VIX, breadth
+    (% of universe above its 200-DMA), GDELT macro tone, and the 10Y-2Y
+    yield-curve spread (Section 28) blended into a 0-100 `regime_score` and a
+    `regime_label` (risk_on / neutral / risk_off). Any input may be null when
+    unavailable; `regime_score` is renormalized over whatever was present.
+    """
+
+    __tablename__ = "market_regime"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    vix_level: Mapped[float | None] = mapped_column(Float)
+    breadth_pct_above_200dma: Mapped[float | None] = mapped_column(Float)
+    macro_news_tone: Mapped[float | None] = mapped_column(Float)
+    yield_curve_spread: Mapped[float | None] = mapped_column(Float)  # 10Y-2Y, Section 28
+    regime_score: Mapped[float | None] = mapped_column(Float)  # 0-100, higher = risk-on
+    regime_label: Mapped[str | None] = mapped_column(String(20))
+
+
+class EconomicCalendarEvent(Base):
+    """Scheduled macro releases (FOMC/CPI/jobs report) for the "uncertainty ahead" flag.
+
+    Section 28, Section 13. Persisted form of `ingestion.economic_calendar`'s
+    static schedule.
+    """
+
+    __tablename__ = "economic_calendar"
+
+    event_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    event_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Smart Money Signals (Section 24, 13)
+# ---------------------------------------------------------------------------
+
+
+class InsiderTransaction(Base):
+    """Form-4 non-derivative insider buy/sell transactions (Section 24, Section 13).
+
+    One row per parsed transaction. Dedupe is by the natural key below rather
+    than a filing-level id, since the ingestion client discards the accession
+    number after parsing -- re-ingesting the same window is idempotent because
+    identical (symbol, insider, date, code, shares) rows collide.
+    """
+
+    __tablename__ = "insider_transactions"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "insider_name",
+            "transaction_date",
+            "transaction_code",
+            "shares",
+            name="uq_insider_transaction",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"))
+    insider_name: Mapped[str | None] = mapped_column(String(255))
+    insider_title: Mapped[str | None] = mapped_column(String(255))
+    filing_date: Mapped[date | None] = mapped_column(Date)
+    transaction_date: Mapped[date | None] = mapped_column(Date)
+    transaction_code: Mapped[str | None] = mapped_column(String(5))  # P/S (open-market), etc.
+    acquired_disposed_code: Mapped[str | None] = mapped_column(String(1))  # A / D
+    shares: Mapped[float | None] = mapped_column(Float)
+    price_per_share: Mapped[float | None] = mapped_column(Float)
+    shares_owned_after: Mapped[float | None] = mapped_column(Float)
+
+
+class InstitutionalOwnership(Base):
+    """13F institutional ownership trend, aggregated per symbol per quarter (Section 24).
+
+    Section 13's schema lists a per-institution `institution_name`, but 13F
+    holdings can't be mapped to a ticker without a (non-free) CUSIP table, so
+    the ingestion client matches by normalized issuer name and returns one
+    aggregated row per symbol per quarter instead -- a documented limitation
+    (see `edgar_13f_client`). `change_from_prior_quarter` is null when there's
+    no comparable prior-quarter figure (an honest unknown, not a filled zero).
+    """
+
+    __tablename__ = "institutional_ownership"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    quarter_end_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    total_shares_held: Mapped[float | None] = mapped_column(Float)
+    total_value: Mapped[float | None] = mapped_column(Float)
+    num_filers: Mapped[int | None] = mapped_column(Integer)
+    change_from_prior_quarter: Mapped[float | None] = mapped_column(Float)
+
+
+class OptionsSignal(Base):
+    """Daily options-positioning snapshot (Section 24, Section 13).
+
+    `put_call_ratio` and `atm_implied_volatility` are the raw daily snapshot;
+    `iv_rank` (today's IV vs. its own trailing range) is null until enough
+    daily rows accumulate for `options_client.compute_iv_rank` to rank against
+    -- persisting this table over time is exactly what makes IV-rank possible.
+    """
+
+    __tablename__ = "options_signals"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    expiration: Mapped[str | None] = mapped_column(String(10))
+    put_call_ratio: Mapped[float | None] = mapped_column(Float)
+    atm_implied_volatility: Mapped[float | None] = mapped_column(Float)
+    iv_rank: Mapped[float | None] = mapped_column(Float)
+
+
+class ShortInterest(Base):
+    """Short-interest snapshot (Section 24, Section 13).
+
+    Deliberately never collapsed into a directional score -- both
+    `pct_float_short` (bearish conviction) and `days_to_cover` (squeeze setup)
+    are surfaced as-is (see `smart_money.read_short_interest`). Either may be
+    null if Finnhub doesn't cover the name.
+    """
+
+    __tablename__ = "short_interest"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    as_of_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    pct_float_short: Mapped[float | None] = mapped_column(Float)
+    days_to_cover: Mapped[float | None] = mapped_column(Float)
