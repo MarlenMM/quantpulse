@@ -120,3 +120,29 @@ def get_text(
         backoff_seconds=backoff_seconds,
     )
     return response.text
+
+
+def get_bytes(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> bytes:
+    """GET `url` as raw bytes (e.g. a ZIP download). See `_request_with_retries` for retry behavior.
+
+    Callers fetching a large file (tens/hundreds of MB) should pass a much
+    larger `timeout` than the default -- this default matches `get_json`/
+    `get_text`'s small-payload assumption, not this function's own use case.
+    """
+    response = _request_with_retries(
+        url,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+    )
+    return response.content
