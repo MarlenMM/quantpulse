@@ -215,7 +215,11 @@ def classify_articles(
             hypothesis_template=_HYPOTHESIS_TEMPLATE,
             multi_label=False,
         )
-        # A single-item batch can come back as one dict rather than a list.
+        # Defensive, not currently observed: verified live against the real
+        # model that a list input (including a one-item list) always returns
+        # a list of dicts, never a bare dict -- kept as cheap insurance
+        # against a future transformers version changing that, not because
+        # it's been seen to happen.
         raw_list = raw_batch if isinstance(raw_batch, list) else [raw_batch]
         for position, raw in zip(nonempty_positions, raw_list, strict=True):
             results[position] = _result_from_raw(dict(raw))
