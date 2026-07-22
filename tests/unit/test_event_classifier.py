@@ -179,7 +179,9 @@ def test_classify_articles_batches_nonempty_and_defaults_empty_rows() -> None:
 
 
 def test_classify_articles_handles_single_nonempty_row_returned_as_dict() -> None:
-    # A one-item batch can come back as a bare dict rather than a list.
+    # Defensive coverage, not a scenario the real model produces (verified
+    # live: a one-item list input always comes back as a list of dicts) --
+    # this exercises the fallback branch guarding a hypothetical future shape.
     single_raw = _raw({EventType.LABOR: 0.7, EventType.EARNINGS: 0.3})
     fake = Mock(return_value=single_raw)
     df = pd.DataFrame({"title": ["Union announces strike"]})
