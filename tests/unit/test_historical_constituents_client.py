@@ -36,6 +36,23 @@ def test_parse_interval_frame_rejects_wrong_schema() -> None:
         hist._parse_interval_frame(pd.DataFrame({"symbol": ["AAPL"], "date": ["2020-01-01"]}))
 
 
+def test_parse_treats_future_end_date_as_still_open() -> None:
+    # Datasets mark a current member's open interval either as empty end_date or
+    # a far-future sentinel; both must resolve to None, or a live name would be
+    # flagged removed and dropped from a survivorship-aware backtest.
+    raw = pd.DataFrame(
+        {
+            "ticker": ["EMPTY", "SENTINEL", "REALGONE"],
+            "start_date": ["2000-01-01", "2001-01-01", "2002-01-01"],
+            "end_date": [None, "2059-12-31", "2017-06-19"],
+        }
+    )
+    df = hist._parse_interval_frame(raw, today=date(2026, 7, 22)).set_index("symbol")
+    assert df.loc["EMPTY", "removed_date"] is None
+    assert df.loc["SENTINEL", "removed_date"] is None  # future -> not yet removed
+    assert df.loc["REALGONE", "removed_date"] == date(2017, 6, 19)  # real removal kept
+
+
 def _settings(**kw: object) -> Mock:
     settings = Mock()
     settings.historical_constituents_path = kw.get("path")
