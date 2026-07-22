@@ -231,3 +231,91 @@ def test_run_flags_survivorship_bias_in_fallback_mode(factory: sessionmaker) -> 
     with factory() as session:
         logs = session.scalars(select(RefreshLog)).all()
     assert logs[0].status == "partial_survivorship_biased"
+
+
+def _seed_membership_rows(session: Session, rows: list[dict]) -> None:
+    for row in rows:
+        session.add(IndexMembershipHistory(index_name="S&P 500", **row))
+
+
+def test_assess_survivorship_coverage_counts_removed_names_with_prices(
+    factory: sessionmaker,
+) -> None:
+    with factory() as session:
+        _seed_membership_rows(
+            session,
+            [
+                {"symbol": "LIVE", "added_date": date(2000, 1, 1), "removed_date": None},
+                {
+                    "symbol": "COVERED",
+                    "added_date": date(2001, 1, 1),
+                    "removed_date": date(2017, 1, 1),
+                },
+                {
+                    "symbol": "MISSING",
+                    "added_date": date(2002, 1, 1),
+                    "removed_date": date(2019, 1, 1),
+                },
+            ],
+        )
+        # Only the delisted COVERED name has price history; MISSING has none.
+        session.add(
+            PriceHistory(
+                symbol="COVERED",
+                date=date(2016, 1, 4),
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+                adj_close=1,
+                volume=1,
+            )
+        )
+        session.commit()
+
+    with factory() as session:
+        coverage = seed.assess_survivorship_coverage(session)
+
+    assert coverage.removed_members == 2  # COVERED + MISSING (LIVE is still open)
+    assert coverage.removed_with_prices == 1  # only COVERED
+    assert coverage.coverage == 0.5
+
+
+def test_assess_survivorship_coverage_is_full_when_nothing_removed(factory: sessionmaker) -> None:
+    with factory() as session:
+        _seed_membership_rows(
+            session, [{"symbol": "LIVE", "added_date": date(2000, 1, 1), "removed_date": None}]
+        )
+        session.commit()
+    with factory() as session:
+        coverage = seed.assess_survivorship_coverage(session)
+    assert coverage.removed_members == 0 and coverage.coverage == 1.0 and not coverage.has_gap
+
+
+def test_run_flags_survivorship_gap_when_delisted_prices_are_missing(
+    factory: sessionmaker,
+) -> None:
+    # Historical membership resolves fine, but yfinance returns nothing for the
+    # delisted name (as it usually does) -- the run must report the gap, not an
+    # unqualified success.
+    current = pd.DataFrame(
+        [{"symbol": "AAPL", "name": "Apple Inc.", "sector": "Tech", "industry": "Devices"}]
+    )
+    empty_prices = pd.DataFrame(
+        columns=["date", "symbol", "open", "high", "low", "close", "adj_close", "volume"]
+    )
+
+    def _fetch(symbol: str, period: str) -> pd.DataFrame:
+        return _price_df(symbol, "2010-01-04") if symbol == "AAPL" else empty_prices
+
+    with (
+        patch.object(seed, "resolve_membership", return_value=(_membership(), "historical")),
+        patch.object(seed.wikipedia_client, "fetch_sp500_constituents", return_value=current),
+        patch.object(seed.yfinance_client, "fetch_price_history", side_effect=_fetch),
+    ):
+        seed.run(period="max", session_factory=_session_factory(factory))
+
+    with factory() as session:
+        logs = session.scalars(select(RefreshLog)).all()
+    # AABA (removed 2017) got no prices -> 0% coverage of removed names -> gap.
+    assert logs[0].status == "partial_survivorship_gap"

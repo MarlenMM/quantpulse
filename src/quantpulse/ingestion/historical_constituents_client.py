@@ -36,7 +36,7 @@ def _normalize_symbol(symbol: str) -> str:
     return str(symbol).strip().upper().replace(".", "-")
 
 
-def _parse_interval_frame(raw: pd.DataFrame) -> pd.DataFrame:
+def _parse_interval_frame(raw: pd.DataFrame, *, today: date | None = None) -> pd.DataFrame:
     expected = {"ticker", "start_date", "end_date"}
     missing = expected - set(raw.columns)
     if missing:
@@ -44,6 +44,7 @@ def _parse_interval_frame(raw: pd.DataFrame) -> pd.DataFrame:
             f"historical constituents dataset missing columns: {sorted(missing)}"
         )
 
+    cutoff = today or date.today()
     added = pd.to_datetime(raw["start_date"], errors="coerce")
     removed = pd.to_datetime(raw["end_date"], errors="coerce")
 
@@ -52,13 +53,29 @@ def _parse_interval_frame(raw: pd.DataFrame) -> pd.DataFrame:
             "index_name": INDEX_NAME,
             "symbol": raw["ticker"].map(_normalize_symbol),
             "added_date": [d.date() if pd.notna(d) else None for d in added],
-            "removed_date": [d.date() if pd.notna(d) else None for d in removed],
+            "removed_date": [_removed_or_open(d, cutoff) for d in removed],
         }
     )
     # A row with no parseable start_date can't be placed in time; drop it.
     df = df[df["added_date"].notna()].copy()
     df = df[df["symbol"].astype(bool)]
     return df[_MEMBERSHIP_COLUMNS].reset_index(drop=True)
+
+
+def _removed_or_open(parsed_end: pd.Timestamp, cutoff: date) -> date | None:
+    """A real removal date, or `None` when the interval is still open.
+
+    Datasets disagree on how they mark a *current* member's open interval: some
+    leave `end_date` empty (parses to NaT), others use a far-future sentinel
+    (e.g. `2059-12-31`). Both must resolve to `None`, or every current member
+    would be recorded with a `removed_date` and wrongly flagged inactive -- and
+    the survivorship-aware backtest would treat a live name as long gone
+    (Sections 5, 22). A removal dated after today is, as of today, no removal.
+    """
+    if pd.isna(parsed_end):
+        return None
+    end = parsed_end.date()
+    return None if end > cutoff else end
 
 
 def fetch_historical_membership() -> pd.DataFrame:

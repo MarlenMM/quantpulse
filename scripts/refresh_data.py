@@ -62,6 +62,7 @@ from quantpulse.storage.db import get_session
 from quantpulse.storage.models import (
     AnalystConsensus,
     FundamentalsSnapshot,
+    IndexMembershipHistory,
     MacroIndicator,
     PriceHistory,
     RefreshLog,
@@ -247,6 +248,53 @@ def sync_universe(session: Session) -> int:
 
     session.flush()
     return len(constituents)
+
+
+def reconcile_index_membership(session: Session, today: date) -> int:
+    """Keep `index_membership_history` current between cold-start re-seeds (Section 6.9).
+
+    The cold-start script seeds authoritative *historical* intervals; this closes
+    an interval the day a name drops out of the current index and opens one the
+    day a name joins, using `today` as the boundary the app learned of the change.
+    Without it, a name removed since the last seed would keep a null `removed_date`
+    and quietly re-enter every survivorship-aware backtest as if still a member
+    (Sections 6.9, 22) -- the incremental other half of the survivorship-bias
+    handling the seed script owns for deep history.
+
+    Must run right after `sync_universe`, which sets the `is_active` flags this
+    reads. Idempotent: on a steady index it makes no changes. A re-seed later
+    legitimately replaces everything (membership is authoritative reference data).
+    """
+    current = set(
+        session.scalars(
+            select(Ticker.symbol).where(Ticker.is_active, Ticker.asset_type == "equity")
+        )
+    )
+    open_intervals = {
+        row.symbol: row
+        for row in session.scalars(
+            select(IndexMembershipHistory).where(
+                IndexMembershipHistory.index_name == hist.INDEX_NAME,
+                IndexMembershipHistory.removed_date.is_(None),
+            )
+        )
+    }
+
+    changes = 0
+    for symbol in current - set(open_intervals):  # joined the index -> open an interval
+        session.add(
+            IndexMembershipHistory(
+                index_name=hist.INDEX_NAME, symbol=symbol, added_date=today, removed_date=None
+            )
+        )
+        changes += 1
+    for symbol, row in open_intervals.items():  # left the index -> close its interval
+        if symbol not in current:
+            row.removed_date = today
+            changes += 1
+
+    session.flush()
+    return changes
 
 
 def _last_price_date(session: Session, symbol: str) -> date | None:
@@ -1090,6 +1138,10 @@ def run(job_name: str = "refresh_data") -> None:
     try:
         with get_session() as session:
             rows_updated += sync_universe(session)
+            # Record the index add/drop this sync just detected into the
+            # point-in-time membership history, so it stays honest for the
+            # survivorship-aware backtest between cold-start re-seeds (Section 6.9).
+            rows_updated += reconcile_index_membership(session, today)
             active_tickers = session.execute(
                 select(Ticker.symbol, Ticker.name).where(Ticker.is_active)
             ).all()

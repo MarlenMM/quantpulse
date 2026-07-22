@@ -14,6 +14,7 @@ from quantpulse.storage.models import (
     AnalystConsensus,
     Base,
     FundamentalsSnapshot,
+    IndexMembershipHistory,
     MarketRegime,
     OptionsSignal,
     PriceHistory,
@@ -80,6 +81,64 @@ def test_sync_universe_inserts_and_deactivates(session: Session) -> None:
     tickers = {t.symbol: t for t in session.scalars(select(Ticker))}
     assert tickers["NEW"].is_active is True
     assert tickers["OLD"].is_active is False
+
+
+_RECONCILE_DAY = date(2026, 7, 22)
+
+
+def _member(session: Session, symbol: str, added: date, removed: date | None) -> None:
+    session.add(
+        IndexMembershipHistory(
+            index_name="S&P 500", symbol=symbol, added_date=added, removed_date=removed
+        )
+    )
+
+
+def test_reconcile_opens_interval_for_a_new_member(session: Session) -> None:
+    session.add(Ticker(symbol="NEW", name="New", asset_type="equity", is_active=True))
+    session.flush()
+    changed = refresh_data.reconcile_index_membership(session, _RECONCILE_DAY)
+    rows = session.scalars(
+        select(IndexMembershipHistory).where(IndexMembershipHistory.symbol == "NEW")
+    ).all()
+    assert changed == 1
+    assert len(rows) == 1 and rows[0].removed_date is None and rows[0].added_date == _RECONCILE_DAY
+
+
+def test_reconcile_closes_interval_for_a_departed_member(session: Session) -> None:
+    # A name still open in membership but no longer active in the index -> closed.
+    session.add(Ticker(symbol="OLD", name="Old", asset_type="equity", is_active=False))
+    _member(session, "OLD", date(2000, 1, 1), None)
+    session.flush()
+    changed = refresh_data.reconcile_index_membership(session, _RECONCILE_DAY)
+    row = session.scalars(
+        select(IndexMembershipHistory).where(IndexMembershipHistory.symbol == "OLD")
+    ).one()
+    assert changed == 1 and row.removed_date == _RECONCILE_DAY
+
+
+def test_reconcile_is_idempotent_on_a_steady_index(session: Session) -> None:
+    session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+    _member(session, "AAA", date(2000, 1, 1), None)
+    session.flush()
+    assert refresh_data.reconcile_index_membership(session, _RECONCILE_DAY) == 0
+
+
+def test_reconcile_reopens_a_readmitted_name_keeping_the_old_interval(session: Session) -> None:
+    # AAA was a member, was removed, and is a current member again: a new open
+    # interval opens while the old closed one is preserved (Section 6.9).
+    session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+    _member(session, "AAA", date(2000, 1, 1), date(2010, 1, 1))
+    session.flush()
+    changed = refresh_data.reconcile_index_membership(session, _RECONCILE_DAY)
+    rows = session.scalars(
+        select(IndexMembershipHistory)
+        .where(IndexMembershipHistory.symbol == "AAA")
+        .order_by(IndexMembershipHistory.added_date)
+    ).all()
+    assert changed == 1 and len(rows) == 2
+    assert rows[0].removed_date == date(2010, 1, 1)  # old membership preserved
+    assert rows[1].added_date == _RECONCILE_DAY and rows[1].removed_date is None  # reopened
 
 
 def test_upsert_price_history_is_idempotent(session: Session) -> None:

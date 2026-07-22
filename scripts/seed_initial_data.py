@@ -26,6 +26,7 @@ import argparse
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -48,7 +49,73 @@ logger = logging.getLogger(__name__)
 # re-running the seed resume instead of re-fetching everything.
 _BACKFILL_STALENESS_DAYS = 300
 
+# Below this fraction of removed (delisted) members having any price history, the
+# run is flagged as a survivorship gap: membership says the losers existed, but
+# without their prices a backtest silently can't trade them (Sections 5, 22).
+_MIN_SURVIVORSHIP_COVERAGE = 0.5
+
 SessionFactory = Callable[[], AbstractContextManager[Session]]
+
+
+@dataclass(frozen=True)
+class SurvivorshipCoverage:
+    """How well the price backfill actually covers the removed (delisted) members.
+
+    Honest membership history is only half the survivorship story: if the losers'
+    *prices* never came down (free sources rarely serve delisted names), a
+    backtest still silently trades only survivors. This measures the gap so it
+    can be reported rather than hidden (Section 22's "an honestly-labeled
+    limitation beats a silently inflated number").
+    """
+
+    removed_members: int
+    removed_with_prices: int
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of removed members that have any price history (1.0 if none removed)."""
+        if self.removed_members == 0:
+            return 1.0
+        return self.removed_with_prices / self.removed_members
+
+    @property
+    def has_gap(self) -> bool:
+        return self.removed_members > 0 and self.coverage < _MIN_SURVIVORSHIP_COVERAGE
+
+
+def assess_survivorship_coverage(session: Session) -> SurvivorshipCoverage:
+    """Count how many fully-removed index members actually have price history.
+
+    A "fully-removed" member is one with no still-open membership interval (a name
+    that left the index and never returned) -- exactly the delisted losers a
+    survivorship-honest backtest depends on. Re-entrants (a closed *and* an open
+    interval) are current members, so their prices are fetched normally and they
+    aren't counted here.
+    """
+    all_members = set(
+        session.scalars(
+            select(IndexMembershipHistory.symbol).where(
+                IndexMembershipHistory.index_name == hist.INDEX_NAME
+            )
+        )
+    )
+    open_members = set(
+        session.scalars(
+            select(IndexMembershipHistory.symbol).where(
+                IndexMembershipHistory.index_name == hist.INDEX_NAME,
+                IndexMembershipHistory.removed_date.is_(None),
+            )
+        )
+    )
+    removed = all_members - open_members
+    if not removed:
+        return SurvivorshipCoverage(0, 0)
+    with_prices = set(
+        session.scalars(
+            select(PriceHistory.symbol).where(PriceHistory.symbol.in_(removed)).distinct()
+        )
+    )
+    return SurvivorshipCoverage(len(removed), len(with_prices & removed))
 
 
 def resolve_membership() -> tuple[pd.DataFrame, str]:
@@ -226,6 +293,28 @@ def run(
             written, skipped = backfill_prices(targets, period, session_factory)
             rows_updated += written
             logger.info("Backfill complete: %d rows written, %d symbols skipped", written, skipped)
+
+            with session_factory() as session:
+                coverage = assess_survivorship_coverage(session)
+            logger.info(
+                "Survivorship price coverage: %d/%d removed members have price history (%.0f%%)",
+                coverage.removed_with_prices,
+                coverage.removed_members,
+                coverage.coverage * 100,
+            )
+            # A price gap on the losers re-introduces survivorship bias even in
+            # "historical" membership mode -- surface it rather than let the run
+            # report an unqualified success (Section 22). The current-only
+            # fallback already reports the stronger `partial_survivorship_biased`.
+            if coverage.has_gap and status == "success":
+                status = "partial_survivorship_gap"
+                logger.warning(
+                    "SURVIVORSHIP GAP: only %.0f%% of removed members have price history. "
+                    "Free sources rarely serve delisted names, so backtests over this "
+                    "universe remain partly survivorship-biased. Documented limitation "
+                    "(Sections 5, 22).",
+                    coverage.coverage * 100,
+                )
 
     except Exception:
         logger.exception("seed_initial_data failed")
