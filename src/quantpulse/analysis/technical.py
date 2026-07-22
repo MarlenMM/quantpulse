@@ -29,6 +29,22 @@ def _require_columns(prices: pd.DataFrame, columns: tuple[str, ...]) -> None:
         raise ValueError(f"prices is missing required column(s): {missing}")
 
 
+def _assign_indicator(
+    df: pd.DataFrame, result: pd.DataFrame | None, mapping: dict[str, str]
+) -> None:
+    """Copy multi-column indicator output into `df`, filling NaN when it's undefined.
+
+    pandas-ta-classic's multi-column indicators (MACD, ADX, Stochastic,
+    Bollinger) return `None` -- not a NaN-filled frame -- when the series is too
+    short to compute them at all (a real case: a freshly-added ticker with only
+    a handful of bars). Subscripting that `None` would crash the whole
+    indicator pass, so a `None` result degrades every target column to NaN
+    instead, matching how the single-column indicators already behave.
+    """
+    for target, source in mapping.items():
+        df[target] = result[source] if result is not None else np.nan
+
+
 def compute_indicators(prices: pd.DataFrame) -> pd.DataFrame:
     """Trend/momentum/volatility/volume indicators (Section 7.1), appended as columns.
 
@@ -46,30 +62,39 @@ def compute_indicators(prices: pd.DataFrame) -> pd.DataFrame:
     df["ema_12"] = ta.ema(df["close"], length=12)
     df["ema_26"] = ta.ema(df["close"], length=26)
 
-    macd = ta.macd(df["close"])
-    df["macd"] = macd["MACD_12_26_9"]
-    df["macd_signal"] = macd["MACDs_12_26_9"]
-    df["macd_hist"] = macd["MACDh_12_26_9"]
+    _assign_indicator(
+        df,
+        ta.macd(df["close"]),
+        {"macd": "MACD_12_26_9", "macd_signal": "MACDs_12_26_9", "macd_hist": "MACDh_12_26_9"},
+    )
 
-    adx = ta.adx(df["high"], df["low"], df["close"])
-    df["adx_14"] = adx["ADX_14"]
-    df["plus_di_14"] = adx["DMP_14"]
-    df["minus_di_14"] = adx["DMN_14"]
+    _assign_indicator(
+        df,
+        ta.adx(df["high"], df["low"], df["close"]),
+        {"adx_14": "ADX_14", "plus_di_14": "DMP_14", "minus_di_14": "DMN_14"},
+    )
 
     df["rsi_14"] = ta.rsi(df["close"])
 
-    stoch = ta.stoch(df["high"], df["low"], df["close"])
-    df["stoch_k"] = stoch["STOCHk_14_3_3"]
-    df["stoch_d"] = stoch["STOCHd_14_3_3"]
+    _assign_indicator(
+        df,
+        ta.stoch(df["high"], df["low"], df["close"]),
+        {"stoch_k": "STOCHk_14_3_3", "stoch_d": "STOCHd_14_3_3"},
+    )
 
     df["ao"] = ta.ao(df["high"], df["low"])
 
-    bbands = ta.bbands(df["close"], length=20)
-    df["bb_lower"] = bbands["BBL_20_2.0"]
-    df["bb_mid"] = bbands["BBM_20_2.0"]
-    df["bb_upper"] = bbands["BBU_20_2.0"]
-    df["bb_bandwidth"] = bbands["BBB_20_2.0"]
-    df["bb_percent"] = bbands["BBP_20_2.0"]
+    _assign_indicator(
+        df,
+        ta.bbands(df["close"], length=20),
+        {
+            "bb_lower": "BBL_20_2.0",
+            "bb_mid": "BBM_20_2.0",
+            "bb_upper": "BBU_20_2.0",
+            "bb_bandwidth": "BBB_20_2.0",
+            "bb_percent": "BBP_20_2.0",
+        },
+    )
 
     df["atr_14"] = ta.atr(df["high"], df["low"], df["close"])
     df["obv"] = ta.obv(df["close"], df["volume"])
