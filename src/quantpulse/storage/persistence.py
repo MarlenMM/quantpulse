@@ -22,7 +22,7 @@ job's ``rows_updated`` accounting stays uniform.
 
 import hashlib
 from collections.abc import Iterable, Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import pandas as pd
@@ -31,7 +31,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from quantpulse.storage.models import (
+    AnalystConsensus,
+    CompositeScore,
     EconomicCalendarEvent,
+    FundamentalsSnapshot,
     InsiderTransaction,
     InstitutionalOwnership,
     MacroIndicator,
@@ -43,6 +46,32 @@ from quantpulse.storage.models import (
     ShortInterest,
     ThematicBasket,
     Ticker,
+)
+
+# The plain metric columns of a fundamentals snapshot (the JSON sector-specific
+# column is unpacked separately into `p_ffo`).
+_FUNDAMENTAL_METRIC_COLUMNS = (
+    "pe",
+    "pb",
+    "ps",
+    "peg",
+    "eps",
+    "revenue_growth",
+    "debt_equity",
+    "roe",
+    "roa",
+    "fcf",
+    "div_yield",
+)
+_ANALYST_HISTORY_COLUMNS = (
+    "symbol",
+    "as_of_date",
+    "strong_buy",
+    "buy",
+    "hold",
+    "sell",
+    "strong_sell",
+    "mean_price_target",
 )
 
 
@@ -220,3 +249,239 @@ def read_active_price_history(session: Session, *, as_of: date, lookback_days: i
     )
     rows: Iterable[Any] = session.execute(stmt).all()
     return pd.DataFrame(rows, columns=["symbol", "date", "adj_close"])
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6 — composite-scoring gather (point-in-time reads) + writer
+#
+# Every reader below is strictly point-in-time: it never returns a row dated
+# after `as_of`, and the "latest per symbol" readers take the most recent
+# snapshot at or before `as_of`. That is what keeps the composite honest for a
+# backtest (Section 7.5 step 5) -- scoring "as of March 3rd" sees only data that
+# existed on March 3rd.
+# --------------------------------------------------------------------------- #
+
+
+def read_active_ohlcv(session: Session, *, as_of: date, lookback_days: int) -> pd.DataFrame:
+    """OHLCV history for all active equities over `[as_of - lookback, as_of]`.
+
+    The input to the technical and momentum category scorers. Returns columns
+    `symbol, date, open, high, low, close, volume`, oldest first per symbol.
+    """
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(
+            PriceHistory.symbol,
+            PriceHistory.date,
+            PriceHistory.open,
+            PriceHistory.high,
+            PriceHistory.low,
+            PriceHistory.close,
+            PriceHistory.volume,
+        )
+        .join(Ticker, Ticker.symbol == PriceHistory.symbol)
+        .where(
+            Ticker.is_active,
+            Ticker.asset_type == "equity",
+            PriceHistory.date >= start,
+            PriceHistory.date <= as_of,
+        )
+        .order_by(PriceHistory.symbol, PriceHistory.date)
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(rows, columns=["symbol", "date", "open", "high", "low", "close", "volume"])
+
+
+def read_latest_fundamentals(
+    session: Session, *, as_of: date, lookback_days: int = 180
+) -> pd.DataFrame:
+    """Each symbol's most recent fundamentals snapshot at or before `as_of`.
+
+    Shaped for `fundamental.score_fundamentals`: `symbol`, `sector` (from
+    `tickers`), the plain metric columns, and `p_ffo` unpacked from the
+    `sector_specific_metrics` JSON (REITs, Section 7.2). The lookback bounds the
+    scan (fundamentals refresh weekly, so the latest is always recent).
+    """
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(FundamentalsSnapshot)
+        .where(FundamentalsSnapshot.as_of_date >= start, FundamentalsSnapshot.as_of_date <= as_of)
+        .order_by(FundamentalsSnapshot.as_of_date)
+    )
+    snapshots = session.scalars(stmt).all()
+    columns = ["symbol", "sector", "as_of_date", *_FUNDAMENTAL_METRIC_COLUMNS, "p_ffo"]
+    if not snapshots:
+        return pd.DataFrame(columns=columns)
+
+    records = []
+    for snap in snapshots:
+        record: dict[str, Any] = {"symbol": snap.symbol, "as_of_date": snap.as_of_date}
+        for metric in _FUNDAMENTAL_METRIC_COLUMNS:
+            record[metric] = getattr(snap, metric)
+        record["p_ffo"] = (snap.sector_specific_metrics or {}).get("p_ffo")
+        records.append(record)
+
+    latest = (
+        pd.DataFrame(records).sort_values("as_of_date").groupby("symbol", as_index=False).last()
+    )
+    sectors = {t.symbol: t.sector for t in session.scalars(select(Ticker))}
+    latest["sector"] = latest["symbol"].map(sectors)
+    return latest[columns]
+
+
+def read_analyst_history(
+    session: Session, *, as_of: date, lookback_days: int = 180
+) -> pd.DataFrame:
+    """Every analyst-consensus snapshot per symbol in `[as_of - lookback, as_of]`.
+
+    The full point-in-time history `analyst_consensus.score_analyst_consensus`
+    needs to fit its estimate-revision trend (Section 7.4). The lookback spans
+    more than the trend window so the slope has data on both ends.
+    """
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(AnalystConsensus)
+        .where(AnalystConsensus.as_of_date >= start, AnalystConsensus.as_of_date <= as_of)
+        .order_by(AnalystConsensus.symbol, AnalystConsensus.as_of_date)
+    )
+    rows = session.scalars(stmt).all()
+    records = [{c: getattr(r, c) for c in _ANALYST_HISTORY_COLUMNS} for r in rows]
+    return pd.DataFrame(records, columns=list(_ANALYST_HISTORY_COLUMNS))
+
+
+def read_latest_sentiment(
+    session: Session, *, as_of: date, lookback_days: int = 30
+) -> dict[str, float]:
+    """Each symbol's most recent Tier-1 aggregate sentiment polarity at or before `as_of`."""
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(SentimentScore.symbol, SentimentScore.sentiment_score)
+        .where(
+            SentimentScore.source == "tier1_aggregate",
+            SentimentScore.date >= start,
+            SentimentScore.date <= as_of,
+        )
+        .order_by(SentimentScore.date)  # ascending -> last write per symbol wins
+    )
+    latest: dict[str, float] = {}
+    for symbol, score in session.execute(stmt):
+        if score is not None:
+            latest[symbol] = float(score)
+    return latest
+
+
+def read_tier2_news(session: Session, *, as_of: date, lookback_days: int = 21) -> pd.DataFrame:
+    """Tier-2 industry news (`matched_theme`, `sentiment_score`) over the trailing window.
+
+    Feeds the per-stock industry tilt (`scoring.tier2_thematic_tilt`). Bounds
+    `published_at` to `[as_of - lookback, end of as_of]`; undated articles are
+    excluded (they can't be placed point-in-time).
+    """
+    start = datetime.combine(as_of - timedelta(days=lookback_days), time.min)
+    end = datetime.combine(as_of, time.max)
+    stmt = select(NewsEvent.matched_theme, NewsEvent.sentiment_score).where(
+        NewsEvent.tier == 2,
+        NewsEvent.published_at >= start,
+        NewsEvent.published_at <= end,
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(rows, columns=["matched_theme", "sentiment_score"])
+
+
+def read_theme_members(session: Session) -> dict[str, set[str]]:
+    """Theme/basket name -> its member symbols, from `thematic_baskets`."""
+    members: dict[str, set[str]] = {}
+    for theme, symbol in session.execute(select(ThematicBasket.theme_name, ThematicBasket.symbol)):
+        members.setdefault(theme, set()).add(symbol)
+    return members
+
+
+def read_latest_regime_score(session: Session, *, as_of: date) -> float | None:
+    """The most recent non-null Market Regime Index score at or before `as_of`."""
+    stmt = (
+        select(MarketRegime.regime_score)
+        .where(MarketRegime.date <= as_of, MarketRegime.regime_score.is_not(None))
+        .order_by(MarketRegime.date.desc())
+        .limit(1)
+    )
+    value = session.scalars(stmt).first()
+    return float(value) if value is not None else None
+
+
+def read_recent_insider_transactions(
+    session: Session, *, as_of: date, lookback_days: int = 180
+) -> pd.DataFrame:
+    """Insider transactions filed in `[as_of - lookback, as_of]` (Section 24).
+
+    Shaped for `smart_money.score_insider_activity`: `symbol, insider_name,
+    transaction_code, shares`. Keyed on `filing_date` so the point-in-time cut
+    matches when the market actually learned of each trade.
+    """
+    start = as_of - timedelta(days=lookback_days)
+    stmt = select(
+        InsiderTransaction.symbol,
+        InsiderTransaction.insider_name,
+        InsiderTransaction.transaction_code,
+        InsiderTransaction.shares,
+    ).where(InsiderTransaction.filing_date >= start, InsiderTransaction.filing_date <= as_of)
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(rows, columns=["symbol", "insider_name", "transaction_code", "shares"])
+
+
+def read_latest_institutional(session: Session, *, as_of: date) -> pd.DataFrame:
+    """Each symbol's most recent 13F institutional-ownership row at or before `as_of`."""
+    stmt = (
+        select(
+            InstitutionalOwnership.symbol,
+            InstitutionalOwnership.total_shares_held,
+            InstitutionalOwnership.change_from_prior_quarter,
+            InstitutionalOwnership.num_filers,
+        )
+        .where(InstitutionalOwnership.quarter_end_date <= as_of)
+        .order_by(InstitutionalOwnership.quarter_end_date)
+    )
+    rows = session.execute(stmt).all()
+    df = pd.DataFrame(
+        rows, columns=["symbol", "total_shares_held", "change_from_prior_quarter", "num_filers"]
+    )
+    return df if df.empty else df.groupby("symbol", as_index=False).last()
+
+
+def read_latest_options(session: Session, *, as_of: date, lookback_days: int = 10) -> pd.DataFrame:
+    """Each symbol's most recent options snapshot in the trailing window at or before `as_of`."""
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(
+            OptionsSignal.symbol,
+            OptionsSignal.put_call_ratio,
+            OptionsSignal.atm_implied_volatility,
+            OptionsSignal.iv_rank,
+        )
+        .where(OptionsSignal.date >= start, OptionsSignal.date <= as_of)
+        .order_by(OptionsSignal.date)
+    )
+    rows = session.execute(stmt).all()
+    df = pd.DataFrame(
+        rows, columns=["symbol", "put_call_ratio", "atm_implied_volatility", "iv_rank"]
+    )
+    return df if df.empty else df.groupby("symbol", as_index=False).last()
+
+
+def read_latest_short_interest(
+    session: Session, *, as_of: date, lookback_days: int = 45
+) -> pd.DataFrame:
+    """Each symbol's most recent short-interest snapshot at or before `as_of`."""
+    start = as_of - timedelta(days=lookback_days)
+    stmt = (
+        select(ShortInterest.symbol, ShortInterest.pct_float_short, ShortInterest.days_to_cover)
+        .where(ShortInterest.as_of_date >= start, ShortInterest.as_of_date <= as_of)
+        .order_by(ShortInterest.as_of_date)
+    )
+    rows = session.execute(stmt).all()
+    df = pd.DataFrame(rows, columns=["symbol", "pct_float_short", "days_to_cover"])
+    return df if df.empty else df.groupby("symbol", as_index=False).last()
+
+
+def upsert_composite_scores(session: Session, records: Sequence[dict[str, Any]]) -> int:
+    """Append composite-score rows (append-only, point-in-time -- never overwritten)."""
+    return _append_only(session, CompositeScore, records)

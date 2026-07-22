@@ -24,7 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from quantpulse.analysis import fundamental, macro
+from quantpulse.analysis import (
+    analyst_consensus,
+    fundamental,
+    macro,
+    scoring,
+    smart_money,
+)
 from quantpulse.config import get_settings
 from quantpulse.ingestion import (
     economic_calendar,
@@ -95,6 +101,13 @@ _MACRO_TONE_QUERY = "(economy OR inflation OR federal reserve OR recession OR in
 _IV_RANK_LOOKBACK_DAYS = 365
 _BREADTH_LOOKBACK_DAYS = 420
 _VIX_PERCENTILE_LOOKBACK_DAYS = 365
+# Enough trailing price history to define the 200-DMA technical signal and the
+# ~6-month momentum window with room for weekends/holidays.
+_COMPOSITE_PRICE_LOOKBACK_DAYS = 420
+# The composite ranking is stored for this profile nightly (Section 7.5's
+# default table). The stored per-category sub-scores are weight-independent, so
+# the Screener re-weights to other profiles client-side (Section 8).
+_COMPOSITE_PROFILE = "balanced"
 
 # Section 6.3 calls for daily news; running three local ML models over the
 # whole universe every night is the single heaviest workload here and needs the
@@ -516,6 +529,134 @@ def refresh_market_regime(session: Session, today: date) -> int:
     return persistence.upsert_market_regime(session, market_regime.regime_to_record(reading))
 
 
+def _none_if_nan(value: Any) -> float | None:
+    """`None` for a pandas/NumPy missing value, else the value as a plain float."""
+    return None if value is None or pd.isna(value) else float(value)
+
+
+def _rows_by_symbol(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    """`{symbol: row-dict}` for a per-symbol frame (empty dict for an empty frame)."""
+    if df.empty:
+        return {}
+    return {str(record["symbol"]): record for record in df.to_dict("records")}
+
+
+def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: date) -> int:
+    """Score every symbol across the seven categories and persist the ranking (Section 7.5).
+
+    Reads each category's inputs point-in-time (only rows dated <= `today`),
+    derives the seven raw sub-scores per symbol, then normalizes/weights/rates
+    them into `composite_scores`. Runs last in the nightly job so it sees the
+    freshly-written prices, sentiment, smart-money, and market-regime rows.
+    Missing categories simply lower a symbol's `data_confidence` rather than
+    dropping it -- only a symbol with *no* usable category is left unranked.
+    """
+    fundamentals = persistence.read_latest_fundamentals(session, as_of=today)
+    if fundamentals.empty:
+        fundamental_by_symbol: dict[str, float] = {}
+    else:
+        scored = fundamental.score_fundamentals(fundamentals).set_index("symbol")
+        fundamental_by_symbol = scored["fundamental_score"].to_dict()
+
+    ohlcv = persistence.read_active_ohlcv(
+        session, as_of=today, lookback_days=_COMPOSITE_PRICE_LOOKBACK_DAYS
+    )
+    # A DatetimeIndex (not the DB's date-object column) is required by the
+    # indicator library's time-anchored calculations (e.g. VWAP).
+    ohlcv_by_symbol = {
+        str(symbol): group[["open", "high", "low", "close", "volume"]].set_axis(
+            pd.DatetimeIndex(pd.to_datetime(group["date"].to_numpy()))
+        )
+        for symbol, group in ohlcv.groupby("symbol")
+    }
+    latest_close = {
+        symbol: float(prices["close"].iloc[-1])
+        for symbol, prices in ohlcv_by_symbol.items()
+        if not prices["close"].dropna().empty
+    }
+
+    analyst_history = persistence.read_analyst_history(session, as_of=today)
+    analyst_by_symbol = (
+        {str(symbol): group for symbol, group in analyst_history.groupby("symbol")}
+        if not analyst_history.empty
+        else {}
+    )
+    sentiment_by_symbol = persistence.read_latest_sentiment(session, as_of=today)
+    tier2_news = persistence.read_tier2_news(session, as_of=today)
+    theme_members = persistence.read_theme_members(session)
+    regime_score = persistence.read_latest_regime_score(session, as_of=today)
+
+    insider = persistence.read_recent_insider_transactions(session, as_of=today)
+    institutional_by_symbol = _rows_by_symbol(
+        persistence.read_latest_institutional(session, as_of=today)
+    )
+    options_by_symbol = _rows_by_symbol(persistence.read_latest_options(session, as_of=today))
+    short_by_symbol = _rows_by_symbol(persistence.read_latest_short_interest(session, as_of=today))
+
+    raw_by_symbol: dict[str, dict[str, float | None]] = {}
+    for symbol in universe["symbol"]:
+        prices = ohlcv_by_symbol.get(symbol)
+        analyst_frame = analyst_by_symbol.get(symbol)
+        analyst_raw = (
+            analyst_consensus.score_analyst_consensus(analyst_frame, latest_close.get(symbol))[
+                "analyst_score"
+            ]
+            if analyst_frame is not None
+            else None
+        )
+        options_row = options_by_symbol.get(symbol) or {}
+        smart = smart_money.compute_smart_money_score(
+            symbol,
+            insider_transactions=(
+                insider[insider["symbol"] == symbol] if not insider.empty else insider
+            ),
+            institutional_trend_row=institutional_by_symbol.get(symbol),
+            options_signals=options_row,
+            short_interest=short_by_symbol.get(symbol) or {},
+            iv_rank=options_row.get("iv_rank"),
+        )
+        raw_by_symbol[symbol] = {
+            "technical": scoring.score_technical(prices) if prices is not None else None,
+            "momentum": scoring.score_momentum(prices) if prices is not None else None,
+            "analyst": analyst_raw,
+            "sentiment": scoring.sentiment_to_raw(sentiment_by_symbol.get(symbol)),
+            "industry_macro": scoring.tier2_thematic_tilt(symbol, tier2_news, theme_members),
+            "smart_money": smart.score,
+        }
+
+    if not raw_by_symbol:
+        return 0
+    category_raw = pd.DataFrame.from_dict(raw_by_symbol, orient="index")
+    category_raw["fundamental"] = category_raw.index.map(fundamental_by_symbol)
+
+    result = scoring.build_composite(
+        category_raw, profile=_COMPOSITE_PROFILE, regime_score=regime_score
+    )
+    if result.scores.empty:
+        return 0
+
+    records = [
+        {
+            "symbol": row.symbol,
+            "date": today,
+            "profile": result.profile,
+            "fundamental_score": _none_if_nan(row.fundamental_score),
+            "technical_score": _none_if_nan(row.technical_score),
+            "analyst_score": _none_if_nan(row.analyst_score),
+            "sentiment_score": _none_if_nan(row.sentiment_score),
+            "momentum_score": _none_if_nan(row.momentum_score),
+            "industry_macro_score": _none_if_nan(row.industry_macro_score),
+            "smart_money_score": _none_if_nan(row.smart_money_score),
+            "composite_score": float(row.composite_score),
+            "percentile_rank": _none_if_nan(row.percentile_rank),
+            "rating": row.rating,
+            "data_confidence": float(row.data_confidence),
+        }
+        for row in result.scores.itertuples(index=False)
+    ]
+    return persistence.upsert_composite_scores(session, records)
+
+
 def _persist_per_ticker_smart_money(
     session: Session, result: TickerFetchResult, today: date
 ) -> int:
@@ -783,10 +924,18 @@ def run(job_name: str = "refresh_data") -> None:
                 "tier2_news", lambda: _in_session(lambda s: refresh_tier2_news(s, today))
             )
 
-        # Regime runs last: it reads back the VIX/breadth/yield rows the steps
-        # above just wrote, so ordering matters.
+        # Regime before composite: the composite reads the regime score back
+        # for its risk-off rating dampener, so ordering matters.
         rows_updated += step(
             "market_regime", lambda: _in_session(lambda s: refresh_market_regime(s, today))
+        )
+
+        # Composite scoring runs last of all -- it reads back every category's
+        # freshly-written rows (prices, sentiment, smart money, regime) and
+        # turns them into the day's ranking (Section 7.5).
+        rows_updated += step(
+            "composite_scores",
+            lambda: _in_session(lambda s: refresh_composite_scores(s, universe_df, today)),
         )
 
     except Exception:
