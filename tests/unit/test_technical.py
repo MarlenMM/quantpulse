@@ -71,6 +71,15 @@ class TestComputeIndicators:
         with pytest.raises(ValueError, match="missing"):
             compute_indicators(pd.DataFrame({"close": [1, 2, 3]}))
 
+    def test_short_series_yields_nan_columns_instead_of_crashing(self) -> None:
+        # A freshly-added ticker with a handful of bars: multi-column indicators
+        # (MACD/ADX/Stochastic/Bollinger) return None here, which must degrade to
+        # NaN columns, not crash the pass.
+        df = compute_indicators(_ohlcv(n=3))
+        for column in ("macd", "adx_14", "stoch_k", "bb_upper"):
+            assert column in df.columns
+            assert df[column].isna().all()
+
 
 def _flat_then_engulfing(n_flat: int = 8) -> pd.DataFrame:
     # n_flat neutral candles, then a small bearish candle, then a larger
