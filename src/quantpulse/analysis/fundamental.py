@@ -43,6 +43,15 @@ class SectorFundamentalConfig:
             raise ValueError(f"{self.sector} weights must sum to ~1.0, got {total}")
 
 
+# NOTE on free cash flow: `fundamentals_snapshot.fcf` is ingested and stored,
+# but deliberately carries no weight in any config here. Raw dollar FCF is an
+# absolute magnitude, so percentile-ranking it cross-sectionally would just
+# rank companies by size (a mega-cap always out-"scores" a small-cap on raw
+# FCF), which is a bias, not a quality signal. A meaningful FCF factor is FCF
+# *yield* (FCF / market cap) or FCF margin (FCF / revenue) -- neither input is
+# in the snapshot yet -- so FCF is intentionally left out of scoring rather
+# than folded in as a size proxy (Section 22: don't ship a misleading signal).
+# Adding market cap to the snapshot would unlock a proper FCF-yield metric.
 _DEFAULT_WEIGHTS = {
     "pe": 0.20,
     "pb": 0.10,

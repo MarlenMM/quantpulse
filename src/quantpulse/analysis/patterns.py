@@ -67,6 +67,7 @@ _CUP_RIM_TOL = 0.06  # max |left rim - right rim| / avg
 _CUP_MIN_DEPTH = 0.10  # cup must be >= 10% deep (rim to bottom)
 _CUP_DEPTH_TARGET = 0.30  # ...30% is "ideal" for scoring
 _CUP_HANDLE_MAX_RETRACE = 0.5  # handle pullback <= half the cup depth
+_CUP_HANDLE_MIN_BARS = 2  # need at least a low + a recovery bar to read a handle
 _CUP_BOTTOM_CENTER_BAND = (0.25, 0.75)  # parabola vertex must sit in the middle half
 _CUP_MIN_BOTTOM_DWELL = 0.35  # >= this fraction of cup bars must sit in its lower third
 _CUP_BOTTOM_THIRD = 1 / 3  # "lower third" of the cup's price range
@@ -564,13 +565,27 @@ def _score_cup_and_handle(
     if roundedness is None:
         return None
 
-    # Handle: the shallowest, most recent pullback after the right rim that then
-    # recovers. Requires at least a couple of bars of post-rim data to exist.
-    after = closes[right_rim.index + 1 :]
-    if after.size < 2:
+    # Handle: the *first* pullback after the right rim and its recovery -- walk
+    # down to the first local trough, then up to the first local peak. Only that
+    # first turn is the handle; everything past it is later, unrelated price
+    # action and is excluded. Reading past it (as an unbounded scan to the end
+    # of the series did) let a much-later crash or rally reach back and corrupt
+    # or erase an already-completed detection, breaking this module's own
+    # point-in-time guarantee for this one pattern (see TestLookAheadStability).
+    # Because both turns are found by the first sign change, the result depends
+    # only on data up to the handle's own peak, never on what follows.
+    post_rim = closes[right_rim.index + 1 :]
+    low_pos = 0
+    while low_pos + 1 < post_rim.size and post_rim[low_pos + 1] <= post_rim[low_pos]:
+        low_pos += 1
+    handle_end = low_pos
+    while handle_end + 1 < post_rim.size and post_rim[handle_end + 1] >= post_rim[handle_end]:
+        handle_end += 1
+    after = post_rim[: handle_end + 1]
+    if after.size < _CUP_HANDLE_MIN_BARS:
         return None
     handle_low = float(np.min(after))
-    handle_low_pos = right_rim.index + 1 + int(np.argmin(after))
+    handle_low_pos = right_rim.index + 1 + low_pos
     handle_depth = (right_rim.price - handle_low) / right_rim.price
     if handle_depth <= 0 or handle_depth > _CUP_HANDLE_MAX_RETRACE * depth:
         return None

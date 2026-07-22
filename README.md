@@ -4,7 +4,7 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap).
 
-**Status:** Phase 0 (project scaffold) — no analysis engine or UI yet. Nothing here makes trade or investment decisions.
+**Status:** Analysis engine in progress (data layer, technical/fundamental/analyst/news/smart-money signals, and the market-regime index are built; composite scoring, forecasting, portfolio tools, and the UI are still to come). Nothing here makes trade or investment decisions.
 
 ## Quickstart
 
@@ -19,8 +19,8 @@ uv sync
 cp .env.example .env
 # edit .env with your own API keys (all free-tier; see .env.example for where to get each one)
 
-# 4. Apply database migrations
-uv run alembic -c src/quantpulse/storage/migrations/alembic.ini upgrade head
+# 4. Apply database migrations (alembic.ini lives at the repo root)
+uv run alembic upgrade head
 
 # 5. Run the test suite
 uv run pytest
