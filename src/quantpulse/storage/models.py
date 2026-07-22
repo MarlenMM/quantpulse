@@ -372,3 +372,74 @@ class CompositeScore(Base):
     percentile_rank: Mapped[float | None] = mapped_column(Float)
     rating: Mapped[str] = mapped_column(String(15))
     data_confidence: Mapped[float] = mapped_column(Float)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Forecasting & Backtesting (Section 7.6, 13)
+#
+# Deferred here from Phase 7's first sub-part (the forecasting models): a
+# forecast's `historical_hit_rate` is the *backtest's* output, so the table
+# lands together with the walk-forward engine that fills it, per the project's
+# "schema alongside its writer" convention. The bootstrap confidence-interval
+# columns Section 13 lists on `backtest_results` (`sharpe_ci_low/high`) are
+# likewise deferred to the later significance-testing sub-part that populates
+# them -- an honestly-unmigrated column beats a permanently-null one.
+# ---------------------------------------------------------------------------
+
+
+class Forecast(Base):
+    """A point-in-time price/return forecast, carrying the model's own track record.
+
+    Append-only, keyed by (symbol, generated_date, horizon, model) so the same
+    night can hold every model's forecast at every horizon and history is never
+    overwritten (Section 6.8). `point_return` is the model's native output (the
+    forward simple return over `horizon_days`); `point_price`/`lower_price`/
+    `upper_price` are that forecast translated through the last close into the
+    fan-chart band the UI renders (Section 13's `point_forecast`/`lower_bound`/
+    `upper_bound`). `historical_hit_rate` is the model's own out-of-sample
+    directional accuracy at this horizon (Section 7.6: shown alongside every
+    forecast so a prediction never invites more confidence than it has earned);
+    null until a backtest has graded the model.
+    """
+
+    __tablename__ = "forecasts"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    generated_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(20), primary_key=True)
+    point_return: Mapped[float] = mapped_column(Float)
+    point_price: Mapped[float | None] = mapped_column(Float)
+    lower_price: Mapped[float | None] = mapped_column(Float)
+    upper_price: Mapped[float | None] = mapped_column(Float)
+    historical_hit_rate: Mapped[float | None] = mapped_column(Float)
+
+
+class BacktestResult(Base):
+    """One walk-forward strategy-backtest run's track record (Section 7.6, 13).
+
+    A "followed the algorithm's ratings" strategy, rebalanced at `cadence` with
+    `assumed_txn_cost` charged on turnover, compared against buy-and-hold over the
+    identical period. `win_rate` is Section 13's `hit_rate` for a strategy (the
+    fraction of profitable periods). The bootstrap `sharpe_ci_low/high` columns
+    (Section 13) are deliberately absent until the significance-testing sub-part
+    adds and fills them -- keeping the cost/turnover assumptions explicit and
+    auditable is what makes this table honest (Section 22).
+    """
+
+    __tablename__ = "backtest_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_date: Mapped[date] = mapped_column(Date)
+    period_start: Mapped[date | None] = mapped_column(Date)
+    period_end: Mapped[date | None] = mapped_column(Date)
+    cadence: Mapped[str] = mapped_column(String(10))
+    n_periods: Mapped[int] = mapped_column(Integer)
+    sharpe: Mapped[float | None] = mapped_column(Float)
+    cagr: Mapped[float | None] = mapped_column(Float)
+    max_drawdown: Mapped[float | None] = mapped_column(Float)
+    win_rate: Mapped[float | None] = mapped_column(Float)
+    benchmark_cagr: Mapped[float | None] = mapped_column(Float)
+    benchmark_sharpe: Mapped[float | None] = mapped_column(Float)
+    avg_turnover: Mapped[float | None] = mapped_column(Float)
+    assumed_txn_cost: Mapped[float] = mapped_column(Float)
