@@ -3,14 +3,17 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from quantpulse.ingestion.http import get_json, get_text
+from quantpulse.ingestion.http import get_bytes, get_json, get_text
 
 
-def _response(status_code: int, json_data: object = None, text: str = "") -> Mock:
+def _response(
+    status_code: int, json_data: object = None, text: str = "", content: bytes = b""
+) -> Mock:
     response = Mock()
     response.status_code = status_code
     response.json.return_value = json_data
     response.text = text
+    response.content = content
     if status_code >= 400:
         response.raise_for_status.side_effect = requests.HTTPError(response=response)
     else:
@@ -82,4 +85,22 @@ def test_get_text_retries_on_429_then_succeeds(mock_get: Mock, mock_sleep: Mock)
     mock_get.side_effect = [_response(429), _response(200, text="ok")]
 
     assert get_text("http://example.com", max_retries=2) == "ok"
+    assert mock_get.call_count == 2
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.get")
+def test_get_bytes_returns_raw_content_on_success(mock_get: Mock, mock_sleep: Mock) -> None:
+    mock_get.return_value = _response(200, content=b"PK\x03\x04binary-zip-bytes")
+
+    assert get_bytes("http://example.com") == b"PK\x03\x04binary-zip-bytes"
+    mock_get.assert_called_once()
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.get")
+def test_get_bytes_retries_on_429_then_succeeds(mock_get: Mock, mock_sleep: Mock) -> None:
+    mock_get.side_effect = [_response(429), _response(200, content=b"ok")]
+
+    assert get_bytes("http://example.com", max_retries=2) == b"ok"
     assert mock_get.call_count == 2
