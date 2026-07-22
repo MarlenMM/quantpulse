@@ -330,3 +330,45 @@ class ShortInterest(Base):
     as_of_date: Mapped[date] = mapped_column(Date, primary_key=True)
     pct_float_short: Mapped[float | None] = mapped_column(Float)
     days_to_cover: Mapped[float | None] = mapped_column(Float)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Composite Scoring & Ranking (Section 7.5, 13)
+# ---------------------------------------------------------------------------
+
+
+class CompositeScore(Base):
+    """The core ranking output: seven category sub-scores blended into one rating.
+
+    Append-only, keyed by `as_of` date and never overwritten (Section 6.8), so
+    "what did the algorithm say about AAPL on June 3rd" always returns exactly
+    that. The seven `*_score` columns are the 0-100 normalized (percentile,
+    sector-relative for fundamentals) per-category sub-scores -- these are
+    weight-*independent*, which is what lets the UI re-weight to a different
+    investor profile client-side without re-running the pipeline (Section 8).
+    Any sub-score is null when that category had no usable data for the symbol.
+
+    `profile` records which investor-profile weights produced `composite_score`
+    / `percentile_rank` / `rating` (the balanced default nightly; other
+    profiles can be stored alongside since it's part of the primary key).
+    `data_confidence` (0-100) is the fraction of category weight that had usable
+    data -- an honesty signal so a thinly-covered micro-cap isn't shown with the
+    same confidence as a mega-cap (Section 7.5 step 6).
+    """
+
+    __tablename__ = "composite_scores"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    profile: Mapped[str] = mapped_column(String(30), primary_key=True, default="balanced")
+    fundamental_score: Mapped[float | None] = mapped_column(Float)
+    technical_score: Mapped[float | None] = mapped_column(Float)
+    analyst_score: Mapped[float | None] = mapped_column(Float)
+    sentiment_score: Mapped[float | None] = mapped_column(Float)
+    momentum_score: Mapped[float | None] = mapped_column(Float)
+    industry_macro_score: Mapped[float | None] = mapped_column(Float)
+    smart_money_score: Mapped[float | None] = mapped_column(Float)
+    composite_score: Mapped[float] = mapped_column(Float)
+    percentile_rank: Mapped[float | None] = mapped_column(Float)
+    rating: Mapped[str] = mapped_column(String(15))
+    data_confidence: Mapped[float] = mapped_column(Float)
