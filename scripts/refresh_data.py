@@ -13,12 +13,13 @@ only add "database is locked" failures without buying any real parallelism.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -26,6 +27,8 @@ from sqlalchemy.orm import Session
 
 from quantpulse.analysis import (
     analyst_consensus,
+    backtest,
+    forecasting,
     fundamental,
     macro,
     scoring,
@@ -43,6 +46,9 @@ from quantpulse.ingestion import (
     short_interest_client,
     wikipedia_client,
     yfinance_client,
+)
+from quantpulse.ingestion import (
+    historical_constituents_client as hist,
 )
 from quantpulse.news_intelligence import (
     entity_extraction,
@@ -116,6 +122,38 @@ _COMPOSITE_PROFILE = "balanced"
 # (short interest, insider filings, quarterly 13F) ride the weekly cadence --
 # a documented, single-constant deviation, not a silent gap.
 _NEWS_REFRESH_ON_WEEKLY_ONLY = True
+
+# Phase 7 forecasting + backtest (Section 7.6). Both are among the heaviest steps
+# in the job -- generating four horizons x three models per name, and a
+# multi-year walk-forward -- so, like the news/13F workloads above, they ride the
+# weekly cadence (a documented cost choice, not a silent gap; Sections 6.10-6.13
+# on staged rollout and the model-cache work that would make this daily-affordable).
+_FORECAST_HORIZONS = forecasting.DEFAULT_HORIZONS  # (5, 20, 63, 252) trading days
+# runner name -> (model callable, the `model_name` its Forecast carries), so a
+# forecast row's historical_hit_rate can be keyed to the pooled accuracy below.
+_FORECAST_RUNNERS: dict[str, tuple[Any, str]] = {
+    "baseline": (forecasting.baseline_forecast, "baseline"),
+    "arima": (forecasting.statistical_forecast, "arima"),
+    "ml": (forecasting.ml_forecast, "gbr"),
+}
+# Enough trailing history to fit the longest horizon's ML training window plus
+# its forward-return target, with room for weekends/holidays (~3.5 years).
+_FORECAST_PRICE_LOOKBACK_DAYS = 1280
+# The model's own out-of-sample hit-rate (shown alongside every forecast,
+# Section 7.6) is pooled over this many names -- a bounded sample keeps the
+# walk-forward affordable while still being an honest per-model/horizon accuracy.
+_ACCURACY_SAMPLE_SIZE = 20
+
+# Strategy backtest ("followed the algorithm's ratings", Section 7.6): a
+# survivorship-aware, monthly-rebalanced, cost-charged track record over a
+# multi-year window. The wired signal is trailing price momentum -- a cheap,
+# point-in-time stand-in for the composite rating (the engine is signal-agnostic,
+# so the composite score can drive it once its stored history is deep enough).
+_BACKTEST_LOOKBACK_DAYS = 1825  # ~5 years
+_BACKTEST_CADENCE = "monthly"
+_BACKTEST_TOP_FRACTION = 0.2
+_BACKTEST_TXN_COST = 0.001  # 0.1% per unit turnover (Section 7.6's bid-ask stand-in)
+_BACKTEST_MOMENTUM_LOOKBACK = 120  # ~6-month trailing return as the ranking signal
 
 # The insider/13F table columns populated from their ingestion DataFrames.
 _INSIDER_COLUMNS = (
@@ -657,6 +695,212 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
     return persistence.upsert_composite_scores(session, records)
 
 
+def _ohlcv_frames_by_symbol(ohlcv: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """`{symbol: OHLCV frame on a DatetimeIndex}` from the long point-in-time read.
+
+    The DatetimeIndex (not the DB's date-object column) is what the forecasting
+    feature engineering and the indicator library both expect.
+    """
+    return {
+        str(symbol): group[["open", "high", "low", "close", "volume"]].set_axis(
+            pd.DatetimeIndex(pd.to_datetime(group["date"].to_numpy()))
+        )
+        for symbol, group in ohlcv.groupby("symbol")
+    }
+
+
+def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], float]:
+    """Each (model, horizon)'s out-of-sample directional hit-rate, pooled over a sample.
+
+    Runs the look-ahead-free walk-forward (`backtest.walk_forward_accuracy`) for
+    every runner and horizon over the `_ACCURACY_SAMPLE_SIZE` longest-history
+    names, pools the per-fold predicted/realized pairs across those names, and
+    scores one honest hit-rate per (model_name, horizon). This is the stat shown
+    next to every individual forecast (Section 7.6) -- computed on a bounded
+    sample so it stays affordable, since the point estimate is a property of the
+    model, not of any one stock.
+    """
+    sample = sorted(frames.values(), key=len, reverse=True)[:_ACCURACY_SAMPLE_SIZE]
+    pooled: dict[tuple[str, int], tuple[list[float], list[float]]] = {}
+    for prices in sample:
+        for model_fn, model_name in _FORECAST_RUNNERS.values():
+            for horizon in _FORECAST_HORIZONS:
+                result = backtest.walk_forward_accuracy(
+                    prices, model_fn=model_fn, horizon_days=horizon, model_name=model_name
+                )
+                if result is None:
+                    continue
+                pred, real = pooled.setdefault((model_name, horizon), ([], []))
+                pred.extend(result.predicted.tolist())
+                real.extend(result.realized.tolist())
+
+    hit_rates: dict[tuple[str, int], float] = {}
+    for key, (pred, real) in pooled.items():
+        rate = backtest.directional_hit_rate(pred, real)
+        if rate is not None:
+            hit_rates[key] = rate
+    return hit_rates
+
+
+def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> int:
+    """Generate and persist each name's price forecasts, tagged with the model's track record.
+
+    For every active equity with enough history, runs the baseline/statistical/ML
+    models at every horizon (`forecasting.generate_forecasts`) and appends the
+    point-in-time `forecasts` rows -- each carrying the fan-chart band and the
+    pooled `historical_hit_rate` for its (model, horizon) so a forecast is never
+    shown without its accuracy (Section 7.6). Append-only: a same-day re-run
+    leaves the first forecast untouched (Section 6.8).
+    """
+    ohlcv = persistence.read_active_ohlcv(
+        session, as_of=today, lookback_days=_FORECAST_PRICE_LOOKBACK_DAYS
+    )
+    if ohlcv.empty:
+        return 0
+    frames = _ohlcv_frames_by_symbol(ohlcv)
+    hit_rates = _pooled_hit_rates(frames)
+
+    records: list[dict[str, Any]] = []
+    for symbol in universe["symbol"]:
+        prices = frames.get(symbol)
+        if prices is None:
+            continue
+        for fc in forecasting.generate_forecasts(prices, horizons=_FORECAST_HORIZONS):
+            records.append(
+                {
+                    "symbol": symbol,
+                    "generated_date": today,
+                    "horizon_days": fc.horizon_days,
+                    "model_name": fc.model_name,
+                    "point_return": fc.point_return,
+                    "point_price": fc.point_price,
+                    "lower_price": fc.lower_price,
+                    "upper_price": fc.upper_price,
+                    "historical_hit_rate": hit_rates.get((fc.model_name, fc.horizon_days)),
+                }
+            )
+    return persistence.upsert_forecasts(session, records)
+
+
+def _coerce_date(value: Any) -> date | None:
+    """A plain `date` (or None) from a DB value that may be a date/Timestamp/NaT."""
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, datetime):  # covers pd.Timestamp, a datetime subclass
+        return value.date()
+    return value
+
+
+def _eligible_universe_fn(intervals: pd.DataFrame) -> Callable[[date], set[str]]:
+    """Build the survivorship-aware `eligible(as_of)` callback from membership intervals.
+
+    A name is eligible on `as_of` when it had been added and not yet removed
+    (`added <= as_of < removed`, removed-null meaning still a member). Loaded once
+    into memory so the per-rebalance lookup is a set comprehension, not a query.
+    """
+    rows = [
+        (str(r.symbol), _coerce_date(r.added_date), _coerce_date(r.removed_date))
+        for r in intervals.itertuples(index=False)
+    ]
+    valid = [(s, added, removed) for s, added, removed in rows if added is not None]
+
+    def eligible(as_of: date) -> set[str]:
+        return {
+            s
+            for s, added, removed in valid
+            if added <= as_of and (removed is None or removed > as_of)
+        }
+
+    return eligible
+
+
+def _equal_weight_benchmark(panel: pd.DataFrame) -> pd.Series:
+    """An equal-weighted index level from the panel, as a buy-and-hold market proxy.
+
+    Each name's adjusted close is rebased to its own first observation, then
+    averaged across whatever names exist on each date. A dedicated S&P 500 price
+    series isn't ingested, so this survivorship-aware average of the universe is
+    the honest stand-in for the buy-and-hold benchmark (Section 7.6).
+    """
+    first = panel.apply(lambda col: col.dropna().iloc[0] if col.notna().any() else np.nan)
+    normalized = panel.divide(first, axis=1)
+    return normalized.mean(axis=1, skipna=True)
+
+
+def _momentum_signal(as_of: date, panel: pd.DataFrame) -> dict[str, float]:
+    """Trailing `_BACKTEST_MOMENTUM_LOOKBACK`-day return per name -- the strategy's ranking.
+
+    Reads only `panel` (already sliced to `<= as_of` by the engine), so it is
+    point-in-time by construction. Names without enough history are simply
+    omitted from the ranking.
+    """
+    if len(panel) <= _BACKTEST_MOMENTUM_LOOKBACK:
+        return {}
+    recent = panel.iloc[-1]
+    past = panel.iloc[-1 - _BACKTEST_MOMENTUM_LOOKBACK]
+    signal: dict[str, float] = {}
+    for symbol in panel.columns:
+        now, then = recent.get(symbol), past.get(symbol)
+        if pd.notna(now) and pd.notna(then) and then > 0:
+            signal[str(symbol)] = float(now / then - 1.0)
+    return signal
+
+
+def refresh_backtest(session: Session, today: date) -> int:
+    """Run and persist the survivorship-aware, cost-aware strategy track record (Section 7.6).
+
+    Reconstructs the point-in-time universe from `index_membership_history`, reads
+    the adjusted-close panel over the trailing window (including names since
+    removed -- the whole point of a survivorship-honest run), and backtests the
+    momentum-ranked, monthly-rebalanced, transaction-cost-charged strategy against
+    the equal-weight universe benchmark. Appends one `backtest_results` row; a
+    thin/empty universe degrades to 0 written rather than raising.
+    """
+    intervals = persistence.read_membership_intervals(session, hist.INDEX_NAME)
+    if intervals.empty:
+        logger.info("refresh_backtest: no index_membership_history rows; skipping")
+        return 0
+    start = today - timedelta(days=_BACKTEST_LOOKBACK_DAYS)
+    panel = persistence.read_adj_close_panel(
+        session, start=start, end=today, symbols=list(intervals["symbol"].unique())
+    )
+    schedule = backtest.rebalance_dates(panel.index, _BACKTEST_CADENCE) if not panel.empty else []
+    if len(schedule) < 2:
+        logger.info("refresh_backtest: not enough price history for a backtest; skipping")
+        return 0
+
+    result = backtest.backtest_strategy(
+        panel,
+        signal_fn=_momentum_signal,
+        cadence=_BACKTEST_CADENCE,
+        top_fraction=_BACKTEST_TOP_FRACTION,
+        transaction_cost=_BACKTEST_TXN_COST,
+        benchmark=_equal_weight_benchmark(panel),
+        eligible=_eligible_universe_fn(intervals),
+        schedule=schedule,
+    )
+    if result is None:
+        return 0
+    return persistence.insert_backtest_result(
+        session,
+        {
+            "run_date": today,
+            "period_start": schedule[0].date(),
+            "period_end": schedule[-1].date(),
+            "cadence": _BACKTEST_CADENCE,
+            "n_periods": result.n_periods,
+            "sharpe": result.sharpe,
+            "cagr": result.cagr,
+            "max_drawdown": result.max_drawdown,
+            "win_rate": result.win_rate,
+            "benchmark_cagr": result.benchmark_cagr,
+            "benchmark_sharpe": result.benchmark_sharpe,
+            "avg_turnover": result.avg_turnover,
+            "assumed_txn_cost": result.assumed_txn_cost,
+        },
+    )
+
+
 def _persist_per_ticker_smart_money(
     session: Session, result: TickerFetchResult, today: date
 ) -> int:
@@ -930,13 +1174,26 @@ def run(job_name: str = "refresh_data") -> None:
             "market_regime", lambda: _in_session(lambda s: refresh_market_regime(s, today))
         )
 
-        # Composite scoring runs last of all -- it reads back every category's
-        # freshly-written rows (prices, sentiment, smart money, regime) and
-        # turns them into the day's ranking (Section 7.5).
+        # Composite scoring runs before forecasting/backtesting -- it reads back
+        # every category's freshly-written rows (prices, sentiment, smart money,
+        # regime) and turns them into the day's ranking (Section 7.5).
         rows_updated += step(
             "composite_scores",
             lambda: _in_session(lambda s: refresh_composite_scores(s, universe_df, today)),
         )
+
+        # Phase 7 forecasting + backtesting ride the weekly cadence (the heaviest
+        # steps; see the constants above). Forecasts read the fresh price history
+        # written earlier this run; the backtest reads the price panel + point-in-
+        # time membership, so both come after the day's prices are persisted.
+        if is_weekly:
+            rows_updated += step(
+                "forecasts",
+                lambda: _in_session(lambda s: refresh_forecasts(s, universe_df, today)),
+            )
+            rows_updated += step(
+                "backtest", lambda: _in_session(lambda s: refresh_backtest(s, today))
+            )
 
     except Exception:
         logger.exception("%s failed", job_name)

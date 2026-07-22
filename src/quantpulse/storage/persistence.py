@@ -32,9 +32,12 @@ from sqlalchemy.orm import Session
 
 from quantpulse.storage.models import (
     AnalystConsensus,
+    BacktestResult,
     CompositeScore,
     EconomicCalendarEvent,
+    Forecast,
     FundamentalsSnapshot,
+    IndexMembershipHistory,
     InsiderTransaction,
     InstitutionalOwnership,
     MacroIndicator,
@@ -485,3 +488,65 @@ def read_latest_short_interest(
 def upsert_composite_scores(session: Session, records: Sequence[dict[str, Any]]) -> int:
     """Append composite-score rows (append-only, point-in-time -- never overwritten)."""
     return _append_only(session, CompositeScore, records)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7 — forecasts + backtest track record (Section 7.6, 13)
+# --------------------------------------------------------------------------- #
+
+
+def upsert_forecasts(session: Session, records: Sequence[dict[str, Any]]) -> int:
+    """Append per-(symbol, date, horizon, model) forecast rows (append-only, Section 6.8)."""
+    return _append_only(session, Forecast, records)
+
+
+def insert_backtest_result(session: Session, record: dict[str, Any]) -> int:
+    """Insert one strategy-backtest run's track record (append-only log; auto-id PK)."""
+    session.add(BacktestResult(**record))
+    return 1
+
+
+def read_membership_intervals(session: Session, index_name: str) -> pd.DataFrame:
+    """Point-in-time index membership intervals for the survivorship-aware backtest.
+
+    Returns `symbol, added_date, removed_date` (removed_date null = still a
+    member) for `index_name`, straight from `index_membership_history` (Section 5).
+    The strategy backtest builds its `eligible(as_of)` universe from these so a
+    company that was a member in the past -- then delisted -- is still traded on
+    the dates it belonged, exactly what Section 22 demands.
+    """
+    stmt = select(
+        IndexMembershipHistory.symbol,
+        IndexMembershipHistory.added_date,
+        IndexMembershipHistory.removed_date,
+    ).where(IndexMembershipHistory.index_name == index_name)
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(rows, columns=["symbol", "added_date", "removed_date"])
+
+
+def read_adj_close_panel(
+    session: Session, *, start: date, end: date, symbols: Sequence[str] | None = None
+) -> pd.DataFrame:
+    """Wide adjusted-close panel (index=date, columns=symbol) over `[start, end]`.
+
+    Deliberately does **not** filter on `Ticker.is_active`: a survivorship-honest
+    backtest needs the price history of names that were later removed, not just
+    today's survivors (Section 22). `symbols`, if given, restricts the columns
+    (e.g. to a single index's ever-members). An empty result yields an empty
+    frame rather than raising.
+    """
+    conditions = [PriceHistory.date >= start, PriceHistory.date <= end]
+    if symbols is not None:
+        conditions.append(PriceHistory.symbol.in_(list(symbols)))
+    stmt = (
+        select(PriceHistory.date, PriceHistory.symbol, PriceHistory.adj_close)
+        .where(*conditions)
+        .order_by(PriceHistory.date)
+    )
+    rows = session.execute(stmt).all()
+    long_df = pd.DataFrame(rows, columns=["date", "symbol", "adj_close"])
+    if long_df.empty:
+        return pd.DataFrame()
+    panel = long_df.pivot_table(index="date", columns="symbol", values="adj_close")
+    panel.index = pd.DatetimeIndex(pd.to_datetime(panel.index))
+    return panel.sort_index()
