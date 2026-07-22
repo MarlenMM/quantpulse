@@ -19,6 +19,7 @@ dependencies = [
     "pandas-ta-classic>=0.6.52",
     "scipy>=1.18.0",
     "scikit-learn>=1.9.0",
+    "statsmodels>=0.14",
     "numpy>=2.5.1",
     "feedparser>=6.0.12",
     "praw>=8.0.2",
