@@ -222,6 +222,26 @@ class TestCupAndHandle:
         prices = _series(_rounded_cup(depth_from=120, bottom=115) + self._handle(120, 117, 119))
         assert detect_cup_and_handle(find_pivots(prices, 0.02), prices) == []
 
+    def test_detection_is_stable_when_later_data_follows(self) -> None:
+        # Point-in-time honesty: a completed cup-and-handle must score the same
+        # whether the series ends at the handle or an unrelated later crash is
+        # appended -- the handle read must not reach into future bars.
+        shape = _rounded_cup() + self._handle(120, 116.4, 119)
+        truncated = _series(shape)
+        with_future = _series(shape + list(np.linspace(119, 70, 15))[1:])  # later crash
+
+        at_handle = detect_cup_and_handle(find_pivots(truncated, 0.05), truncated)
+        with_crash = [
+            d
+            for d in detect_cup_and_handle(find_pivots(with_future, 0.05), with_future)
+            if d.pattern_type == "cup_and_handle"
+        ]
+
+        assert len(at_handle) == 1
+        # The appended crash neither erases the detection nor alters its score.
+        assert len(with_crash) == 1
+        assert with_crash[0].confidence == pytest.approx(at_handle[0].confidence)
+
 
 # --- Aggregate entry point --------------------------------------------------
 
