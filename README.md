@@ -4,7 +4,9 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap).
 
-**Status:** Analysis engine in progress (data layer, technical/fundamental/analyst/news/smart-money signals, and the market-regime index are built; composite scoring, forecasting, portfolio tools, and the UI are still to come). Nothing here makes trade or investment decisions.
+**Status:** Analysis engine complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, and the optional LLM narration layer are all built. The Streamlit UI is still to come. Nothing here makes trade or investment decisions.
+
+The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`), every number the app computes is still produced and displayed — you just don't get the plain-English paragraph next to it.
 
 ## Quickstart
 

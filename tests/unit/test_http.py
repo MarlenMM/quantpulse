@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
+from quantpulse.ingestion import http
 from quantpulse.ingestion.http import get_bytes, get_json, get_text
 
 
@@ -104,3 +105,34 @@ def test_get_bytes_retries_on_429_then_succeeds(mock_get: Mock, mock_sleep: Mock
 
     assert get_bytes("http://example.com", max_retries=2) == b"ok"
     assert mock_get.call_count == 2
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.post")
+def test_post_json_sends_body_and_parses_response(mock_post: Mock, _sleep: Mock) -> None:
+    mock_post.return_value = _response(200, {"ok": True})
+    result = http.post_json("https://example.com/v1", json_body={"prompt": "hi"})
+
+    assert result == {"ok": True}
+    _, kwargs = mock_post.call_args
+    assert kwargs["json"] == {"prompt": "hi"}
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.post")
+def test_post_json_retries_429_like_the_get_helpers(mock_post: Mock, _sleep: Mock) -> None:
+    mock_post.side_effect = [_response(429, {}), _response(200, {"ok": True})]
+    assert http.post_json("https://example.com/v1", json_body={}) == {"ok": True}
+    assert mock_post.call_count == 2
+
+
+@patch("quantpulse.ingestion.http.time.sleep", return_value=None)
+@patch("quantpulse.ingestion.http.requests.get")
+@patch("quantpulse.ingestion.http.requests.post")
+def test_get_helpers_still_use_requests_get(mock_post: Mock, mock_get: Mock, _sleep: Mock) -> None:
+    # The POST addition must not have rerouted the GET path (e.g. via
+    # requests.request), which every ingestion client depends on.
+    mock_get.return_value = _response(200, {"ok": True})
+    http.get_json("https://example.com/data")
+    mock_get.assert_called_once()
+    mock_post.assert_not_called()
