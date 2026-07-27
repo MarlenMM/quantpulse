@@ -306,3 +306,213 @@ class TestStrategyBacktest:
             bt.backtest_strategy(panel, signal_fn=_rank_by_last_price, top_fraction=1.5)
         with pytest.raises(ValueError, match="transaction_cost"):
             bt.backtest_strategy(panel, signal_fn=_rank_by_last_price, transaction_cost=-0.1)
+
+
+# --------------------------------------------------------------------------- #
+# Bootstrap significance testing -- preserving time-ordering is the whole point
+# --------------------------------------------------------------------------- #
+
+
+def _ar1_returns(n: int, phi: float, *, mean: float = 0.004, sigma: float = 0.02, seed: int = 0):
+    """A serially-correlated (AR(1)) return series -- the case an i.i.d. bootstrap gets wrong."""
+    rng = np.random.default_rng(seed)
+    eps = rng.normal(0.0, sigma, n)
+    out = np.zeros(n)
+    for i in range(1, n):
+        out[i] = phi * out[i - 1] + eps[i]
+    return pd.Series(out + mean)
+
+
+class TestBlockBootstrapMechanics:
+    def test_point_estimate_is_the_observed_statistic_not_a_resample_average(self) -> None:
+        returns = pd.Series(np.random.default_rng(0).normal(0.01, 0.02, 60))
+        ci = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=0)
+        assert ci is not None
+        assert ci.point == pytest.approx(bt.sharpe_ratio(returns, periods_per_year=12))
+
+    def test_interval_brackets_the_point_estimate(self) -> None:
+        returns = pd.Series(np.random.default_rng(1).normal(0.01, 0.02, 80))
+        ci = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=0)
+        assert ci is not None
+        assert ci.low <= ci.point <= ci.high
+
+    def test_block_indices_preserve_within_block_order(self) -> None:
+        rng = np.random.default_rng(0)
+        idx = bt._block_indices(40, block_size=5, rng=rng)
+        assert len(idx) == 40
+        # Every full block is a run of consecutive positions, in order.
+        for start in range(0, 40 - 5, 5):
+            block = idx[start : start + 5]
+            assert list(block) == list(range(block[0], block[0] + 5))
+
+    def test_block_indices_stay_in_range(self) -> None:
+        rng = np.random.default_rng(0)
+        idx = bt._block_indices(37, block_size=6, rng=rng)
+        assert idx.min() >= 0 and idx.max() < 37
+
+    def test_default_block_size_grows_with_n_and_is_capped(self) -> None:
+        assert bt._default_block_size(2) == 1
+        assert bt._default_block_size(10) == 2
+        assert bt._default_block_size(60) == 4
+        # Never long enough to make every resample the original series.
+        for n in (8, 20, 100, 500):
+            assert bt._default_block_size(n) <= n // 2
+
+    def test_wider_confidence_level_gives_a_wider_interval(self) -> None:
+        returns = pd.Series(np.random.default_rng(2).normal(0.01, 0.02, 100))
+        narrow = bt.bootstrap_sharpe_ci(
+            returns, periods_per_year=12, confidence_level=0.50, random_state=0
+        )
+        wide = bt.bootstrap_sharpe_ci(
+            returns, periods_per_year=12, confidence_level=0.99, random_state=0
+        )
+        assert narrow is not None and wide is not None
+        assert (wide.high - wide.low) > (narrow.high - narrow.low)
+
+    def test_deterministic_with_fixed_seed(self) -> None:
+        returns = pd.Series(np.random.default_rng(3).normal(0.01, 0.02, 60))
+        a = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=7)
+        b = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=7)
+        assert a is not None and b is not None
+        assert (a.low, a.high) == (b.low, b.high)
+
+
+class TestBlockBootstrapVersusIID:
+    def test_blocks_widen_the_interval_on_autocorrelated_returns(self) -> None:
+        # The core claim of this whole row (Section 21): resampling single
+        # observations destroys serial dependence and understates uncertainty.
+        # With strong positive autocorrelation the honest block interval must be
+        # materially wider than the naive i.i.d. one.
+        returns = _ar1_returns(240, phi=0.6, seed=0)
+        iid = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, block_size=1, random_state=1)
+        block = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=1)
+        assert iid is not None and block is not None
+        assert (block.high - block.low) > 1.3 * (iid.high - iid.low)
+
+    def test_iid_bootstrap_can_falsely_claim_significance(self) -> None:
+        # The concrete, silent, flattering failure: on this autocorrelated
+        # series the i.i.d. interval excludes zero (reads as "a real edge")
+        # while the block interval straddles it (honestly "not distinguished
+        # from luck"). Same data, same point estimate -- only the resampling
+        # scheme differs.
+        returns = _ar1_returns(240, phi=0.6, seed=0)
+        iid = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, block_size=1, random_state=1)
+        block = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, random_state=1)
+        assert iid is not None and block is not None
+        assert iid.point == pytest.approx(block.point)  # identical headline number
+        assert iid.excludes_zero
+        assert not block.excludes_zero
+
+    def test_block_size_one_is_the_iid_bootstrap(self) -> None:
+        returns = pd.Series(np.random.default_rng(4).normal(0.01, 0.02, 60))
+        ci = bt.bootstrap_sharpe_ci(returns, periods_per_year=12, block_size=1, random_state=0)
+        assert ci is not None and ci.block_size == 1
+
+
+class TestExcludesZero:
+    def test_true_when_wholly_positive(self) -> None:
+        strong = pd.Series(np.random.default_rng(5).normal(0.03, 0.01, 60))
+        ci = bt.bootstrap_sharpe_ci(strong, periods_per_year=12, random_state=0)
+        assert ci is not None and ci.excludes_zero
+
+    def test_false_when_straddling_zero(self) -> None:
+        noise = pd.Series(np.random.default_rng(6).normal(0.0, 0.05, 60))
+        ci = bt.bootstrap_sharpe_ci(noise, periods_per_year=12, random_state=0)
+        assert ci is not None and not ci.excludes_zero
+
+
+class TestBootstrapAbstention:
+    def test_too_few_observations_gives_no_interval(self) -> None:
+        # A CI from a handful of points is theatre; abstain rather than invent.
+        assert bt.bootstrap_sharpe_ci(pd.Series([0.01, -0.02, 0.03]), periods_per_year=12) is None
+
+    def test_constant_series_has_no_defined_sharpe_or_interval(self) -> None:
+        # Constant returns differ by floating-point noise, not real variation:
+        # the Sharpe must be undefined rather than ~1e16 with a razor-thin CI.
+        constant = pd.Series([0.01] * 30)
+        assert bt.sharpe_ratio(constant, periods_per_year=12) is None
+        assert bt.bootstrap_sharpe_ci(constant, periods_per_year=12) is None
+
+    def test_genuine_tiny_variation_still_computes(self) -> None:
+        # The degenerate-std guard is relative, so real (if small) dispersion is
+        # still scored rather than swallowed.
+        varied = pd.Series([0.01, 0.0100001] * 15)
+        assert bt.sharpe_ratio(varied, periods_per_year=12) is not None
+
+    def test_invalid_parameters_raise(self) -> None:
+        returns = pd.Series(np.random.default_rng(7).normal(0.01, 0.02, 60))
+        with pytest.raises(ValueError, match="confidence_level"):
+            bt.bootstrap_sharpe_ci(returns, periods_per_year=12, confidence_level=1.5)
+        with pytest.raises(ValueError, match="n_resamples"):
+            bt.bootstrap_sharpe_ci(returns, periods_per_year=12, n_resamples=0)
+        with pytest.raises(ValueError, match="block_size"):
+            bt.bootstrap_sharpe_ci(returns, periods_per_year=12, block_size=0)
+
+
+class TestBootstrapHitRate:
+    def test_pairing_is_preserved_across_resamples(self) -> None:
+        # A perfect model stays perfect in every resample only if each
+        # prediction keeps its own realized outcome. Independent resampling of
+        # the two arrays would drag this toward 0.5.
+        predicted = np.array([1.0, -1.0] * 30)
+        realized = predicted.copy()
+        ci = bt.bootstrap_hit_rate_ci(predicted, realized, random_state=0)
+        assert ci is not None
+        assert ci.low == pytest.approx(1.0) and ci.high == pytest.approx(1.0)
+
+    def test_coin_flip_model_interval_brackets_one_half(self) -> None:
+        rng = np.random.default_rng(8)
+        ci = bt.bootstrap_hit_rate_ci(rng.normal(0, 1, 200), rng.normal(0, 1, 200), random_state=0)
+        assert ci is not None
+        assert ci.low <= 0.5 <= ci.high
+
+    def test_mismatched_lengths_raise(self) -> None:
+        with pytest.raises(ValueError, match="same length"):
+            bt.bootstrap_hit_rate_ci([1.0, 2.0], [1.0])
+
+    def test_consumes_walk_forward_accuracy_output(self) -> None:
+        prices = _prices(
+            100 * np.exp(np.cumsum(np.random.default_rng(9).normal(0.0005, 0.02, 600)))
+        )
+        accuracy = bt.walk_forward_accuracy(
+            prices, model_fn=baseline_forecast, horizon_days=5, model_name="baseline", step=5
+        )
+        assert accuracy is not None
+        ci = bt.bootstrap_hit_rate_ci(accuracy.predicted, accuracy.realized, random_state=0)
+        assert ci is not None
+        assert 0.0 <= ci.low <= ci.high <= 1.0
+        assert ci.point == pytest.approx(accuracy.hit_rate)
+
+
+class TestStrategySignificance:
+    def _result(self) -> bt.StrategyResult:
+        rng = np.random.default_rng(10)
+        panel = _panel(
+            {
+                f"S{i}": list(100 * np.exp(np.cumsum(rng.normal(0.0004, 0.02, 900))))
+                for i in range(6)
+            }
+        )
+        result = bt.backtest_strategy(panel, signal_fn=_rank_by_last_price)
+        assert result is not None
+        return result
+
+    def test_brackets_the_runs_headline_metrics(self) -> None:
+        result = self._result()
+        significance = bt.bootstrap_strategy_significance(result)
+        assert significance.sharpe is not None and significance.cagr is not None
+        assert significance.sharpe.point == pytest.approx(result.sharpe)
+        assert significance.cagr.point == pytest.approx(result.cagr)
+
+    def test_uses_the_runs_own_annualization(self) -> None:
+        result = self._result()
+        significance = bt.bootstrap_strategy_significance(result)
+        assert significance.sharpe is not None
+        assert significance.sharpe.n_observations == result.n_periods
+
+    def test_short_run_yields_no_interval_rather_than_a_fake_one(self) -> None:
+        panel = _panel({f"S{i}": list(np.linspace(100, 130 + i, 120)) for i in range(3)})
+        result = bt.backtest_strategy(panel, signal_fn=_rank_by_last_price)
+        assert result is not None and result.n_periods < 8
+        significance = bt.bootstrap_strategy_significance(result)
+        assert significance.sharpe is None and significance.cagr is None
