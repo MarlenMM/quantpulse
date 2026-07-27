@@ -421,10 +421,24 @@ class BacktestResult(Base):
     A "followed the algorithm's ratings" strategy, rebalanced at `cadence` with
     `assumed_txn_cost` charged on turnover, compared against buy-and-hold over the
     identical period. `win_rate` is Section 13's `hit_rate` for a strategy (the
-    fraction of profitable periods). The bootstrap `sharpe_ci_low/high` columns
-    (Section 13) are deliberately absent until the significance-testing sub-part
-    adds and fills them -- keeping the cost/turnover assumptions explicit and
-    auditable is what makes this table honest (Section 22).
+    fraction of profitable periods). Keeping the cost/turnover assumptions
+    explicit and auditable is what makes this table honest (Section 22).
+
+    The `*_ci_low`/`*_ci_high` columns carry the bootstrap confidence intervals
+    (Section 7.6) so the track-record page can say "Sharpe 0.8, 90% CI
+    [0.3, 1.3]" rather than implying false precision with a bare number; they are
+    null when a run was too short to bootstrap honestly. Section 13's table names
+    `sharpe_ci_low`/`sharpe_ci_high` specifically, but Section 7.6 asks for an
+    interval "around the headline Sharpe/CAGR", so `cagr_ci_*` is stored too --
+    displaying a CAGR *without* its interval next to a Sharpe *with* one would
+    reintroduce exactly the false precision the bullet exists to prevent.
+    `ci_confidence_level` records what the interval means (90% vs 95%), for the
+    same auditability reason `assumed_txn_cost` is stored: a bound whose
+    confidence level is unknown can't be interpreted later.
+
+    `max_drawdown` deliberately has no interval -- it is a path-dependent
+    extremum, so a bootstrap over reshuffled return paths would describe a
+    drawdown nobody actually lived through (see `backtest.StrategySignificance`).
     """
 
     __tablename__ = "backtest_results"
@@ -436,7 +450,12 @@ class BacktestResult(Base):
     cadence: Mapped[str] = mapped_column(String(10))
     n_periods: Mapped[int] = mapped_column(Integer)
     sharpe: Mapped[float | None] = mapped_column(Float)
+    sharpe_ci_low: Mapped[float | None] = mapped_column(Float)
+    sharpe_ci_high: Mapped[float | None] = mapped_column(Float)
     cagr: Mapped[float | None] = mapped_column(Float)
+    cagr_ci_low: Mapped[float | None] = mapped_column(Float)
+    cagr_ci_high: Mapped[float | None] = mapped_column(Float)
+    ci_confidence_level: Mapped[float | None] = mapped_column(Float)
     max_drawdown: Mapped[float | None] = mapped_column(Float)
     win_rate: Mapped[float | None] = mapped_column(Float)
     benchmark_cagr: Mapped[float | None] = mapped_column(Float)

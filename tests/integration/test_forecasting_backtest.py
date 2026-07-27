@@ -16,6 +16,7 @@ from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
+from quantpulse.analysis import backtest
 from quantpulse.analysis.forecasting import baseline_forecast
 from quantpulse.storage.models import (
     BacktestResult,
@@ -204,3 +205,35 @@ def test_refresh_backtest_without_membership_is_a_noop(session: Session) -> None
     _seed_prices(session, "AAA", np.linspace(100, 120, _N_BARS))
     session.flush()
     assert refresh_data.refresh_backtest(session, AS_OF) == 0
+
+
+def test_refresh_backtest_stores_bootstrap_confidence_intervals(session: Session) -> None:
+    _seed(session)
+    refresh_data.refresh_backtest(session, AS_OF)
+    session.flush()
+
+    run = session.scalars(select(BacktestResult)).one()
+    # The stored track record reports a range, not just a point (Section 7.6),
+    # and records what confidence level that range means so it stays readable.
+    assert run.sharpe_ci_low is not None and run.sharpe_ci_high is not None
+    assert run.sharpe_ci_low <= run.sharpe <= run.sharpe_ci_high
+    assert run.cagr_ci_low is not None and run.cagr_ci_high is not None
+    assert run.cagr_ci_low <= run.cagr <= run.cagr_ci_high
+    assert run.ci_confidence_level == backtest.DEFAULT_CI_CONFIDENCE
+
+
+def test_refresh_backtest_stores_null_intervals_when_run_is_too_short(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A run with too few rebalance periods must persist nulls rather than a
+    # fabricated interval -- the metrics themselves are still recorded.
+    _seed(session)
+    monkeypatch.setattr(backtest, "_MIN_BOOTSTRAP_OBS", 10_000)
+    refresh_data.refresh_backtest(session, AS_OF)
+    session.flush()
+
+    run = session.scalars(select(BacktestResult)).one()
+    assert run.sharpe_ci_low is None and run.sharpe_ci_high is None
+    assert run.cagr_ci_low is None and run.cagr_ci_high is None
+    assert run.ci_confidence_level is None
+    assert run.n_periods >= 2  # the run itself still happened

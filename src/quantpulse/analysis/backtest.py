@@ -24,14 +24,15 @@ rather than merely discouraged:
   conservative bid-ask stand-in even in a commission-free world). Skipping this
   is the single easiest way to flatter a backtest.
 
-Scope (Phase 7 is split across five Section-21 rows): this module is the
-"Backtesting engine" row. The **bootstrap confidence intervals** around the
-headline Sharpe/CAGR are a separate later row -- so the engine deliberately
-returns the full per-period return series and the paired predicted/realized
-arrays, which is exactly the raw material that part needs to resample. **Monte
-Carlo** simulation and the broader **risk analytics** (beta/VaR/Sortino) are
-their own rows too. Everything here is pure: series/frames in, metrics out; no
-storage or network.
+Scope (Phase 7 is split across five Section-21 rows): this module owns two of
+them -- the "Backtesting engine" row (the walk-forward evaluator and the
+cost/survivorship-aware strategy simulator above) and the **"Statistical
+significance testing on backtest metrics (bootstrap CI)"** row (the final
+section below). The engine deliberately returns the full per-period return
+series and the paired predicted/realized arrays precisely so the bootstrap can
+resample them without re-running anything. **Monte Carlo** simulation lives in
+`forecasting.py`; portfolio **risk analytics** (beta/VaR/Sortino) is Phase 8.
+Everything here is pure: series/frames in, metrics out; no storage or network.
 """
 
 from __future__ import annotations
@@ -58,6 +59,15 @@ __all__ = [
     "StrategyResult",
     "backtest_strategy",
     "rebalance_dates",
+    "DEFAULT_CI_CONFIDENCE",
+    "DEFAULT_N_RESAMPLES",
+    "BootstrapCI",
+    "StrategySignificance",
+    "block_bootstrap_ci",
+    "bootstrap_sharpe_ci",
+    "bootstrap_cagr_ci",
+    "bootstrap_hit_rate_ci",
+    "bootstrap_strategy_significance",
 ]
 
 TRADING_DAYS_PER_YEAR = 252.0
@@ -67,6 +77,25 @@ _PERIODS_PER_YEAR = {"weekly": 52.0, "monthly": 12.0}
 # Per-model minimum history before a walk-forward fold is even attempted, so the
 # first evaluation isn't fit on a handful of bars.
 _MIN_ACCURACY_TRAIN = 60
+
+# A return series whose standard deviation is this small *relative to its own
+# magnitude* is constant to within floating-point noise, so its Sharpe is
+# undefined rather than astronomically large (see `sharpe_ratio`). Orders of
+# magnitude above float64's ~1e-16 relative noise and far below any genuine
+# variation in a real return series.
+_DEGENERATE_STD_REL_TOL = 1e-12
+
+# Bootstrap defaults. 90% matches Section 7.6's own worked example ("Sharpe 0.8,
+# 90% CI [0.3, 1.3]"); 2000 resamples is comfortably enough for stable 5th/95th
+# percentiles and still runs in milliseconds on a few hundred observations.
+DEFAULT_CI_CONFIDENCE = 0.90
+DEFAULT_N_RESAMPLES = 2000
+# Below this many observations a confidence interval is theatre, not evidence --
+# the bootstrap can only resample the information actually present.
+_MIN_BOOTSTRAP_OBS = 8
+# If fewer than this fraction of resamples yield a defined statistic (e.g. a
+# zero-variance resample makes Sharpe undefined), the CI isn't trustworthy.
+_MIN_DEFINED_RESAMPLE_FRACTION = 0.5
 
 
 def _closes(prices: pd.DataFrame) -> pd.Series:
@@ -93,15 +122,25 @@ def sharpe_ratio(
 
     `risk_free_rate` is an *annual* rate, converted to the return series' period
     before subtracting. Returns `None` when there are fewer than two returns or
-    the excess-return volatility is zero (a Sharpe would be undefined or
-    infinite -- an honest "not enough to say," not a fabricated number).
+    the excess-return volatility is (effectively) zero -- a Sharpe would be
+    undefined, and an honest "not enough to say" beats a fabricated number.
+
+    "Effectively zero" is judged *relative to the size of the returns*, not
+    against exact 0.0: a constant series rarely differences to a std of exactly
+    zero in floating point (it lands around 1e-18), and dividing by that noise
+    yields a Sharpe of ~1e16 that is not merely wrong but wrong with enormous
+    apparent confidence -- and would then be handed a meaninglessly tight
+    bootstrap interval around it.
     """
     clean = pd.to_numeric(returns, errors="coerce").dropna()
     if len(clean) < 2:
         return None
     excess = clean - risk_free_rate / periods_per_year
     std = float(excess.std(ddof=1))
-    if std == 0 or not np.isfinite(std):
+    if not np.isfinite(std):
+        return None
+    scale = float(excess.abs().max())
+    if std <= scale * _DEGENERATE_STD_REL_TOL:
         return None
     return float(excess.mean() / std * np.sqrt(periods_per_year))
 
@@ -477,4 +516,313 @@ def backtest_strategy(
         avg_turnover=float(np.mean(turnovers)) if turnovers else 0.0,
         n_periods=int(len(returns)),
         periods_per_year=ppy,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Bootstrap significance testing on the headline metrics (Section 7.6)
+#
+# Section 21 flags exactly one failure mode for this row: "easy to implement the
+# bootstrap mechanically wrong (e.g. resampling that breaks time-ordering) in a
+# way that looks fine but isn't." That is the textbook i.i.d. bootstrap applied
+# to a time series. Drawing individual observations with replacement assumes
+# they are independent; financial returns are not (volatility clusters, momentum
+# and mean-reversion persist), and destroying that dependence makes each
+# resample *more* internally random than the real series, which shrinks the
+# spread of the bootstrap distribution and yields a confidence interval that is
+# too narrow. The failure is silent and flattering: it makes a mediocre Sharpe
+# look reliably positive.
+#
+# So the default here is the **moving-block bootstrap** (Kunsch 1989): resample
+# contiguous blocks of consecutive observations rather than single points, so
+# the within-block serial structure survives into every resample. `block_size=1`
+# reduces it to the i.i.d. bootstrap, available explicitly for a caller who has
+# genuinely independent observations -- never as a silent default.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class BootstrapCI:
+    """A metric with its bootstrap confidence interval and the sample behind it.
+
+    Exactly what Section 7.6 asks the track-record page to be able to say --
+    "Sharpe 0.8, 90% CI [0.3, 1.3]" -- instead of a bare number implying false
+    precision. `point` is the metric on the observed sample (never a bootstrap
+    average, which would be biased); `low`/`high` are the percentile bounds.
+
+    `n_observations`, `block_size`, and `n_defined` are carried so a reader can
+    judge how much the interval is worth: a 90% CI from 11 monthly periods with
+    block size 2 is a very different claim from one built on 200, and hiding
+    that would repeat exactly the false-precision mistake the CI exists to fix.
+    """
+
+    point: float
+    low: float
+    high: float
+    confidence_level: float
+    n_observations: int
+    n_resamples: int
+    n_defined: int
+    block_size: int
+
+    @property
+    def excludes_zero(self) -> bool:
+        """Whether the whole interval sits on one side of zero.
+
+        The honest reading of "is this result statistically meaningful?" -- a
+        Sharpe whose CI straddles zero has not been distinguished from luck,
+        however good its point estimate looks (Section 7.6, Section 22).
+        """
+        return self.low > 0.0 or self.high < 0.0
+
+
+def _default_block_size(n: int) -> int:
+    """Block length for the moving-block bootstrap: the standard n**(1/3) rule.
+
+    Long enough to carry the short-range dependence typical of return series,
+    short enough to still produce many distinct resamples. Capped at `n // 2` so
+    at least two independent blocks always fit -- a block as long as the sample
+    would make every resample the original series and collapse the interval to a
+    point, an interval that looks impressively tight because it is measuring
+    nothing.
+    """
+    if n < 2:
+        return 1
+    return max(1, min(round(n ** (1.0 / 3.0)), n // 2))
+
+
+def _block_indices(n: int, block_size: int, rng: np.random.Generator) -> np.ndarray:
+    """Positions for one moving-block bootstrap resample of length `n`.
+
+    Draws `ceil(n / block_size)` block start positions uniformly from the
+    `n - block_size + 1` possible starts, concatenates the blocks, and truncates
+    back to `n`. Consecutive observations inside a block stay adjacent and in
+    their original order, which is the property that keeps the resampled series'
+    serial correlation (and therefore the width of the interval) honest.
+    """
+    n_blocks = int(np.ceil(n / block_size))
+    starts = rng.integers(0, n - block_size + 1, size=n_blocks)
+    idx = (starts[:, None] + np.arange(block_size)[None, :]).ravel()
+    return idx[:n]
+
+
+def block_bootstrap_ci(
+    n_observations: int,
+    statistic_fn: Callable[[np.ndarray], float | None],
+    *,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    block_size: int | None = None,
+    random_state: int | None = 0,
+) -> BootstrapCI | None:
+    """Percentile bootstrap CI for any statistic of an ordered sample.
+
+    The general engine every wrapper below delegates to. `statistic_fn` receives
+    an array of *positions* into the original sample (not the values), so a
+    caller can compute a statistic over several parallel arrays -- e.g. a
+    directional hit-rate over paired predicted/realized returns -- while keeping
+    those arrays aligned. Resampling positions rather than values is what makes
+    paired resampling correct by construction: break the pairing and a hit-rate
+    CI silently measures nothing.
+
+    Blocks default to `_default_block_size` (see the section header for why
+    blocks rather than single points). A resample where the statistic is
+    undefined (`None`/NaN -- e.g. a zero-variance draw makes Sharpe undefined)
+    is dropped, and `None` is returned if too few remain to trust the quantiles.
+
+    `random_state` defaults to a fixed seed so a stored track record is
+    reproducible; pass `None` for a fresh draw.
+    """
+    if not 0.0 < confidence_level < 1.0:
+        raise ValueError(f"confidence_level must be in (0, 1), got {confidence_level}")
+    if n_resamples < 1:
+        raise ValueError(f"n_resamples must be >= 1, got {n_resamples}")
+    if n_observations < _MIN_BOOTSTRAP_OBS:
+        return None
+
+    resolved_block = _default_block_size(n_observations) if block_size is None else block_size
+    if resolved_block < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    resolved_block = min(resolved_block, n_observations)
+
+    observed = statistic_fn(np.arange(n_observations))
+    if observed is None or not np.isfinite(observed):
+        return None  # undefined on the real sample -> nothing to bracket
+
+    rng = np.random.default_rng(random_state)
+    draws: list[float] = []
+    for _ in range(n_resamples):
+        value = statistic_fn(_block_indices(n_observations, resolved_block, rng))
+        if value is not None and np.isfinite(value):
+            draws.append(float(value))
+
+    if len(draws) < max(2, int(n_resamples * _MIN_DEFINED_RESAMPLE_FRACTION)):
+        return None
+
+    tail = (1.0 - confidence_level) / 2.0
+    values = np.asarray(draws, dtype=float)
+    return BootstrapCI(
+        point=float(observed),
+        low=float(np.quantile(values, tail)),
+        high=float(np.quantile(values, 1.0 - tail)),
+        confidence_level=confidence_level,
+        n_observations=n_observations,
+        n_resamples=n_resamples,
+        n_defined=len(draws),
+        block_size=resolved_block,
+    )
+
+
+def _clean_returns(returns: pd.Series) -> np.ndarray:
+    return pd.to_numeric(returns, errors="coerce").dropna().to_numpy(dtype=float)
+
+
+def bootstrap_sharpe_ci(
+    returns: pd.Series,
+    *,
+    periods_per_year: float,
+    risk_free_rate: float = 0.0,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    block_size: int | None = None,
+    random_state: int | None = 0,
+) -> BootstrapCI | None:
+    """Bootstrap CI around the annualized Sharpe ratio of a periodic return series."""
+    values = _clean_returns(returns)
+
+    def statistic(idx: np.ndarray) -> float | None:
+        return sharpe_ratio(
+            pd.Series(values[idx]),
+            periods_per_year=periods_per_year,
+            risk_free_rate=risk_free_rate,
+        )
+
+    return block_bootstrap_ci(
+        len(values),
+        statistic,
+        confidence_level=confidence_level,
+        n_resamples=n_resamples,
+        block_size=block_size,
+        random_state=random_state,
+    )
+
+
+def bootstrap_cagr_ci(
+    returns: pd.Series,
+    *,
+    periods_per_year: float,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    block_size: int | None = None,
+    random_state: int | None = 0,
+) -> BootstrapCI | None:
+    """Bootstrap CI around the CAGR implied by a periodic return series."""
+    values = _clean_returns(returns)
+
+    def statistic(idx: np.ndarray) -> float | None:
+        return cagr(pd.Series(values[idx]), periods_per_year=periods_per_year)
+
+    return block_bootstrap_ci(
+        len(values),
+        statistic,
+        confidence_level=confidence_level,
+        n_resamples=n_resamples,
+        block_size=block_size,
+        random_state=random_state,
+    )
+
+
+def bootstrap_hit_rate_ci(
+    predicted: Sequence[float] | np.ndarray,
+    actual: Sequence[float] | np.ndarray,
+    *,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    block_size: int | None = None,
+    random_state: int | None = 0,
+) -> BootstrapCI | None:
+    """Bootstrap CI around a forecast model's out-of-sample directional hit-rate.
+
+    Consumes `AccuracyResult.predicted` / `.realized` straight from
+    `walk_forward_accuracy`. The two arrays are resampled **jointly** (the same
+    block positions index both), so every resampled prediction keeps its own
+    realized outcome -- resampling them independently would shuffle answers onto
+    the wrong questions and drive the hit-rate toward 50% no matter how good the
+    model is.
+
+    Blocks matter here whenever `walk_forward_accuracy` ran with a `step`
+    smaller than the horizon: those folds share overlapping windows and are
+    therefore serially dependent (the default `step=horizon_days` produces
+    non-overlapping folds, where blocks are merely harmless).
+    """
+    pred = np.asarray(predicted, dtype=float)
+    act = np.asarray(actual, dtype=float)
+    if pred.size != act.size:
+        raise ValueError(f"predicted and actual must be the same length: {pred.size} vs {act.size}")
+
+    def statistic(idx: np.ndarray) -> float | None:
+        return directional_hit_rate(pred[idx], act[idx])
+
+    return block_bootstrap_ci(
+        pred.size,
+        statistic,
+        confidence_level=confidence_level,
+        n_resamples=n_resamples,
+        block_size=block_size,
+        random_state=random_state,
+    )
+
+
+@dataclass(frozen=True)
+class StrategySignificance:
+    """Bootstrap CIs around a strategy backtest's headline metrics (Section 7.6).
+
+    `sharpe`/`cagr` are `None` when the run was too short to bootstrap honestly
+    -- an absent interval, not a fabricated one.
+
+    **`max_drawdown` is deliberately not bootstrapped.** It is a path-dependent
+    extremum: its value depends on the specific order in which returns arrived,
+    and a resampled series is a different path that never contained the actual
+    drawdown episode. A "confidence interval" around it would be a well-formed
+    number describing a quantity nobody experienced. Sharpe and CAGR are
+    order-independent functions of the return distribution (a mean/std ratio and
+    a product), which is exactly why resampling them is meaningful.
+    """
+
+    sharpe: BootstrapCI | None
+    cagr: BootstrapCI | None
+
+
+def bootstrap_strategy_significance(
+    result: StrategyResult,
+    *,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    block_size: int | None = None,
+    random_state: int | None = 0,
+) -> StrategySignificance:
+    """Bootstrap the Sharpe and CAGR of a completed strategy backtest.
+
+    Reads `result.period_returns` -- the net-of-cost per-period series the
+    engine already returns -- and annualizes each resample at the same
+    `periods_per_year` the run used, so the interval is on the same scale as the
+    headline number it brackets.
+    """
+    return StrategySignificance(
+        sharpe=bootstrap_sharpe_ci(
+            result.period_returns,
+            periods_per_year=result.periods_per_year,
+            confidence_level=confidence_level,
+            n_resamples=n_resamples,
+            block_size=block_size,
+            random_state=random_state,
+        ),
+        cagr=bootstrap_cagr_ci(
+            result.period_returns,
+            periods_per_year=result.periods_per_year,
+            confidence_level=confidence_level,
+            n_resamples=n_resamples,
+            block_size=block_size,
+            random_state=random_state,
+        ),
     )

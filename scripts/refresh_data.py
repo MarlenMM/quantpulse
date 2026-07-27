@@ -929,6 +929,14 @@ def refresh_backtest(session: Session, today: date) -> int:
     )
     if result is None:
         return 0
+    # Bracket the headline metrics with block-bootstrap confidence intervals so
+    # the stored track record reports whether the result is distinguishable from
+    # luck, not just a flattering point estimate (Section 7.6). A run too short
+    # to bootstrap honestly stores nulls rather than a fabricated interval.
+    significance = backtest.bootstrap_strategy_significance(result)
+    sharpe_ci, cagr_ci = significance.sharpe, significance.cagr
+    any_ci = sharpe_ci or cagr_ci
+
     return persistence.insert_backtest_result(
         session,
         {
@@ -938,7 +946,12 @@ def refresh_backtest(session: Session, today: date) -> int:
             "cadence": _BACKTEST_CADENCE,
             "n_periods": result.n_periods,
             "sharpe": result.sharpe,
+            "sharpe_ci_low": sharpe_ci.low if sharpe_ci else None,
+            "sharpe_ci_high": sharpe_ci.high if sharpe_ci else None,
             "cagr": result.cagr,
+            "cagr_ci_low": cagr_ci.low if cagr_ci else None,
+            "cagr_ci_high": cagr_ci.high if cagr_ci else None,
+            "ci_confidence_level": any_ci.confidence_level if any_ci else None,
             "max_drawdown": result.max_drawdown,
             "win_rate": result.win_rate,
             "benchmark_cagr": result.benchmark_cagr,
