@@ -29,14 +29,28 @@ Three decisions, made once here, are what keep every downstream number honest:
    genuine feature *inclusion* (`horizon_feature_weights` -> `select_features`),
    which actually changes the fitted model.
 
-Scope note (Phase 7 is split across five Section-21 rows): this module is the
-"Statistical/ML forecasting models" row only. The **Monte Carlo** fan-chart
-simulation, the **walk-forward backtest** that fills each forecast's own
-`historical_hit_rate`, the **bootstrap significance** intervals, and the
-**risk analytics** live in their own later sub-parts. Persistence to the
-`forecasts` table (Section 13) is wired up alongside the backtest, since the
-track-record column is that part's output -- nothing here touches storage or
-the network. Every function is pure: prices in, `Forecast` out.
+Scope note (Phase 7 is split across five Section-21 rows, in order): row 1
+(Opus) built the baseline/statistical/ML models above; row 2 (Opus) built the
+walk-forward backtest and cost/survivorship-aware strategy engine
+(`analysis/backtest.py`), which also fills each forecast's own
+`historical_hit_rate` and owns persistence to the `forecasts` table (Section
+13); row 3 (Opus) hardened the cold-start backfill's survivorship-coverage
+reporting and index-reconstitution handling (`scripts/seed_initial_data.py`,
+`scripts/refresh_data.py`) -- unrelated files, not this module.
+
+This row (4, Sonnet -- "well-defined, standard technique") adds the **Monte
+Carlo** GBM fan-chart simulation below. It deliberately does *not* produce a
+`Forecast` or feed the backtest/`forecasts`-table pipeline: a GBM path
+calibrated to historical mean/volatility is the exact same random-walk-with-
+drift model `baseline_forecast` already evaluates in closed form, so treating
+it as a fourth competing model would just grade baseline against itself under
+simulation noise. Its actual job is different in *kind* -- a full day-by-day
+percentile path (the "fan chart" Section 7.6 calls "the most honest way to
+visually communicate 'possible price forecast'"), not a single point+band at
+one horizon -- so it gets its own result type. Row 5 (Opus, not yet built)
+adds the bootstrap confidence intervals around the backtest's headline
+Sharpe/CAGR. Every function here is pure: prices in, results out; no storage
+or network.
 """
 
 from __future__ import annotations
@@ -59,6 +73,9 @@ __all__ = [
     "horizon_feature_weights",
     "build_features",
     "select_features",
+    "MonteCarloFanChart",
+    "simulate_gbm_paths",
+    "monte_carlo_fan_chart",
 ]
 
 # Horizons in *trading* days: ~1 week, 1 month, 1 quarter, 1 year (Section 7.6
@@ -118,6 +135,10 @@ _BUCKET_INCLUDE_MIN = 0.15
 # always kept). Realizes "different number of days -> different lookbacks."
 _LOOKBACK_HORIZON_MULT = 4
 _LOOKBACK_FLOOR = 21
+
+# "Thousands" of Monte Carlo paths (Section 7.6); vectorized NumPy makes even
+# this many trivially fast (milliseconds) at any horizon in DEFAULT_HORIZONS.
+_DEFAULT_MC_PATHS = 10_000
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +241,35 @@ def _z_for(confidence_level: float) -> float:
     return float(norm.ppf(0.5 + confidence_level / 2.0))
 
 
+def _calibrate_random_walk(
+    close: pd.Series, lookback: int | None, *, drift: bool = True
+) -> tuple[float, float, int] | None:
+    """The historical daily log-return drift/volatility a random walk calibrates to.
+
+    Returns `(mu, sigma, n_obs)`. Shared by `baseline_forecast`'s closed-form
+    band and the Monte Carlo simulation below -- both evaluate the identical
+    random-walk-with-drift model, one analytically, one by simulating paths
+    (Section 7.6's GBM "calibrated to historical volatility" is precisely this
+    estimator). `mu` is the mean historical daily log return (zeroed when
+    `drift=False`, the strictest driftless null); `sigma` is its standard
+    deviation; `n_obs` is the number of log-returns behind the estimate,
+    surfaced by callers as `Forecast.n_train` / `MonteCarloFanChart.n_train` so
+    the UI can be honest about a calibration resting on a short history. `None`
+    if `lookback` leaves no returns to estimate from.
+    """
+    log_returns = np.log(close).diff().dropna()
+    if lookback is not None:
+        log_returns = log_returns.iloc[-lookback:]
+    if log_returns.empty:
+        return None
+
+    mu = float(log_returns.mean()) if drift else 0.0
+    sigma = float(log_returns.std(ddof=1))
+    if not np.isfinite(sigma):
+        sigma = 0.0
+    return mu, sigma, int(len(log_returns))
+
+
 # --------------------------------------------------------------------------- #
 # 1. Baseline -- random walk / drift (the null hypothesis)
 # --------------------------------------------------------------------------- #
@@ -252,17 +302,10 @@ def baseline_forecast(
     close = _close_series(prices)
     if len(close) < _MIN_BASELINE_BARS:
         return None
-
-    log_returns = np.log(close).diff().dropna()
-    if lookback is not None:
-        log_returns = log_returns.iloc[-lookback:]
-    if log_returns.empty:
+    calibration = _calibrate_random_walk(close, lookback, drift=drift)
+    if calibration is None:
         return None
-
-    mu = float(log_returns.mean()) if drift else 0.0
-    sigma = float(log_returns.std(ddof=1))
-    if not np.isfinite(sigma):
-        sigma = 0.0
+    mu, sigma, n_obs = calibration
 
     h = horizon_days
     mean_log = mu * h
@@ -278,7 +321,7 @@ def baseline_forecast(
         lower_log=mean_log - z * sd_log,
         upper_log=mean_log + z * sd_log,
         confidence_level=confidence_level,
-        n_train=int(len(log_returns)),
+        n_train=n_obs,
     )
 
 
@@ -629,6 +672,145 @@ def ml_forecast(
         upper_log=upper_log,
         confidence_level=confidence_level,
         n_train=int(len(x_train_full)),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 4. Monte Carlo -- GBM-simulated fan chart (Section 7.6)
+# --------------------------------------------------------------------------- #
+
+
+def simulate_gbm_paths(
+    prices: pd.DataFrame,
+    horizon_days: int,
+    *,
+    n_paths: int = _DEFAULT_MC_PATHS,
+    lookback: int | None = None,
+    random_state: int | None = 0,
+) -> np.ndarray | None:
+    """Simulate `n_paths` GBM price paths, calibrated to historical volatility (Section 7.6).
+
+    Each path is a random walk in log-price: day-to-day log returns are drawn
+    iid from Normal(mu, sigma) -- the same historical mean/std
+    `baseline_forecast` calibrates to (`_calibrate_random_walk`), so this is the
+    identical random-walk-with-drift model, executed by simulation instead of
+    closed form (Section 7.6's "GBM calibrated to historical volatility").
+
+    Returns an `(n_paths, horizon_days + 1)` array: column 0 is the
+    deterministic last close (day 0, identical across every path), column `t`
+    is the simulated price `t` trading days ahead. `None` when there isn't
+    enough history to calibrate (`_MIN_BASELINE_BARS` bars), matching the other
+    models' abstention discipline.
+
+    `random_state` defaults to a fixed seed so repeated calls against the same
+    data are reproducible (matching `ml_forecast`'s convention); pass `None` for
+    a fresh draw each call.
+    """
+    _validate_horizon(horizon_days)
+    if n_paths < 1:
+        raise ValueError(f"n_paths must be >= 1, got {n_paths}")
+    close = _close_series(prices)
+    if len(close) < _MIN_BASELINE_BARS:
+        return None
+    calibration = _calibrate_random_walk(close, lookback)
+    if calibration is None:
+        return None
+    mu, sigma, _ = calibration
+
+    rng = np.random.default_rng(random_state)
+    daily_log_returns = rng.normal(mu, sigma, size=(n_paths, horizon_days))
+    log_paths = np.cumsum(daily_log_returns, axis=1)
+    last_close = float(close.iloc[-1])
+    future_prices = last_close * np.exp(log_paths)
+    day_zero = np.full((n_paths, 1), last_close)
+    return np.concatenate([day_zero, future_prices], axis=1)
+
+
+@dataclass(frozen=True)
+class MonteCarloFanChart:
+    """Day-by-day percentile price paths from a GBM Monte Carlo simulation (Section 7.6).
+
+    The full "fan chart" Section 7.6 calls "the most honest way to visually
+    communicate 'possible price forecast'": unlike a `Forecast` (one point +
+    band at a single horizon), this reports a percentile price at *every*
+    trading day from 1 to `horizon_days`, so the visualized uncertainty widens
+    the way a real random walk's actually does (proportional to sqrt(time))
+    instead of jumping straight to a fixed final-day range.
+
+    `days` (1..horizon_days) are the trading-day offsets the `percentiles`
+    arrays are aligned to; `percentiles` maps each requested percentile (e.g.
+    `50.0`) to its price path. `mu`/`sigma` are the calibrated daily log-return
+    drift/volatility; `n_train` is the log-return sample size behind that
+    calibration -- the same honesty fields `Forecast` carries.
+    """
+
+    as_of: pd.Timestamp
+    last_close: float
+    horizon_days: int
+    n_paths: int
+    mu: float
+    sigma: float
+    n_train: int
+    days: np.ndarray
+    percentiles: dict[float, np.ndarray]
+
+
+def monte_carlo_fan_chart(
+    prices: pd.DataFrame,
+    horizon_days: int,
+    *,
+    n_paths: int = _DEFAULT_MC_PATHS,
+    percentiles: tuple[float, ...] = (5.0, 50.0, 95.0),
+    lookback: int | None = None,
+    random_state: int | None = 0,
+) -> MonteCarloFanChart | None:
+    """Simulate a GBM fan chart: percentile price paths for every day out to the horizon.
+
+    Simulates `n_paths` independent price paths (`simulate_gbm_paths`) and
+    reports the requested `percentiles` (default 5th/50th/95th, matching
+    Section 7.6's spec exactly) of the simulated price *at each day*
+    independently -- the standard fan-chart construction (a cross-sectional
+    percentile across the ensemble at each time step, not any single simulated
+    trajectory -- so "the 50th-percentile path" is not one actual draw, it's the
+    running median across all of them).
+
+    `None` when there isn't enough history to calibrate (`_MIN_BASELINE_BARS`
+    bars).
+    """
+    _validate_horizon(horizon_days)
+    if not percentiles:
+        raise ValueError("percentiles must be non-empty")
+    for p in percentiles:
+        if not 0.0 <= p <= 100.0:
+            raise ValueError(f"each percentile must be in [0, 100], got {p}")
+
+    close = _close_series(prices)
+    if len(close) < _MIN_BASELINE_BARS:
+        return None
+    calibration = _calibrate_random_walk(close, lookback)
+    if calibration is None:
+        return None
+    mu, sigma, n_obs = calibration
+
+    paths = simulate_gbm_paths(
+        prices, horizon_days, n_paths=n_paths, lookback=lookback, random_state=random_state
+    )
+    if paths is None:
+        return None
+
+    future = paths[:, 1:]  # exclude the deterministic day-0 column
+    day_percentiles = {p: np.percentile(future, p, axis=0) for p in percentiles}
+
+    return MonteCarloFanChart(
+        as_of=close.index[-1],
+        last_close=float(close.iloc[-1]),
+        horizon_days=horizon_days,
+        n_paths=paths.shape[0],
+        mu=mu,
+        sigma=sigma,
+        n_train=n_obs,
+        days=np.arange(1, horizon_days + 1),
+        percentiles=day_percentiles,
     )
 
 
