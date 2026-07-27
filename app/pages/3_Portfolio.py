@@ -34,6 +34,8 @@ from lib.format import (
     humanize,
     rating_label,
 )
+from lib.glossary import tip
+from lib.search import format_choice, search_symbols
 from quantpulse.analysis import risk
 from quantpulse.portfolio import holdings as holdings_lib
 from quantpulse.portfolio import recommendations as recs
@@ -65,10 +67,37 @@ def get_store() -> holdings_lib.PortfolioStore:
 
 
 def render_entry_form(store: holdings_lib.PortfolioStore) -> None:
+    universe = data.universe()
     with st.expander("Add a transaction", expanded=False):
+        # Section 31's autocomplete: type a company name, pick the ticker. The
+        # lookup sits outside the form because a form only reruns on submit,
+        # and suggestions have to update as you type.
+        lookup = st.text_input(
+            "Find a symbol",
+            key="symbol_lookup",
+            placeholder="Type a ticker or company name, e.g. 'Alphabet'",
+            help="Fuzzy-matches company names as well as tickers.",
+        )
+        suggestions = search_symbols(universe, lookup) if lookup.strip() else []
+        picked = ""
+        if suggestions:
+            picked = st.radio(
+                "Matches",
+                suggestions,
+                horizontal=True,
+                format_func=lambda s: format_choice(universe, s),
+                key="symbol_suggestion",
+            )
+        elif lookup.strip():
+            st.caption(
+                f"No match for “{lookup}” in the scored universe — you can still type the "
+                "ticker below; it just won't have analysis attached until the pipeline "
+                "covers it."
+            )
+
         with st.form("add_transaction", clear_on_submit=True):
             columns = st.columns(6)
-            symbol = columns[0].text_input("Symbol").strip().upper()
+            symbol = columns[0].text_input("Symbol", value=picked).strip().upper()
             action = columns[1].selectbox("Action", ["buy", "sell"])
             shares = columns[2].number_input("Shares", min_value=0.0, step=1.0, format="%.4f")
             price = columns[3].number_input("Price", min_value=0.0, step=1.0, format="%.2f")
@@ -190,6 +219,17 @@ def render_positions(state: holdings_lib.PortfolioState) -> pd.DataFrame:
         ),
         hide_index=True,
         width="stretch",
+        column_config={
+            "Avg cost": st.column_config.NumberColumn("Avg cost", help=tip("Cost basis")),
+            "Unrealized": st.column_config.NumberColumn("Unrealized", help=tip("Unrealized P/L")),
+            "Rating": st.column_config.TextColumn("Rating", help=tip("Rating")),
+            "Term": st.column_config.TextColumn("Term", help=tip("Holding period")),
+            "Stale": st.column_config.TextColumn(
+                "Stale",
+                help="Flagged when no current price is stored — delisted, acquired, or "
+                "simply not yet ingested.",
+            ),
+        },
     )
     if (frame["Stale"] != "").any():
         st.warning(
@@ -216,11 +256,12 @@ def render_summary(frame: pd.DataFrame, cash: float) -> None:
         "Unrealized P/L",
         format_money(invested - cost),
         delta=None if cost <= 0 else format_signed_percent((invested - cost) / cost),
+        help=tip("Unrealized P/L"),
     )
 
 
 def render_risk(frame: pd.DataFrame, cash: float) -> None:
-    st.subheader("Risk & diversification")
+    st.subheader("Risk & diversification", help=tip("Value at Risk"))
     priced = frame[frame["Value"].notna() & (frame["Value"] > 0)]
     if priced.empty:
         st.caption("No priced holdings to analyze.")
@@ -251,11 +292,19 @@ def render_risk(frame: pd.DataFrame, cash: float) -> None:
     )
 
     columns = st.columns(5)
-    columns[0].metric("Volatility (ann.)", format_percent(summary.volatility))
-    columns[1].metric("Sharpe", format_ratio(summary.sharpe))
-    columns[2].metric("Sortino", format_ratio(summary.sortino))
-    columns[3].metric("Max drawdown", format_percent(summary.max_drawdown))
-    columns[4].metric("Beta", format_ratio(summary.beta.beta) if summary.beta else "—")
+    columns[0].metric(
+        "Volatility (ann.)", format_percent(summary.volatility), help=tip("Volatility")
+    )
+    columns[1].metric("Sharpe", format_ratio(summary.sharpe), help=tip("Sharpe ratio"))
+    columns[2].metric("Sortino", format_ratio(summary.sortino), help=tip("Sortino ratio"))
+    columns[3].metric(
+        "Max drawdown", format_percent(summary.max_drawdown), help=tip("Max drawdown")
+    )
+    columns[4].metric(
+        "Beta",
+        format_ratio(summary.beta.beta) if summary.beta else "—",
+        help=tip("Beta"),
+    )
     if summary.value_at_risk is not None:
         var = summary.value_at_risk
         st.caption(
@@ -351,11 +400,27 @@ def render_recommendations(frame: pd.DataFrame, cash: float) -> None:
             for rec in result.holdings
         ]
     )
-    st.dataframe(table.style.format({"Weight": "{:.1%}"}), hide_index=True, width="stretch")
+    st.dataframe(
+        table.style.format({"Weight": "{:.1%}"}),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Action": st.column_config.TextColumn(
+                "Action",
+                help="Add / Hold / Trim / Sell, derived from the stock's current rating. "
+                "An Add is downgraded to Hold when the position is already overweight.",
+            ),
+            "Weight": st.column_config.NumberColumn(
+                "Weight", help="This position's share of total portfolio value."
+            ),
+        },
+    )
 
     concentration = result.concentration
     columns = st.columns(2)
-    columns[0].metric("Position HHI", format_ratio(concentration.position_hhi))
+    columns[0].metric(
+        "Position HHI", format_ratio(concentration.position_hhi), help=tip("Herfindahl index")
+    )
     columns[0].caption(
         "As diversified as "
         f"{format_ratio(concentration.position_effective_count, digits=1)} equal-weighted "
@@ -366,6 +431,7 @@ def render_recommendations(frame: pd.DataFrame, cash: float) -> None:
     columns[1].metric(
         "Sector HHI",
         format_ratio(concentration.sector_hhi) if concentration.sector_hhi else "—",
+        help=tip("Herfindahl index", "Computed over sector weights rather than positions."),
     )
 
     for warning in concentration.warnings:

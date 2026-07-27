@@ -26,6 +26,8 @@ from lib.format import (
     humanize,
     rating_label,
 )
+from lib.glossary import tip
+from lib.search import format_choice, search_symbols
 from quantpulse.analysis.investor_profiles import CATEGORIES, get_profile, profile_names
 
 st.set_page_config(page_title="QuantPulse — Screener", page_icon="🔎", layout="wide")
@@ -72,16 +74,30 @@ def main() -> None:
         sectors = sorted({s for s in rows["sector"].dropna().unique()})
         chosen_sectors = st.multiselect("Sector", sectors, default=[])
         chosen_ratings = st.multiselect(
-            "Rating", list(RATING_ORDER), default=[], format_func=rating_label
+            "Rating",
+            list(RATING_ORDER),
+            default=[],
+            format_func=rating_label,
+            help=tip("Rating"),
         )
         min_confidence = st.slider(
             "Minimum data coverage",
             0,
             100,
             0,
-            help="Section 7.5's data-completeness score. Raise it to exclude thinly-covered names.",
+            help=tip(
+                "Data coverage",
+                "Raise this to exclude thinly-covered names from the table.",
+            ),
         )
-        search = st.text_input("Search symbol or company").strip().lower()
+        search = st.text_input(
+            "Search symbol or company",
+            placeholder="e.g. GOOGL, Alphabet, or a typo like 'Alphabt'",
+            help=(
+                "Fuzzy-matches tickers and company names, so you don't have to remember "
+                "that Alphabet is GOOGL."
+            ),
+        ).strip()
 
         st.header("Re-weight categories")
         st.caption(
@@ -105,10 +121,14 @@ def main() -> None:
     if min_confidence:
         filtered = filtered[filtered["data_confidence"].fillna(0) >= min_confidence]
     if search:
-        mask = filtered["symbol"].str.lower().str.contains(search) | filtered["name"].fillna(
-            ""
-        ).str.lower().str.contains(search)
-        filtered = filtered[mask]
+        # Fuzzy rank across symbol AND company name (Section 31), then keep the
+        # table in that relevance order rather than re-sorting alphabetically.
+        matches = search_symbols(filtered[["symbol", "name"]], search, limit=len(filtered))
+        filtered = filtered[filtered["symbol"].isin(matches)]
+        if not filtered.empty:
+            order = {symbol: rank for rank, symbol in enumerate(matches)}
+            filtered = filtered.assign(_rank=filtered["symbol"].map(order)).sort_values("_rank")
+            filtered = filtered.drop(columns="_rank")
 
     total_weight = sum(weights.values())
     if total_weight > 0:
@@ -142,6 +162,20 @@ def main() -> None:
         hide_index=True,
         width="stretch",
         height=460,
+        column_config={
+            "Rating": st.column_config.TextColumn("Rating", help=tip("Rating")),
+            "Score": st.column_config.NumberColumn(
+                "Score",
+                help=tip(
+                    "Composite score",
+                    "Recomputed live from the sliders in the sidebar.",
+                ),
+            ),
+            "Stored": st.column_config.NumberColumn(
+                "Stored", help="The composite score as computed and stored by the nightly job."
+            ),
+            "Coverage": st.column_config.TextColumn("Coverage", help=tip("Data coverage")),
+        },
     )
 
     export, _ = st.columns([1, 4])
@@ -162,11 +196,13 @@ def main() -> None:
     st.divider()
     st.subheader("Compare")
     st.caption("Pick 2–4 tickers to see every sub-score side by side (Section 12).")
+    universe_for_labels = filtered[["symbol", "name"]]
     picks = st.multiselect(
         "Tickers",
         filtered["symbol"].tolist(),
         default=filtered["symbol"].head(2).tolist(),
         max_selections=4,
+        format_func=lambda symbol: format_choice(universe_for_labels, symbol),
     )
     if len(picks) < 2:
         st.caption("Select at least two tickers to compare.")
