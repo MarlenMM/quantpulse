@@ -26,7 +26,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -44,7 +44,9 @@ from quantpulse.storage.models import (
     MarketRegime,
     NewsEvent,
     OptionsSignal,
+    PatternSignal,
     PriceHistory,
+    RefreshLog,
     SentimentScore,
     ShortInterest,
     ThematicBasket,
@@ -550,3 +552,428 @@ def read_adj_close_panel(
     panel = long_df.pivot_table(index="date", columns="symbol", values="adj_close")
     panel.index = pd.DatetimeIndex(pd.to_datetime(panel.index))
     return panel.sort_index()
+
+
+# --------------------------------------------------------------------------- #
+# Phase 10 — UI read helpers (Section 12)
+#
+# The readers above are point-in-time gathers for the nightly job: "what was
+# knowable as of date X." These are the opposite question — "what does the app
+# show right now" — so they read the LATEST stored row rather than an as-of
+# slice. Both live here because both are plain SQL over the same tables and
+# `app/` must never contain queries (Section 14's UI-agnostic engine); the
+# Streamlit-side `@st.cache_data` wrappers around them live in `app/lib/data.py`.
+# --------------------------------------------------------------------------- #
+
+
+def read_latest_score_date(session: Session, *, profile: str = "balanced") -> date | None:
+    """The most recent date `composite_scores` was written for `profile`."""
+    stmt = (
+        select(CompositeScore.date)
+        .where(CompositeScore.profile == profile)
+        .order_by(CompositeScore.date.desc())
+        .limit(1)
+    )
+    return session.scalars(stmt).first()
+
+
+def read_screener_rows(
+    session: Session, *, profile: str = "balanced", as_of: date | None = None
+) -> pd.DataFrame:
+    """The ranked screener table: latest composite scores joined to ticker metadata.
+
+    Returns one row per scored symbol with every sub-score, so the Screener's
+    re-weighting sliders (Section 8) can recompute a composite client-side
+    without re-running the pipeline — which is exactly why the stored
+    sub-scores are weight-independent (Section 7.5).
+    """
+    resolved = as_of or read_latest_score_date(session, profile=profile)
+    if resolved is None:
+        return pd.DataFrame()
+    stmt = (
+        select(
+            CompositeScore.symbol,
+            Ticker.name,
+            Ticker.sector,
+            Ticker.asset_type,
+            CompositeScore.date,
+            CompositeScore.fundamental_score,
+            CompositeScore.technical_score,
+            CompositeScore.analyst_score,
+            CompositeScore.sentiment_score,
+            CompositeScore.momentum_score,
+            CompositeScore.industry_macro_score,
+            CompositeScore.smart_money_score,
+            CompositeScore.composite_score,
+            CompositeScore.percentile_rank,
+            CompositeScore.rating,
+            CompositeScore.data_confidence,
+        )
+        .join(Ticker, Ticker.symbol == CompositeScore.symbol)
+        .where(CompositeScore.profile == profile, CompositeScore.date == resolved)
+        .order_by(CompositeScore.composite_score.desc())
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "symbol",
+            "name",
+            "sector",
+            "asset_type",
+            "date",
+            "fundamental_score",
+            "technical_score",
+            "analyst_score",
+            "sentiment_score",
+            "momentum_score",
+            "industry_macro_score",
+            "smart_money_score",
+            "composite_score",
+            "percentile_rank",
+            "rating",
+            "data_confidence",
+        ],
+    )
+
+
+def read_rating_changes(
+    session: Session, *, profile: str = "balanced", limit: int = 25
+) -> pd.DataFrame:
+    """Symbols whose rating changed between the two most recent scoring dates.
+
+    Section 10's "what changed since yesterday" view, which the append-only
+    point-in-time schema (Section 6.8) makes almost free: compare the latest
+    two stored snapshots instead of maintaining a separate change log. Empty
+    frame when there aren't two snapshots yet.
+    """
+    dates = list(
+        session.scalars(
+            select(CompositeScore.date)
+            .where(CompositeScore.profile == profile)
+            .distinct()
+            .order_by(CompositeScore.date.desc())
+            .limit(2)
+        )
+    )
+    if len(dates) < 2:
+        return pd.DataFrame()
+    current, previous = dates[0], dates[1]
+
+    def _snapshot(target: date) -> dict[str, tuple[str, float]]:
+        stmt = select(
+            CompositeScore.symbol, CompositeScore.rating, CompositeScore.composite_score
+        ).where(CompositeScore.profile == profile, CompositeScore.date == target)
+        return {row.symbol: (row.rating, row.composite_score) for row in session.execute(stmt)}
+
+    now, before = _snapshot(current), _snapshot(previous)
+    changes = [
+        {
+            "symbol": symbol,
+            "previous_rating": before[symbol][0],
+            "rating": rating,
+            "previous_score": before[symbol][1],
+            "composite_score": score,
+            "score_change": score - before[symbol][1],
+        }
+        for symbol, (rating, score) in now.items()
+        if symbol in before and before[symbol][0] != rating
+    ]
+    frame = pd.DataFrame(changes)
+    if frame.empty:
+        return frame
+    return frame.reindex(frame["score_change"].abs().sort_values(ascending=False).index).head(limit)
+
+
+def read_symbol_ohlcv(session: Session, symbol: str, *, lookback_days: int = 400) -> pd.DataFrame:
+    """One symbol's recent OHLCV bars, oldest first — the Stock Detail price chart."""
+    start = date.today() - timedelta(days=lookback_days)
+    stmt = (
+        select(
+            PriceHistory.date,
+            PriceHistory.open,
+            PriceHistory.high,
+            PriceHistory.low,
+            PriceHistory.close,
+            PriceHistory.adj_close,
+            PriceHistory.volume,
+        )
+        .where(PriceHistory.symbol == symbol, PriceHistory.date >= start)
+        .order_by(PriceHistory.date)
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(
+        rows, columns=["date", "open", "high", "low", "close", "adj_close", "volume"]
+    )
+
+
+def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
+    """The most recent generated forecast set for one symbol, all models and horizons."""
+    latest = session.scalars(
+        select(Forecast.generated_date)
+        .where(Forecast.symbol == symbol)
+        .order_by(Forecast.generated_date.desc())
+        .limit(1)
+    ).first()
+    if latest is None:
+        return pd.DataFrame()
+    stmt = (
+        select(
+            Forecast.model_name,
+            Forecast.horizon_days,
+            Forecast.point_return,
+            Forecast.point_price,
+            Forecast.lower_price,
+            Forecast.upper_price,
+            Forecast.historical_hit_rate,
+            Forecast.generated_date,
+        )
+        .where(Forecast.symbol == symbol, Forecast.generated_date == latest)
+        .order_by(Forecast.horizon_days, Forecast.model_name)
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "model_name",
+            "horizon_days",
+            "point_return",
+            "point_price",
+            "lower_price",
+            "upper_price",
+            "historical_hit_rate",
+            "generated_date",
+        ],
+    )
+
+
+def read_symbol_patterns(
+    session: Session, symbol: str, *, lookback_days: int = 120
+) -> pd.DataFrame:
+    """Detected chart/candlestick patterns for one symbol in the trailing window."""
+    start = date.today() - timedelta(days=lookback_days)
+    stmt = (
+        select(
+            PatternSignal.date,
+            PatternSignal.pattern_type,
+            PatternSignal.direction,
+            PatternSignal.confidence,
+        )
+        .where(PatternSignal.symbol == symbol, PatternSignal.date >= start)
+        .order_by(PatternSignal.date.desc())
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(rows, columns=["date", "pattern_type", "direction", "confidence"])
+
+
+def read_latest_analyst_consensus(session: Session, symbol: str) -> dict[str, Any] | None:
+    """One symbol's most recent Wall Street rating counts + mean price target."""
+    stmt = (
+        select(AnalystConsensus)
+        .where(AnalystConsensus.symbol == symbol)
+        .order_by(AnalystConsensus.as_of_date.desc())
+        .limit(1)
+    )
+    row = session.scalars(stmt).first()
+    if row is None:
+        return None
+    return {
+        "as_of_date": row.as_of_date,
+        "strong_buy": row.strong_buy,
+        "buy": row.buy,
+        "hold": row.hold,
+        "sell": row.sell,
+        "strong_sell": row.strong_sell,
+        "mean_price_target": row.mean_price_target,
+    }
+
+
+def read_backtest_history(session: Session, *, limit: int = 20) -> pd.DataFrame:
+    """Stored strategy backtest runs, newest first — the Track Record page."""
+    stmt = select(BacktestResult).order_by(BacktestResult.run_date.desc()).limit(limit)
+    rows = session.scalars(stmt).all()
+    return pd.DataFrame(
+        [
+            {
+                "run_date": row.run_date,
+                "period_start": row.period_start,
+                "period_end": row.period_end,
+                "cadence": row.cadence,
+                "n_periods": row.n_periods,
+                "sharpe": row.sharpe,
+                "sharpe_ci_low": row.sharpe_ci_low,
+                "sharpe_ci_high": row.sharpe_ci_high,
+                "cagr": row.cagr,
+                "cagr_ci_low": row.cagr_ci_low,
+                "cagr_ci_high": row.cagr_ci_high,
+                "ci_confidence_level": row.ci_confidence_level,
+                "max_drawdown": row.max_drawdown,
+                "win_rate": row.win_rate,
+                "benchmark_cagr": row.benchmark_cagr,
+                "benchmark_sharpe": row.benchmark_sharpe,
+                "avg_turnover": row.avg_turnover,
+                "assumed_txn_cost": row.assumed_txn_cost,
+            }
+            for row in rows
+        ]
+    )
+
+
+def read_recent_market_regime(session: Session, *, limit: int = 90) -> pd.DataFrame:
+    """The Market Regime Index history, oldest first — the Dashboard gauge + trend."""
+    stmt = select(MarketRegime).order_by(MarketRegime.date.desc()).limit(limit)
+    rows = list(session.scalars(stmt).all())[::-1]
+    return pd.DataFrame(
+        [
+            {
+                "date": row.date,
+                "vix_level": row.vix_level,
+                "breadth_pct_above_200dma": row.breadth_pct_above_200dma,
+                "macro_news_tone": row.macro_news_tone,
+                "yield_curve_spread": row.yield_curve_spread,
+                "regime_score": row.regime_score,
+                "regime_label": row.regime_label,
+            }
+            for row in rows
+        ]
+    )
+
+
+def read_market_moving_news(
+    session: Session, *, tiers: Sequence[int] = (2, 3), limit: int = 8, lookback_days: int = 3
+) -> pd.DataFrame:
+    """Recent Tier-2/3 industry & macro stories — the Dashboard's news panel (Section 12)."""
+    cutoff = datetime.combine(date.today() - timedelta(days=lookback_days), time.min)
+    stmt = (
+        select(
+            NewsEvent.title,
+            NewsEvent.published_at,
+            NewsEvent.tier,
+            NewsEvent.matched_theme,
+            NewsEvent.event_type,
+            NewsEvent.sentiment_score,
+            NewsEvent.source,
+            NewsEvent.source_url,
+        )
+        .where(NewsEvent.tier.in_(list(tiers)), NewsEvent.published_at >= cutoff)
+        .order_by(NewsEvent.published_at.desc())
+        .limit(limit)
+    )
+    rows = session.execute(stmt).all()
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "title",
+            "published_at",
+            "tier",
+            "matched_theme",
+            "event_type",
+            "sentiment_score",
+            "source",
+            "source_url",
+        ],
+    )
+
+
+def read_symbol_news(
+    session: Session, symbol: str, *, limit: int = 10, lookback_days: int = 21
+) -> pd.DataFrame:
+    """Tier-1 articles that named `symbol` — the Stock Detail "what's driving this" feed."""
+    cutoff = datetime.combine(date.today() - timedelta(days=lookback_days), time.min)
+    stmt = (
+        select(
+            NewsEvent.title,
+            NewsEvent.published_at,
+            NewsEvent.event_type,
+            NewsEvent.sentiment_score,
+            NewsEvent.source,
+            NewsEvent.source_url,
+            NewsEvent.matched_symbols,
+        )
+        .where(NewsEvent.tier == 1, NewsEvent.published_at >= cutoff)
+        .order_by(NewsEvent.published_at.desc())
+    )
+    rows = session.execute(stmt).all()
+    matched = [row for row in rows if row.matched_symbols and symbol in row.matched_symbols]
+    return pd.DataFrame(
+        [
+            {
+                "title": row.title,
+                "published_at": row.published_at,
+                "event_type": row.event_type,
+                "sentiment_score": row.sentiment_score,
+                "source": row.source,
+                "source_url": row.source_url,
+            }
+            for row in matched[:limit]
+        ]
+    )
+
+
+def read_refresh_log(session: Session, *, limit: int = 20) -> pd.DataFrame:
+    """Recent nightly-job runs — the Settings page's pipeline-health table (Section 13)."""
+    stmt = select(RefreshLog).order_by(RefreshLog.run_timestamp.desc()).limit(limit)
+    rows = session.scalars(stmt).all()
+    return pd.DataFrame(
+        [
+            {
+                "job_name": row.job_name,
+                "run_timestamp": row.run_timestamp,
+                "status": row.status,
+                "rows_updated": row.rows_updated,
+            }
+            for row in rows
+        ]
+    )
+
+
+def read_data_freshness(session: Session) -> dict[str, date | None]:
+    """Newest stored date per major table — Section 12's "show data freshness" rule.
+
+    Powers the "fundamentals last updated 3 days ago" style badges. A table
+    that has never been populated maps to `None` rather than being omitted, so
+    the UI can distinguish "stale" from "never ran" instead of showing a
+    reassuring blank for both.
+    """
+    return {
+        "prices": session.scalars(select(func.max(PriceHistory.date))).first(),
+        "fundamentals": session.scalars(select(func.max(FundamentalsSnapshot.as_of_date))).first(),
+        "analyst_consensus": session.scalars(select(func.max(AnalystConsensus.as_of_date))).first(),
+        "sentiment": session.scalars(select(func.max(SentimentScore.date))).first(),
+        "composite_scores": session.scalars(select(func.max(CompositeScore.date))).first(),
+        "forecasts": session.scalars(select(func.max(Forecast.generated_date))).first(),
+        "market_regime": session.scalars(select(func.max(MarketRegime.date))).first(),
+        "backtest": session.scalars(select(func.max(BacktestResult.run_date))).first(),
+    }
+
+
+def read_ticker_universe(session: Session, *, active_only: bool = True) -> pd.DataFrame:
+    """`symbol, name, sector, asset_type` for the symbol pickers and sector filters."""
+    stmt = select(Ticker.symbol, Ticker.name, Ticker.sector, Ticker.asset_type)
+    if active_only:
+        stmt = stmt.where(Ticker.is_active)
+    rows = session.execute(stmt.order_by(Ticker.symbol)).all()
+    return pd.DataFrame(rows, columns=["symbol", "name", "sector", "asset_type"])
+
+
+def read_latest_prices(session: Session, symbols: Sequence[str]) -> dict[str, float]:
+    """Each symbol's most recent close — for pricing a portfolio.
+
+    A symbol with no stored price is simply absent from the result rather than
+    mapped to 0.0, which is what lets the Portfolio page flag it as stale
+    (Section 30's delisted-holding case) instead of showing a position that
+    appears to have become worthless.
+    """
+    if not symbols:
+        return {}
+    subquery = (
+        select(PriceHistory.symbol, func.max(PriceHistory.date).label("latest"))
+        .where(PriceHistory.symbol.in_(list(symbols)))
+        .group_by(PriceHistory.symbol)
+        .subquery()
+    )
+    stmt = select(PriceHistory.symbol, PriceHistory.close).join(
+        subquery,
+        (PriceHistory.symbol == subquery.c.symbol) & (PriceHistory.date == subquery.c.latest),
+    )
+    return {row.symbol: float(row.close) for row in session.execute(stmt)}

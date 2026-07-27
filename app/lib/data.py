@@ -1,0 +1,137 @@
+"""Cached database access for the Streamlit pages (Sections 12, 29).
+
+Section 29 calls out `@st.cache_data`/`@st.cache_resource` specifically:
+Streamlit re-runs the whole script on every interaction, so without caching,
+every slider drag would re-query the database. That caching belongs *here*, in
+the presentation layer, and is deliberately distinct from the ingestion-layer
+response cache of Section 6.
+
+Every function is a thin wrapper: open a session, call one
+`storage.persistence` reader, return. No SQL lives in `app/` (Section 14), and
+because the readers are plain functions over a `Session`, they stay testable
+without Streamlit even though the wrappers here are not.
+
+`TTL_SECONDS` is short enough that a nightly refresh landing mid-session shows
+up without a restart, and long enough that clicking around a page doesn't
+re-query on every rerun. `st.cache_data` also keys on arguments, so the
+per-symbol readers cache per symbol automatically.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+from quantpulse.config import get_settings
+from quantpulse.storage import persistence
+from quantpulse.storage.db import get_session
+
+TTL_SECONDS = 300
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def screener_rows(profile: str = "balanced") -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_screener_rows(session, profile=profile)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def rating_changes(profile: str = "balanced", limit: int = 25) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_rating_changes(session, profile=profile, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def ohlcv(symbol: str, lookback_days: int = 400) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_symbol_ohlcv(session, symbol, lookback_days=lookback_days)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def forecasts(symbol: str) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_symbol_forecasts(session, symbol)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def patterns(symbol: str, lookback_days: int = 120) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_symbol_patterns(session, symbol, lookback_days=lookback_days)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def analyst_consensus(symbol: str) -> dict[str, Any] | None:
+    with get_session() as session:
+        return persistence.read_latest_analyst_consensus(session, symbol)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def symbol_news(symbol: str, limit: int = 10) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_symbol_news(session, symbol, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def market_moving_news(limit: int = 8) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_market_moving_news(session, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def market_regime(limit: int = 90) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_recent_market_regime(session, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def backtest_history(limit: int = 20) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_backtest_history(session, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def refresh_log(limit: int = 20) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_refresh_log(session, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def data_freshness() -> dict[str, date | None]:
+    with get_session() as session:
+        return persistence.read_data_freshness(session)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def universe() -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_ticker_universe(session)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def latest_prices(symbols: tuple[str, ...]) -> dict[str, float]:
+    # Takes a tuple rather than a list so Streamlit can hash the argument for
+    # the cache key -- a list is unhashable and would raise at call time.
+    with get_session() as session:
+        return persistence.read_latest_prices(session, list(symbols))
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def adj_close_panel(symbols: tuple[str, ...], start: date, end: date) -> pd.DataFrame:
+    with get_session() as session:
+        return persistence.read_adj_close_panel(
+            session, start=start, end=end, symbols=list(symbols)
+        )
+
+
+def has_any_data() -> bool:
+    """Whether the pipeline has ever produced scores -- drives the empty-state banner."""
+    freshness = data_freshness()
+    return any(value is not None for value in freshness.values())
+
+
+def portfolio_backend() -> str:
+    """Which storage backend the config selects (ADR 4.5): `sqlite` or `session`."""
+    return get_settings().portfolio_backend

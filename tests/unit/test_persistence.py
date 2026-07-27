@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from datetime import date
 
+import pandas as pd
 import pytest
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -185,3 +186,295 @@ class TestReaders:
         )
         assert set(frame["symbol"]) == {"AAPL"}  # inactive OLD excluded
         assert frame["date"].max() <= date(2026, 7, 22)  # future 07-25 bar excluded
+
+
+# --------------------------------------------------------------------------- #
+# Phase 10 — UI read helpers (latest-snapshot reads, Section 12)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def ui_session(tmp_path) -> Iterator[Session]:
+    """A session seeded with two scoring snapshots plus prices/forecasts/news."""
+    from datetime import datetime, timedelta
+
+    from quantpulse.storage.models import (
+        AnalystConsensus,
+        BacktestResult,
+        CompositeScore,
+        Forecast,
+        MarketRegime,
+        PatternSignal,
+        RefreshLog,
+    )
+
+    engine: Engine = create_engine(f"sqlite:///{tmp_path / 'ui.db'}")
+    Base.metadata.create_all(engine)
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
+    with sessionmaker(bind=engine)() as s:
+        s.add(Ticker(symbol="AAPL", name="Apple", sector="Tech", asset_type="equity"))
+        s.add(Ticker(symbol="XOM", name="Exxon", sector="Energy", asset_type="equity"))
+        s.add(Ticker(symbol="OLD", name="Delisted", sector="Tech", is_active=False))
+
+        for day, (aapl_rating, aapl_score) in (
+            (yesterday, ("hold", 50.0)),
+            (today, ("buy", 75.0)),
+        ):
+            s.add(
+                CompositeScore(
+                    symbol="AAPL",
+                    date=day,
+                    profile="balanced",
+                    composite_score=aapl_score,
+                    technical_score=80.0,
+                    fundamental_score=None,
+                    rating=aapl_rating,
+                    percentile_rank=aapl_score,
+                    data_confidence=90.0,
+                )
+            )
+            s.add(
+                CompositeScore(
+                    symbol="XOM",
+                    date=day,
+                    profile="balanced",
+                    composite_score=40.0,
+                    technical_score=30.0,
+                    rating="sell",
+                    percentile_rank=20.0,
+                    data_confidence=55.0,
+                )
+            )
+        for i in range(5):
+            d = today - timedelta(days=i)
+            s.add(
+                PriceHistory(
+                    symbol="AAPL",
+                    date=d,
+                    open=100.0 + i,
+                    high=101.0 + i,
+                    low=99.0 + i,
+                    close=100.5 + i,
+                    adj_close=100.5 + i,
+                    volume=1000,
+                )
+            )
+        s.add(
+            Forecast(
+                symbol="AAPL",
+                generated_date=yesterday,
+                horizon_days=5,
+                model_name="gbr",
+                point_return=0.01,
+                point_price=101.0,
+            )
+        )
+        s.add(
+            Forecast(
+                symbol="AAPL",
+                generated_date=today,
+                horizon_days=5,
+                model_name="gbr",
+                point_return=0.02,
+                point_price=103.0,
+                lower_price=99.0,
+                upper_price=107.0,
+                historical_hit_rate=0.55,
+            )
+        )
+        s.add(
+            AnalystConsensus(
+                symbol="AAPL",
+                as_of_date=today,
+                strong_buy=5,
+                buy=3,
+                hold=1,
+                sell=0,
+                strong_sell=0,
+                mean_price_target=120.0,
+            )
+        )
+        s.add(
+            PatternSignal(
+                symbol="AAPL",
+                date=today,
+                pattern_type="cup_and_handle",
+                direction="bullish",
+                confidence=0.8,
+            )
+        )
+        s.add(
+            MarketRegime(
+                date=today,
+                vix_level=18.0,
+                breadth_pct_above_200dma=0.6,
+                regime_score=62.0,
+                regime_label="risk_on",
+            )
+        )
+        s.add(
+            NewsEvent(
+                article_id="t3",
+                tier=3,
+                title="Fed holds",
+                published_at=datetime.now(),
+                event_type="macro",
+                sentiment_score=0.1,
+            )
+        )
+        s.add(
+            NewsEvent(
+                article_id="t1",
+                tier=1,
+                title="Apple ships",
+                published_at=datetime.now(),
+                matched_symbols=["AAPL"],
+                sentiment_score=0.5,
+            )
+        )
+        s.add(
+            BacktestResult(
+                run_date=today, cadence="monthly", n_periods=40, sharpe=0.8, assumed_txn_cost=0.001
+            )
+        )
+        s.add(
+            RefreshLog(
+                job_name="refresh_data",
+                run_timestamp=datetime.now(),
+                status="success",
+                rows_updated=10,
+            )
+        )
+        s.commit()
+        yield s
+
+
+class TestScreenerReads:
+    def test_returns_latest_snapshot_joined_to_ticker_metadata(self, ui_session) -> None:
+        rows = persistence.read_screener_rows(ui_session)
+        assert set(rows["symbol"]) == {"AAPL", "XOM"}
+        aapl = rows[rows["symbol"] == "AAPL"].iloc[0]
+        assert aapl["rating"] == "buy"  # today's row, not yesterday's
+        assert aapl["name"] == "Apple"
+        assert aapl["sector"] == "Tech"
+
+    def test_sorted_by_composite_descending(self, ui_session) -> None:
+        rows = persistence.read_screener_rows(ui_session)
+        assert list(rows["symbol"]) == ["AAPL", "XOM"]
+
+    def test_missing_subscores_stay_null_not_zero(self, ui_session) -> None:
+        rows = persistence.read_screener_rows(ui_session)
+        aapl = rows[rows["symbol"] == "AAPL"].iloc[0]
+        assert pd.isna(aapl["fundamental_score"])
+
+    def test_unknown_profile_is_empty(self, ui_session) -> None:
+        assert persistence.read_screener_rows(ui_session, profile="growth").empty
+
+    def test_empty_database_returns_empty_frame(self, session) -> None:
+        assert persistence.read_screener_rows(session).empty
+
+    def test_latest_score_date(self, ui_session) -> None:
+        assert persistence.read_latest_score_date(ui_session) == date.today()
+
+
+class TestRatingChanges:
+    def test_reports_only_symbols_whose_rating_moved(self, ui_session) -> None:
+        changes = persistence.read_rating_changes(ui_session)
+        assert list(changes["symbol"]) == ["AAPL"]  # XOM stayed "sell"
+        assert changes.iloc[0]["previous_rating"] == "hold"
+        assert changes.iloc[0]["rating"] == "buy"
+        assert changes.iloc[0]["score_change"] == pytest.approx(25.0)
+
+    def test_needs_two_snapshots(self, session) -> None:
+        from quantpulse.storage.models import CompositeScore
+
+        session.add(
+            CompositeScore(
+                symbol="AAPL",
+                date=date.today(),
+                profile="balanced",
+                composite_score=50.0,
+                rating="hold",
+                data_confidence=80.0,
+            )
+        )
+        session.commit()
+        assert persistence.read_rating_changes(session).empty
+
+
+class TestSymbolReads:
+    def test_ohlcv_is_oldest_first(self, ui_session) -> None:
+        bars = persistence.read_symbol_ohlcv(ui_session, "AAPL")
+        assert len(bars) == 5
+        assert bars["date"].is_monotonic_increasing
+
+    def test_forecasts_use_only_the_latest_generation(self, ui_session) -> None:
+        rows = persistence.read_symbol_forecasts(ui_session, "AAPL")
+        assert len(rows) == 1
+        assert rows.iloc[0]["point_price"] == pytest.approx(103.0)
+        assert rows.iloc[0]["historical_hit_rate"] == pytest.approx(0.55)
+
+    def test_forecasts_absent_symbol_is_empty(self, ui_session) -> None:
+        assert persistence.read_symbol_forecasts(ui_session, "NOPE").empty
+
+    def test_patterns(self, ui_session) -> None:
+        rows = persistence.read_symbol_patterns(ui_session, "AAPL")
+        assert rows.iloc[0]["pattern_type"] == "cup_and_handle"
+
+    def test_analyst_consensus(self, ui_session) -> None:
+        consensus = persistence.read_latest_analyst_consensus(ui_session, "AAPL")
+        assert consensus is not None
+        assert consensus["strong_buy"] == 5
+        assert persistence.read_latest_analyst_consensus(ui_session, "NOPE") is None
+
+    def test_symbol_news_matches_on_the_stored_symbol_list(self, ui_session) -> None:
+        rows = persistence.read_symbol_news(ui_session, "AAPL")
+        assert list(rows["title"]) == ["Apple ships"]
+        assert persistence.read_symbol_news(ui_session, "XOM").empty
+
+
+class TestDashboardReads:
+    def test_market_moving_news_is_tier_2_and_3_only(self, ui_session) -> None:
+        rows = persistence.read_market_moving_news(ui_session)
+        assert list(rows["title"]) == ["Fed holds"]
+
+    def test_market_regime_oldest_first(self, ui_session) -> None:
+        rows = persistence.read_recent_market_regime(ui_session)
+        assert rows.iloc[-1]["regime_label"] == "risk_on"
+
+    def test_backtest_history(self, ui_session) -> None:
+        rows = persistence.read_backtest_history(ui_session)
+        assert rows.iloc[0]["sharpe"] == pytest.approx(0.8)
+
+    def test_refresh_log(self, ui_session) -> None:
+        rows = persistence.read_refresh_log(ui_session)
+        assert rows.iloc[0]["status"] == "success"
+
+
+class TestFreshnessAndUniverse:
+    def test_never_populated_tables_report_none_not_a_missing_key(self, ui_session) -> None:
+        # The UI must be able to tell "stale" from "never ran"; omitting the key
+        # would render both as a reassuring blank.
+        freshness = persistence.read_data_freshness(ui_session)
+        assert freshness["prices"] == date.today()
+        assert freshness["fundamentals"] is None
+        assert "sentiment" in freshness
+
+    def test_universe_active_only_by_default(self, ui_session) -> None:
+        active = persistence.read_ticker_universe(ui_session)
+        assert set(active["symbol"]) == {"AAPL", "XOM"}
+        everything = persistence.read_ticker_universe(ui_session, active_only=False)
+        assert "OLD" in set(everything["symbol"])
+
+    def test_latest_prices_omits_unpriced_symbols(self, ui_session) -> None:
+        # An unpriced holding must be absent rather than mapped to 0.0, so the
+        # Portfolio page can flag it stale instead of showing it as worthless.
+        prices = persistence.read_latest_prices(ui_session, ["AAPL", "XOM"])
+        assert "XOM" not in prices
+        # The seed writes close=100.5+i at (today - i days), so today's bar is 100.5.
+        assert prices["AAPL"] == pytest.approx(100.5)
+
+    def test_latest_prices_empty_input(self, ui_session) -> None:
+        assert persistence.read_latest_prices(ui_session, []) == {}

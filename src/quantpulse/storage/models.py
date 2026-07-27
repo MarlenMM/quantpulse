@@ -462,3 +462,65 @@ class BacktestResult(Base):
     benchmark_sharpe: Mapped[float | None] = mapped_column(Float)
     avg_turnover: Mapped[float | None] = mapped_column(Float)
     assumed_txn_cost: Mapped[float] = mapped_column(Float)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 10 -- portfolio bookkeeping (Sections 13, 30) + watchlist (Section 9)
+#
+# Deliberately added now rather than in Phase 8: the analysis modules
+# (`portfolio/transactions.py`, `risk.py`, `recommendations.py`) are pure
+# functions over caller-supplied records, so until the UI existed there was
+# nothing to read or write these tables. They arrive with their first consumer.
+# --------------------------------------------------------------------------- #
+
+
+class PortfolioTransaction(Base):
+    """Append-only buy/sell log -- the source of truth for holdings and P/L (Section 30).
+
+    Section 30 is explicit that a holdings snapshot alone cannot correctly
+    handle partial sells or realized-vs-unrealized P/L, so every trade is its
+    own row and the current position is *derived* from the log
+    (`portfolio.transactions.build_lot_book`) rather than maintained as
+    separately-edited state.
+
+    `shares` is a float from day one: many brokers sell fractional shares
+    (Section 30), and an integer column would be a migration away from
+    correctness the first time someone enters 0.5 shares.
+    """
+
+    __tablename__ = "portfolio_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(10))
+    action: Mapped[str] = mapped_column(String(4))  # buy / sell
+    shares: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    date: Mapped[date] = mapped_column(Date)
+
+
+class PortfolioHolding(Base):
+    """Current-position snapshot derived from `portfolio_transactions` (Section 13).
+
+    A cache of the derived state, not an independent source of truth -- it is
+    rewritten wholesale from the transaction log whenever the log changes, so
+    the two can never disagree. `asset_type` carries Section 9's equity/ETF/cash
+    distinction (an ETF skips company-fundamental scoring; cash just counts
+    toward allocation).
+    """
+
+    __tablename__ = "portfolio_holdings"
+
+    symbol: Mapped[str] = mapped_column(String(10), primary_key=True)
+    asset_type: Mapped[str] = mapped_column(String(10), default="equity")
+    shares: Mapped[float] = mapped_column(Float)
+    cost_basis: Mapped[float] = mapped_column(Float)  # total dollars, not per-share
+    purchase_date: Mapped[date | None] = mapped_column(Date)
+
+
+class WatchlistEntry(Base):
+    """Tracked-but-not-owned symbols (Section 9's lighter-weight watchlist)."""
+
+    __tablename__ = "watchlist"
+
+    symbol: Mapped[str] = mapped_column(String(10), primary_key=True)
+    added_date: Mapped[date] = mapped_column(Date)

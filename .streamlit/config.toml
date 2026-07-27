@@ -1,0 +1,14 @@
+# Dark mode by default (Section 31: "cheap, and a nice touch for a live demo
+# viewed at night"). Streamlit's own theme toggle still lets a visitor switch;
+# the Plotly figures use transparent backgrounds so they follow either way.
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"
+
+[server]
+# The nightly job writes the database; the app only reads it. Watching the
+# whole tree would reload the app mid-refresh for no benefit.
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
