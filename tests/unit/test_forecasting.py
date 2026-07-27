@@ -285,6 +285,140 @@ class TestOrchestration:
 
 
 # --------------------------------------------------------------------------- #
+# Monte Carlo -- GBM simulated fan chart
+# --------------------------------------------------------------------------- #
+
+
+class TestSimulateGbmPaths:
+    def test_shape_includes_day_zero(self) -> None:
+        paths = fc.simulate_gbm_paths(_prices(_random_walk(300)), 20, n_paths=500)
+        assert paths is not None
+        assert paths.shape == (500, 21)
+
+    def test_day_zero_is_deterministic_last_close(self) -> None:
+        prices = _prices(_random_walk(300))
+        paths = fc.simulate_gbm_paths(prices, 10, n_paths=200)
+        assert paths is not None
+        assert np.allclose(paths[:, 0], prices["close"].iloc[-1])
+
+    def test_all_prices_are_positive(self) -> None:
+        # GBM lives in log space, so a simulated price can never be <= 0.
+        paths = fc.simulate_gbm_paths(_prices(_random_walk(300, sigma=0.05)), 60, n_paths=1000)
+        assert paths is not None
+        assert np.all(paths > 0)
+
+    def test_deterministic_with_fixed_seed(self) -> None:
+        prices = _prices(_random_walk(300))
+        a = fc.simulate_gbm_paths(prices, 20, n_paths=100, random_state=42)
+        b = fc.simulate_gbm_paths(prices, 20, n_paths=100, random_state=42)
+        assert a is not None and b is not None
+        assert np.array_equal(a, b)
+
+    def test_different_seeds_differ(self) -> None:
+        prices = _prices(_random_walk(300))
+        a = fc.simulate_gbm_paths(prices, 20, n_paths=100, random_state=1)
+        b = fc.simulate_gbm_paths(prices, 20, n_paths=100, random_state=2)
+        assert a is not None and b is not None
+        assert not np.array_equal(a, b)
+
+    def test_calibration_matches_baseline_forecast_analytically(self) -> None:
+        # Same random-walk model, simulated vs closed-form: with many paths the
+        # simulated terminal log-return distribution's mean/std must converge to
+        # baseline_forecast's analytic mu*h / sigma*sqrt(h) -- a real proof the
+        # simulation implements GBM correctly, not just a plausible shape check.
+        prices = _prices(_random_walk(500, mu=0.0006, sigma=0.02, seed=9))
+        horizon = 40
+        paths = fc.simulate_gbm_paths(prices, horizon, n_paths=50_000, random_state=7)
+        assert paths is not None
+        last_close = prices["close"].iloc[-1]
+        terminal_log_returns = np.log(paths[:, -1] / last_close)
+
+        baseline = fc.baseline_forecast(prices, horizon)
+        assert baseline is not None
+        analytic_mean = np.log1p(baseline.point_return)
+        from scipy.stats import norm
+
+        z = norm.ppf(0.5 + fc.DEFAULT_CONFIDENCE / 2.0)
+        analytic_sd = (np.log1p(baseline.upper_return) - analytic_mean) / z
+
+        assert terminal_log_returns.mean() == pytest.approx(analytic_mean, abs=0.01)
+        assert terminal_log_returns.std(ddof=1) == pytest.approx(analytic_sd, rel=0.05)
+
+    def test_too_short_is_none(self) -> None:
+        assert fc.simulate_gbm_paths(_prices(_random_walk(10)), 20) is None
+
+    def test_invalid_n_paths_raises(self) -> None:
+        with pytest.raises(ValueError, match="n_paths"):
+            fc.simulate_gbm_paths(_prices(_random_walk(300)), 20, n_paths=0)
+
+
+class TestMonteCarloFanChart:
+    def test_default_percentiles_match_the_plan_spec(self) -> None:
+        chart = fc.monte_carlo_fan_chart(_prices(_random_walk(300)), 20, n_paths=2000)
+        assert chart is not None
+        assert set(chart.percentiles) == {5.0, 50.0, 95.0}
+
+    def test_days_and_percentile_arrays_span_the_full_horizon(self) -> None:
+        horizon = 30
+        chart = fc.monte_carlo_fan_chart(_prices(_random_walk(300)), horizon, n_paths=1000)
+        assert chart is not None
+        assert list(chart.days) == list(range(1, horizon + 1))
+        for path in chart.percentiles.values():
+            assert len(path) == horizon
+
+    def test_percentiles_are_ordered_at_every_day(self) -> None:
+        chart = fc.monte_carlo_fan_chart(
+            _prices(_random_walk(300)), 40, n_paths=3000, percentiles=(5.0, 50.0, 95.0)
+        )
+        assert chart is not None
+        p5, p50, p95 = chart.percentiles[5.0], chart.percentiles[50.0], chart.percentiles[95.0]
+        assert np.all(p5 <= p50) and np.all(p50 <= p95)
+
+    def test_fan_widens_over_time(self) -> None:
+        # The defining shape of a "fan": the 5th-95th spread on the last day
+        # must exceed the spread on the first day.
+        prices = _prices(_random_walk(300, sigma=0.02))
+        chart = fc.monte_carlo_fan_chart(prices, 60, n_paths=5000, random_state=3)
+        assert chart is not None
+        spread = chart.percentiles[95.0] - chart.percentiles[5.0]
+        assert spread[-1] > spread[0]
+
+    def test_median_path_matches_baseline_point_forecast(self) -> None:
+        prices = _prices(_random_walk(400, mu=0.0004, sigma=0.015, seed=4))
+        horizon = 20
+        chart = fc.monte_carlo_fan_chart(prices, horizon, n_paths=20_000, random_state=11)
+        assert chart is not None
+        baseline = fc.baseline_forecast(prices, horizon)
+        assert baseline is not None
+        assert chart.percentiles[50.0][-1] == pytest.approx(baseline.point_price, rel=0.03)
+
+    def test_calibration_fields_are_reported(self) -> None:
+        chart = fc.monte_carlo_fan_chart(_prices(_random_walk(300)), 20, n_paths=500)
+        assert chart is not None
+        assert chart.n_train == 299  # 300 closes -> 299 log returns
+        assert chart.n_paths == 500
+
+    def test_too_short_is_none(self) -> None:
+        assert fc.monte_carlo_fan_chart(_prices(_random_walk(10)), 20) is None
+
+    def test_empty_percentiles_raises(self) -> None:
+        with pytest.raises(ValueError, match="percentiles"):
+            fc.monte_carlo_fan_chart(_prices(_random_walk(300)), 20, percentiles=())
+
+    def test_out_of_range_percentile_raises(self) -> None:
+        with pytest.raises(ValueError, match="percentile"):
+            fc.monte_carlo_fan_chart(_prices(_random_walk(300)), 20, percentiles=(5.0, 150.0))
+
+    def test_deterministic_with_fixed_seed(self) -> None:
+        prices = _prices(_random_walk(300))
+        a = fc.monte_carlo_fan_chart(prices, 20, n_paths=500, random_state=5)
+        b = fc.monte_carlo_fan_chart(prices, 20, n_paths=500, random_state=5)
+        assert a is not None and b is not None
+        for p in a.percentiles:
+            assert np.array_equal(a.percentiles[p], b.percentiles[p])
+
+
+# --------------------------------------------------------------------------- #
 # Input validation shared across models
 # --------------------------------------------------------------------------- #
 
@@ -294,7 +428,10 @@ class TestValidation:
         with pytest.raises(ValueError, match="close"):
             fc.baseline_forecast(pd.DataFrame({"open": [1.0, 2.0]}), 20)
 
-    @pytest.mark.parametrize("model", ["baseline_forecast", "statistical_forecast", "ml_forecast"])
+    @pytest.mark.parametrize(
+        "model",
+        ["baseline_forecast", "statistical_forecast", "ml_forecast", "simulate_gbm_paths"],
+    )
     def test_non_positive_horizon_raises(self, model: str) -> None:
         with pytest.raises(ValueError, match="horizon_days"):
             getattr(fc, model)(_prices(_random_walk(300)), 0)
