@@ -16,18 +16,44 @@ from lib.format import (
     humanize,
     rating_label,
 )
+from lib.glossary import tip
 
 st.set_page_config(
     page_title="QuantPulse — Dashboard",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto", not "expanded": Streamlit overlays the sidebar on narrow screens,
+    # so pinning it open means a phone visitor lands on a nav menu covering the
+    # whole page. "auto" expands on desktop and collapses on mobile, which is
+    # the responsive behavior Section 31's mobile pass is asking for.
+    initial_sidebar_state="auto",
 )
 
 DISCLAIMER = (
     "**Educational/research tool. Not financial advice. Not a registered investment "
     "advisor.** Past backtested performance does not guarantee future results."
 )
+# Section 31 asks for "a brief first-visit onboarding note (a dismissible info
+# box, not a full guided tour)". Dismissal lives in session state, so it stays
+# gone while you browse and returns for the next visitor -- which is the right
+# behavior for a shared demo link.
+_ONBOARDING_KEY = "onboarding_dismissed"
+
+
+def render_onboarding() -> None:
+    if st.session_state.get(_ONBOARDING_KEY):
+        return
+    with st.container(border=True):
+        st.markdown(
+            "**New here?** QuantPulse ranks stocks with transparent statistics — no "
+            "black box. Start on the **Screener** for the ranked list, click through to "
+            "**Stock Detail** for one company, or open **Portfolio** to analyse holdings "
+            "you enter yourself. Unfamiliar term? Every number has an ⓘ tooltip, and the "
+            "**Glossary** page explains all of them in plain English."
+        )
+        if st.button("Got it", key="dismiss_onboarding"):
+            st.session_state[_ONBOARDING_KEY] = True
+            st.rerun()
 
 
 def render_empty_state() -> None:
@@ -56,7 +82,7 @@ def render_empty_state() -> None:
 
 
 def render_regime(regime: "object") -> None:
-    st.subheader("Market Regime")
+    st.subheader("Market Regime", help=tip("Market Regime Index"))
     regime_df = data.market_regime(limit=90)
     if regime_df.empty:
         st.plotly_chart(charts.regime_gauge(None), width="stretch")
@@ -70,11 +96,23 @@ def render_regime(regime: "object") -> None:
     # Two-by-two rather than one-by-four: this sits in the narrow right-hand
     # column, where four metrics truncate their own values to "2…".
     top = st.columns(2)
-    top[0].metric("VIX", format_score(latest["vix_level"], digits=1))
-    top[1].metric("Breadth >200DMA", format_percent(latest["breadth_pct_above_200dma"]))
+    top[0].metric("VIX", format_score(latest["vix_level"], digits=1), help=tip("VIX"))
+    top[1].metric(
+        "Breadth >200DMA",
+        format_percent(latest["breadth_pct_above_200dma"]),
+        help=tip("Market breadth"),
+    )
     bottom = st.columns(2)
-    bottom[0].metric("10Y-2Y spread", format_score(latest["yield_curve_spread"], digits=2))
-    bottom[1].metric("Macro tone", format_score(latest["macro_news_tone"], digits=2))
+    bottom[0].metric(
+        "10Y-2Y spread",
+        format_score(latest["yield_curve_spread"], digits=2),
+        help=tip("Yield curve spread"),
+    )
+    bottom[1].metric(
+        "Macro tone",
+        format_score(latest["macro_news_tone"], digits=2),
+        help=tip("Tier 1 / 2 / 3 news"),
+    )
     st.caption(
         "Built in-house from VIX percentile, index breadth, macro news tone and the "
         "yield-curve spread (Section 5) — not scraped from a paywalled index."
@@ -87,6 +125,8 @@ def main() -> None:
         "Self-hosted, $0-cost stock research. The statistics do the thinking; "
         "the optional LLM layer only narrates numbers that already exist."
     )
+
+    render_onboarding()
 
     if not data.has_any_data():
         render_empty_state()
@@ -124,6 +164,13 @@ def main() -> None:
                 .style.format({"Score": "{:.1f}", "Coverage": "{:.0f}%"}),
                 hide_index=True,
                 width="stretch",
+                column_config={
+                    "Rating": st.column_config.TextColumn("Rating", help=tip("Rating")),
+                    "Score": st.column_config.NumberColumn("Score", help=tip("Composite score")),
+                    "Coverage": st.column_config.NumberColumn(
+                        "Coverage", help=tip("Data coverage")
+                    ),
+                },
             )
             st.page_link("pages/1_Screener.py", label="Open the full Screener →")
 
@@ -144,6 +191,13 @@ def main() -> None:
                 ),
                 hide_index=True,
                 width="stretch",
+                column_config={
+                    "Score Δ": st.column_config.NumberColumn(
+                        "Score Δ",
+                        help="Change in composite score since the previous snapshot.",
+                        format="%.1f",
+                    )
+                },
             )
 
     with right:

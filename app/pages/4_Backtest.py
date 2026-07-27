@@ -18,6 +18,7 @@ import streamlit as st
 
 from lib import data
 from lib.format import format_percent, format_ratio
+from lib.glossary import tip
 
 st.set_page_config(page_title="QuantPulse — Track Record", page_icon="📊", layout="wide")
 
@@ -61,24 +62,30 @@ def main() -> None:
     )
 
     columns = st.columns(4)
-    columns[0].metric("Sharpe", format_ratio(latest["sharpe"]))
+    columns[0].metric("Sharpe", format_ratio(latest["sharpe"]), help=tip("Sharpe ratio"))
     columns[0].caption(
         interval_caption(
             latest["sharpe_ci_low"], latest["sharpe_ci_high"], latest["ci_confidence_level"]
         )
     )
-    columns[1].metric("CAGR", format_percent(latest["cagr"]))
+    columns[1].metric("CAGR", format_percent(latest["cagr"]), help=tip("CAGR"))
     columns[1].caption(
         interval_caption(
             latest["cagr_ci_low"], latest["cagr_ci_high"], latest["ci_confidence_level"]
         )
     )
-    columns[2].metric("Max drawdown", format_percent(latest["max_drawdown"]))
+    columns[2].metric(
+        "Max drawdown", format_percent(latest["max_drawdown"]), help=tip("Max drawdown")
+    )
     columns[2].caption(
         "deliberately not bootstrapped — a path-dependent extremum has no meaningful "
         "resampled interval"
     )
-    columns[3].metric("Win rate", format_percent(latest["win_rate"]))
+    columns[3].metric(
+        "Win rate",
+        format_percent(latest["win_rate"]),
+        help=tip("Turnover", "Win rate is the share of rebalance periods that ended positive."),
+    )
     columns[3].caption(f"average turnover {format_percent(latest['avg_turnover'])} per rebalance")
 
     st.divider()
@@ -93,7 +100,9 @@ def main() -> None:
             else format_percent(latest["cagr"] - latest["benchmark_cagr"])
         ),
     )
-    benchmark_columns[1].metric("Benchmark CAGR", format_percent(latest["benchmark_cagr"]))
+    benchmark_columns[1].metric(
+        "Benchmark CAGR", format_percent(latest["benchmark_cagr"]), help=tip("Benchmark")
+    )
     st.caption(
         f"Transaction cost assumed: **{format_percent(latest['assumed_txn_cost'], digits=2)}** "
         "per unit of turnover — a conservative bid-ask stand-in. The benchmark is an "

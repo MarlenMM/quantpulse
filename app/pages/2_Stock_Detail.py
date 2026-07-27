@@ -33,6 +33,8 @@ from lib.format import (
     humanize,
     rating_label,
 )
+from lib.glossary import tip
+from lib.search import format_choice
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import narrative as llm_narrative
 from quantpulse.llm.providers import get_provider
@@ -47,7 +49,7 @@ def render_analyst_comparison(symbol: str, row: pd.Series) -> None:
     st.subheader("Algorithm vs Wall Street")
     consensus = data.analyst_consensus(symbol)
     left, right = st.columns(2)
-    left.metric("QuantPulse rating", rating_label(row["rating"]))
+    left.metric("QuantPulse rating", rating_label(row["rating"]), help=tip("Rating"))
     left.caption(
         f"Composite {format_score(row['composite_score'])} · "
         f"{confidence_label(row['data_confidence'])}"
@@ -118,16 +120,26 @@ def main() -> None:
     symbols = rows["symbol"].tolist()
     preselected = st.session_state.get("detail_symbol")
     index = symbols.index(preselected) if preselected in symbols else 0
-    symbol = st.selectbox("Symbol", symbols, index=index)
+    # Labels carry the company name so a picker confirms you chose the company
+    # you meant, not a similarly-spelled ticker (Section 31).
+    labels = rows[["symbol", "name"]]
+    symbol = st.selectbox(
+        "Symbol",
+        symbols,
+        index=index,
+        format_func=lambda s: format_choice(labels, s),
+    )
     st.session_state["detail_symbol"] = symbol
 
     row = rows[rows["symbol"] == symbol].iloc[0]
     header = st.columns([2, 1, 1, 1])
     header[0].markdown(f"### {symbol} — {row['name'] or ''}")
     header[0].caption(row["sector"] or "Sector unknown")
-    header[1].metric("Rating", rating_label(row["rating"]))
-    header[2].metric("Composite", format_score(row["composite_score"]))
-    header[3].metric("Percentile", format_score(row["percentile_rank"], digits=0))
+    header[1].metric("Rating", rating_label(row["rating"]), help=tip("Rating"))
+    header[2].metric("Composite", format_score(row["composite_score"]), help=tip("Composite score"))
+    header[3].metric(
+        "Percentile", format_score(row["percentile_rank"], digits=0), help=tip("Percentile rank")
+    )
     st.caption(
         f"{confidence_label(row['data_confidence'])} · scored {freshness_label(row['date'])}"
     )
@@ -142,7 +154,7 @@ def main() -> None:
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Sub-scores")
+        st.subheader("Sub-scores", help=tip("Composite score"))
         sub_scores = {
             category: (
                 None
@@ -157,7 +169,14 @@ def main() -> None:
             "a missing score is not a bad score."
         )
     with right:
-        st.subheader("Detected patterns")
+        st.subheader(
+            "Detected patterns",
+            help=tip(
+                "Support and resistance",
+                "Chart and candlestick patterns detected geometrically, each with a "
+                "confidence score rather than a yes/no verdict.",
+            ),
+        )
         found = data.patterns(symbol)
         if found.empty:
             st.caption("No chart or candlestick patterns detected in the last 120 days.")
@@ -174,7 +193,7 @@ def main() -> None:
             )
 
     st.divider()
-    st.subheader("Forecast")
+    st.subheader("Forecast", help=tip("Monte Carlo simulation"))
     forecast_rows = data.forecasts(symbol)
     if forecast_rows.empty:
         st.caption("No forecasts generated for this symbol yet.")
@@ -202,6 +221,15 @@ def main() -> None:
             ),
             hide_index=True,
             width="stretch",
+            column_config={
+                "Hit rate": st.column_config.TextColumn("Hit rate", help=tip("Hit rate")),
+                "Low": st.column_config.NumberColumn(
+                    "Low", help="Lower bound of the forecast range, not a floor."
+                ),
+                "High": st.column_config.NumberColumn(
+                    "High", help="Upper bound of the forecast range, not a target."
+                ),
+            },
         )
         st.caption(
             "**Hit rate** is this model's own out-of-sample directional accuracy at that "
@@ -212,7 +240,7 @@ def main() -> None:
     render_analyst_comparison(symbol, row)
 
     st.divider()
-    st.subheader("What's driving this")
+    st.subheader("What's driving this", help=tip("Sentiment score"))
     news = data.symbol_news(symbol, limit=10)
     if news.empty:
         st.caption("No Tier-1 articles matched this symbol in the last three weeks.")
