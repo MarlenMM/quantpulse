@@ -28,6 +28,24 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
 
+    # Section 11's "everything else in the app works with the LLM provider
+    # entirely turned off" as an explicit switch, so narration can be disabled
+    # outright (e.g. on the public demo) without unsetting a working key.
+    llm_enabled: bool = True
+    # Free-tier model per provider (Section 4.3's own picks). Overridable
+    # because provider model catalogs churn faster than this repo will.
+    gemini_model: str = "gemini-2.5-flash"
+    groq_model: str = "llama-3.3-70b-versatile"
+    ollama_model: str = "llama3.1:8b"
+    ollama_host: str = "http://localhost:11434"
+    # Narration is a paragraph, not an essay: a low cap keeps every call cheap
+    # against a free-tier quota (Section 11) and keeps the UI readable. Low
+    # temperature because the job is restating computed numbers faithfully,
+    # not being creative about them.
+    llm_max_output_tokens: int = 400
+    llm_temperature: float = 0.2
+    llm_timeout_seconds: float = 30.0
+
     # Section 5: free-tier data source credentials.
     finnhub_api_key: str | None = None
     fred_api_key: str | None = None

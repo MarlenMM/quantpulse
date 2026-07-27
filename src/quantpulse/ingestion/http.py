@@ -48,21 +48,38 @@ def compute_backoff(
 def _request_with_retries(
     url: str,
     *,
+    method: str = "GET",
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
     timeout: float = 15.0,
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
 ) -> requests.Response:
-    """GET `url`, retrying network errors and 429/5xx with exponential backoff.
+    """Request `url`, retrying network errors and 429/5xx with exponential backoff.
 
     A 429 or 503 carrying a `Retry-After` header waits exactly that long
     instead of guessing — the polite behavior that keeps a free-tier key
     from being escalated to an outright ban (Section 19).
+
+    `method` is "GET" (the ingestion clients) or "POST" (the LLM providers in
+    `quantpulse.llm`, whose APIs take a JSON request body). The two are
+    dispatched explicitly rather than through `requests.request` so the GET
+    path still calls `requests.get` — the retry/backoff behavior every
+    ingestion client depends on is unchanged by the POST addition.
+
+    Retrying a POST is safe for the only POSTs this project makes: an LLM
+    completion is a pure function call with no server-side state to duplicate,
+    unlike a POST that creates a resource.
     """
     for attempt in range(max_retries + 1):
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            if method == "POST":
+                response = requests.post(
+                    url, params=params, headers=headers, json=json_body, timeout=timeout
+                )
+            else:
+                response = requests.get(url, params=params, headers=headers, timeout=timeout)
         except requests.RequestException:
             if attempt < max_retries:
                 time.sleep(compute_backoff(attempt, backoff_seconds))
@@ -120,6 +137,37 @@ def get_text(
         backoff_seconds=backoff_seconds,
     )
     return response.text
+
+
+def post_json(
+    url: str,
+    *,
+    json_body: Any,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> Any:
+    """POST `json_body` to `url` and parse the response as JSON.
+
+    Same retry/backoff/`Retry-After` behavior as the GET helpers (see
+    `_request_with_retries`) — which is exactly why the LLM providers
+    (`quantpulse.llm.providers`) use this rather than calling `requests`
+    directly: a free-tier LLM endpoint rate-limits like any other free-tier
+    API, and there is no reason for it to have its own retry semantics.
+    """
+    response = _request_with_retries(
+        url,
+        method="POST",
+        params=params,
+        headers=headers,
+        json_body=json_body,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+    )
+    return response.json()
 
 
 def get_bytes(
