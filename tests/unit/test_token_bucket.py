@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from quantpulse.ingestion.rate_limit import TokenBucketRateLimiter
@@ -54,3 +56,30 @@ def test_tokens_refill_over_elapsed_time() -> None:
 
     bucket.wait()  # refilled -> no sleep
     assert slept == []
+
+
+def test_concurrent_waits_never_double_spend_the_same_token() -> None:
+    # A frozen clock means zero refill for the whole test: exactly one of the
+    # bucket's single starting token is available. Without `wait`'s lock,
+    # two threads could both read `_tokens == 1.0` before either decrements
+    # it, letting more than one caller through without sleeping -- the token
+    # gets spent twice. `len(slept)` is a purely public-API-observable
+    # count of how many callers did NOT get a free pass, so this doesn't
+    # need to peek at `_tokens` directly.
+    clock = _FakeClock()
+    slept: list[float] = []
+    n_threads = 30
+    bucket = TokenBucketRateLimiter(capacity=1, per_seconds=1000, sleep=slept.append, clock=clock)
+    barrier = threading.Barrier(n_threads)
+
+    def worker() -> None:
+        barrier.wait()
+        bucket.wait()
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(slept) == n_threads - 1
