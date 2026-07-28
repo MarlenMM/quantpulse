@@ -4,9 +4,13 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 **Live demo:** not yet deployed — see [Live Demo & Deployment](#live-demo--deployment) below for the two steps to stand one up on Streamlit Community Cloud.
 
+![QuantPulse walkthrough: Dashboard, Screener, Stock Detail, and Backtest / Track Record](docs/screenshots/demo.gif)
+
+*Screenshots use synthetic data run through the real scoring/forecasting/backtest pipeline — see [docs/screenshots/README.md](docs/screenshots/README.md) for how, and why never against real API data.*
+
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap) and [ARCHITECTURE.md](ARCHITECTURE.md) for a shorter, code-first tour of how it's actually laid out.
 
-**Status:** Phases 0–11 of the roadmap are complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, all six Streamlit pages plus the React + FastAPI stretch front end, the full unit/integration/property-based test suite, and CI/CD. Phase 12 (this polish pass) is in progress. Nothing here makes trade or investment decisions.
+**Status:** Phases 0–12 of the roadmap are complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, all six Streamlit pages plus the React + FastAPI stretch front end, the full unit/integration/property-based test suite, CI/CD, and this polish pass. Only the standalone final methodology review (Section 21) remains before calling the roadmap done. Nothing here makes trade or investment decisions.
 
 The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`), every number the app computes is still produced and displayed — you just don't get the plain-English paragraph next to it.
 
@@ -152,6 +156,11 @@ uv run python scripts/refresh_data.py        # nightly incremental refresh + sco
 | **Backtest / Track Record** | Sharpe and CAGR with bootstrap confidence intervals, benchmark comparison, stated cost assumptions |
 | **Settings / About** | Data freshness per dataset, pipeline health, configuration, methodology and limitations |
 
+Section 20's own advice: *"the Backtest/Track Record page is your strongest
+talking point in an interview — lead with it."*
+
+![Backtest / Track Record page: Sharpe and CAGR with 90% bootstrap confidence intervals, benchmark comparison, and an explicit "read this honestly" caveat](docs/screenshots/backtest.png)
+
 ## How QuantPulse compares
 
 Positioned deliberately, not as a like-for-like competitor to a commercial
@@ -219,6 +228,7 @@ URL.
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`
 - Type-check: `uv run mypy src`
 - Enable git hooks (runs ruff + mypy on every commit): `uv run pre-commit install`
+- Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project layout
 
@@ -230,11 +240,11 @@ analysis engine stays UI-agnostic.
 ## Roadmap
 
 Full detail in [Section 15 of the plan](PROJECT_PLAN.md#15-development-roadmap--milestones).
-Phases 0–11 (data layer through CI/CD) are complete; Phase 12 (this polish
-pass — README, architecture docs, screenshots, CONTRIBUTING.md) is in
-progress, followed by a standalone final look-ahead-bias/normalization-bug
-review across the whole scoring → forecasting → backtest chain before calling
-the project done.
+Phases 0–12 (data layer through this polish pass) are complete. What's left:
+a standalone final look-ahead-bias/normalization-bug review across the whole
+scoring → forecasting → backtest chain (Section 21's last row) before calling
+the roadmap done, and actually completing the two manual "Live Demo &
+Deployment" steps above.
 
 ## Disclaimer
 

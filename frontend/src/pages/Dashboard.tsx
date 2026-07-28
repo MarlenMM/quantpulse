@@ -2,7 +2,7 @@ import { Chart } from "../components/Chart";
 import { EmptyState, ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
-import { confidenceLabel, formatPercent, formatScore, freshnessLabel, humanize } from "../lib/format";
+import { confidenceLabel, formatPctAlreadyScaled, formatScore, freshnessLabel, humanize } from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 export default function Dashboard() {
@@ -109,7 +109,7 @@ export default function Dashboard() {
               />
               <div className="metrics">
                 <Metric label="VIX" value={formatScore(latestRegime.vix_level)} title="The market's expectation of near-term volatility." />
-                <Metric label="Breadth >200DMA" value={formatPercent(latestRegime.breadth_pct_above_200dma)} title="Share of the universe trading above its 200-day average." />
+                <Metric label="Breadth >200DMA" value={formatPctAlreadyScaled(latestRegime.breadth_pct_above_200dma)} title="Share of the universe trading above its 200-day average." />
                 <Metric label="10Y-2Y" value={formatScore(latestRegime.yield_curve_spread, 2)} title="Yield-curve spread; negative is an inversion." />
               </div>
             </>

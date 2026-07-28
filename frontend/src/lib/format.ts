@@ -47,6 +47,17 @@ export function formatPercent(value: number | null | undefined, digits = 1): str
   return value === null || value === undefined ? "—" : `${(value * 100).toFixed(digits)}%`;
 }
 
+/**
+ * A value already on a 0-100 scale (62.0) as a percentage ("62.0%").
+ * Distinct from formatPercent, which multiplies a 0-1 fraction by 100 --
+ * using that on an already-0-100 value (e.g. breadth_pct_above_200dma, a
+ * "share, 0-100" per compute_breadth's own contract) silently inflates it
+ * 100x (62.0 -> "6200.0%").
+ */
+export function formatPctAlreadyScaled(value: number | null | undefined, digits = 1): string {
+  return value === null || value === undefined ? "—" : `${value.toFixed(digits)}%`;
+}
+
 export function formatSignedPercent(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined) return "—";
   return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(digits)}%`;

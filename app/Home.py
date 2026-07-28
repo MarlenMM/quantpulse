@@ -10,7 +10,7 @@ import streamlit as st
 
 from lib import charts, data
 from lib.format import (
-    format_percent,
+    format_pct_already_scaled,
     format_score,
     freshness_label,
     humanize,
@@ -99,7 +99,7 @@ def render_regime(regime: "object") -> None:
     top[0].metric("VIX", format_score(latest["vix_level"], digits=1), help=tip("VIX"))
     top[1].metric(
         "Breadth >200DMA",
-        format_percent(latest["breadth_pct_above_200dma"]),
+        format_pct_already_scaled(latest["breadth_pct_above_200dma"]),
         help=tip("Market breadth"),
     )
     bottom = st.columns(2)
