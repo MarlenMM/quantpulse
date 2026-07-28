@@ -107,6 +107,16 @@ def format_percent(value: float | None, *, digits: int = 1) -> str:
     return "—" if value is None else f"{value * 100:.{digits}f}%"
 
 
+def format_pct_already_scaled(value: float | None, *, digits: int = 1) -> str:
+    """A value already on a 0-100 scale (62.0) as a percentage ("62.0%").
+
+    Distinct from `format_percent`, which multiplies a 0-1 fraction by 100 --
+    using that on an already-0-100 value (e.g. `market_regime.compute_breadth`'s
+    "share, 0-100" return) silently inflates it 100x (62.0 -> "6200.0%").
+    """
+    return "—" if value is None else f"{value:.{digits}f}%"
+
+
 def format_signed_percent(value: float | None, *, digits: int = 1) -> str:
     """A fraction as a signed percentage ("+15.3%" / "-4.0%") for changes."""
     return "—" if value is None else f"{value * 100:+.{digits}f}%"

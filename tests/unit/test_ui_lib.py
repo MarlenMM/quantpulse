@@ -20,6 +20,7 @@ from lib.format import (
     action_label,
     confidence_label,
     format_money,
+    format_pct_already_scaled,
     format_percent,
     format_price,
     format_ratio,
@@ -73,6 +74,7 @@ class TestNumberFormatting:
         assert format_signed_percent(None) == "—"
         assert format_score(None) == "—"
         assert format_ratio(None) == "—"
+        assert format_pct_already_scaled(None) == "—"
 
     def test_price_and_money(self) -> None:
         assert format_price(1234.567) == "$1,234.57"
@@ -82,6 +84,13 @@ class TestNumberFormatting:
         assert format_percent(0.1534) == "15.3%"
         assert format_signed_percent(0.1534) == "+15.3%"
         assert format_signed_percent(-0.04) == "-4.0%"
+
+    def test_pct_already_scaled_does_not_multiply_by_100(self) -> None:
+        # The bug this guards against: compute_breadth's "share, 0-100" (e.g.
+        # 62.0) fed through format_percent's *100 convention would render as
+        # the nonsensical "6200.0%".
+        assert format_pct_already_scaled(62.0) == "62.0%"
+        assert format_pct_already_scaled(62.0421, digits=2) == "62.04%"
 
     def test_score_and_ratio_digits(self) -> None:
         assert format_score(87.34) == "87.3"
