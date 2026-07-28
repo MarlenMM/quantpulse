@@ -31,6 +31,8 @@ dependencies = [
     "pyportfolioopt>=1.5.6",
     "streamlit>=1.59.1",
     "plotly>=6.9.0",
+    "fastapi>=0.140.7",
+    "uvicorn[standard]>=0.51.0",
 ]
 
 [dependency-groups]
@@ -39,6 +41,8 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "pre-commit>=3.7",
+    "httpx>=0.28.1",
+    "httpx2>=2.9.1",
 ]
 
 [build-system]
@@ -57,6 +61,20 @@ extend-exclude = ["src/quantpulse/storage/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 ("no function call in an argument default") is a false positive on
+# FastAPI, where `Depends(...)`/`Query(...)` in a default IS the framework's
+# required idiom for declaring dependencies and validation. Declaring them
+# immutable is the documented fix -- better than sprinkling per-line noqa,
+# which would also suppress genuine B008s in the same files.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+]
 
 [tool.mypy]
 python_version = "3.12"
