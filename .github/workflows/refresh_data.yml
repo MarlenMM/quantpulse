@@ -11,6 +11,10 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    # Needed to push the refreshed database back below -- the default
+    # GITHUB_TOKEN is read-only unless a job explicitly asks for more.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +29,37 @@ jobs:
       - name: Apply migrations
         run: uv run alembic upgrade head
         env:
-          DATABASE_URL: "sqlite:///./quantpulse.db"
+          DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
       - name: Run nightly refresh
         run: uv run python scripts/refresh_data.py
         env:
-          DATABASE_URL: "sqlite:///./quantpulse.db"
+          DATABASE_URL: "sqlite:///./quantpulse_demo.db"
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
 
-      # Deliberately no "commit the refreshed DB back" step yet: Section 4.5
-      # warns that a single shared SQLite file becomes a real liability once
-      # portfolio tables exist (Phase 8). That persistence/deployment wiring
-      # belongs with Phase 11, after the session-vs-sqlite backend split.
+      # ADR 4.4: "commit/store the results" so the live app never needs
+      # rate-limited API keys of its own. `quantpulse_demo.db` (not
+      # `quantpulse.db` -- see .gitignore) is a repo-committed file separate
+      # from anyone's local dev database, precisely so the two can never
+      # collide. Safe to commit now that Phase 10's ADR 4.5 split exists: the
+      # deployed app runs PORTFOLIO_BACKEND=session, so no visitor's portfolio
+      # data ever lands in this shared file -- only the same screener/market
+      # data every visitor already sees. `[skip ci]` skips re-running the
+      # test workflow on a data-only commit; the bot identity is GitHub's
+      # standard one for Actions-authored commits. This nightly commit is
+      # also what keeps the scheduled workflow itself from being
+      # auto-disabled after 60 days of no repo activity (ADR 4.4's own
+      # caveat) -- a side effect, not a separate thing to remember to do.
+      - name: Commit refreshed demo database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add quantpulse_demo.db
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Nightly data refresh [skip ci]"
+            git push
+          fi
