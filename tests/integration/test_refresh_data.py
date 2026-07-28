@@ -1,3 +1,5 @@
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -622,3 +624,87 @@ def test_run_skips_on_non_trading_day(engine: Engine) -> None:
 
     assert len(logs) == 1
     assert logs[0].status == "skipped_non_trading_day"
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency (Section 21: "worth testing carefully for race conditions").
+# The module docstring's design claim -- every ticker's I/O fetch runs
+# concurrently in a thread pool, and all DB writes happen afterwards,
+# serially -- is exercised here with real threads and a real (if simulated)
+# per-ticker failure, rather than just trusted from reading the code.
+# --------------------------------------------------------------------------- #
+
+
+def test_ticker_fetches_run_concurrently_and_survive_one_failure(engine: Engine) -> None:
+    fake_get_session, factory = _fake_session_factory(engine)
+    symbols = [f"SYM{i}" for i in range(6)]
+    universe = pd.DataFrame(
+        [
+            {
+                "symbol": s,
+                "name": s,
+                "sector": "Technology",
+                "industry": "Software",
+                "exchange": None,
+                "asset_type": "equity",
+                "is_active": True,
+            }
+            for s in symbols
+        ]
+    )
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    seen_threads: set[int] = set()
+
+    def fake_fetch_ticker_data(
+        symbol: str, last_price_date: date | None, is_weekly: bool, **kwargs: object
+    ) -> refresh_data.TickerFetchResult:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            seen_threads.add(threading.get_ident())
+        try:
+            if symbol == "SYM3":
+                raise RuntimeError("simulated source outage")
+            time.sleep(0.05)  # long enough for the pool to genuinely overlap calls
+            return refresh_data.TickerFetchResult(symbol=symbol, price_df=_price_df(symbol, rows=1))
+        finally:
+            with lock:
+                active -= 1
+
+    with (
+        patch("refresh_data.get_session", fake_get_session),
+        patch("refresh_data.is_trading_day", return_value=True),
+        patch("refresh_data.wikipedia_client.fetch_sp500_constituents", return_value=universe),
+        patch("refresh_data.fetch_ticker_data", side_effect=fake_fetch_ticker_data),
+        patch(
+            "refresh_data.edgar_13f_client.fetch_institutional_ownership_trend",
+            return_value=_empty_df(list(refresh_data._INSTITUTIONAL_COLUMNS)),
+        ),
+        patch("refresh_data.gdelt_client.fetch_articles", return_value=_empty_df(["title", "url"])),
+        patch(
+            "refresh_data.gdelt_client.fetch_tone_timeline",
+            return_value=_empty_df(["date", "tone", "query"]),
+        ),
+    ):
+        refresh_data.run(job_name="test_run_concurrency")
+
+    # Genuine parallelism: more than one fetch was in flight at once, and the
+    # work landed on more than one thread -- not the pool silently
+    # collapsing to sequential execution on the main thread.
+    assert max_active > 1
+    assert len(seen_threads) > 1
+
+    with factory() as session:
+        prices = session.scalars(select(PriceHistory)).all()
+        logs = session.scalars(select(RefreshLog)).all()
+
+    # SYM3's simulated failure didn't stop the other 5 tickers from being
+    # fetched and written -- one bad future doesn't take the run down.
+    written_symbols = {p.symbol for p in prices}
+    assert written_symbols == set(symbols) - {"SYM3"}
+    assert len(logs) == 1
+    assert logs[0].status == "partial"  # downgraded, not aborted (Section 6.12)

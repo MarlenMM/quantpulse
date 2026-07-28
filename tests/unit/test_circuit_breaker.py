@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from quantpulse.ingestion.circuit_breaker import (
@@ -114,3 +116,66 @@ def test_reset_all_breakers_clears_registry_state() -> None:
     first = get_breaker("finnhub")
     reset_all_breakers()
     assert get_breaker("finnhub") is not first
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency (Section 21: "one instance is shared across the nightly job's
+# thread pool" -- these exercise that claim with real threads, not just the
+# single-threaded state-machine tests above).
+# --------------------------------------------------------------------------- #
+
+
+def test_concurrent_failures_are_never_lost() -> None:
+    # `failure_threshold` set to exactly the thread count: the breaker can
+    # only end up "open" if `_failure_count` reached that number exactly, so
+    # this is a public, deterministic proxy for "no increment was lost" --
+    # without `record_failure`'s lock, concurrent `+= 1`s can race and drop
+    # updates, leaving the breaker (wrongly) closed.
+    clock = _FakeClock()
+    n_threads = 50
+    breaker = _breaker(clock, failure_threshold=n_threads)
+    barrier = threading.Barrier(n_threads)
+
+    def worker() -> None:
+        barrier.wait()  # release every thread at once to maximize contention
+        breaker.record_failure()
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert breaker.state == "open"
+
+
+def test_concurrent_calls_never_see_a_torn_state() -> None:
+    # Half the threads race a success, half a failure, against a
+    # freshly-opened breaker. `_state`/`_failure_count`/`_opened_at` are all
+    # only ever mutated together under the same lock, so no interleaving of
+    # `record_success`/`record_failure` should be able to leave the breaker
+    # in a state `before_call` can't classify as cleanly open or closed --
+    # this just shouldn't raise anything other than the two expected outcomes.
+    clock = _FakeClock()
+    breaker = _breaker(clock, failure_threshold=1)
+    n_threads = 40
+    barrier = threading.Barrier(n_threads)
+    errors: list[BaseException] = []
+
+    def worker(succeed: bool) -> None:
+        barrier.wait()
+        try:
+            breaker.record_success() if succeed else breaker.record_failure()
+            state = breaker.state  # must not raise / must return a valid literal
+            assert state in ("open", "closed", "half_open")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i % 2 == 0,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert breaker.state in ("open", "closed")
