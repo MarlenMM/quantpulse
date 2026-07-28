@@ -1,0 +1,21 @@
+# Section 18: "Enable Dependabot (free on public repos) for dependency
+# vulnerability alerts." Three ecosystems, matching the project's three
+# separately-pinned dependency sets (Section 29's "dependency pinning"):
+# the Python backend (uv.lock), the React frontend (package-lock.json), and
+# the GitHub Actions themselves (pinned by tag in ci.yml/refresh_data.yml).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,12 +1,41 @@
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# Alembic's own docs recommend fixing this before generating any migrations:
+# without it, unique/check/foreign-key constraints get dialect-assigned
+# anonymous names, so a future `op.drop_constraint()`/`op.alter_column()`
+# autogenerate has nothing stable to reference. Applied retroactively here
+# (8 migrations already exist) since it only affects DDL Alembic generates
+# from this point forward -- it doesn't rewrite already-applied constraint
+# names -- and `alembic check` stays clean against it (verified: SQLite's
+# constraint comparator doesn't diff on convention-assigned names for
+# already-anonymous existing constraints).
+_NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
 
 
 class Base(DeclarativeBase):
     """Shared declarative base. Tables land here starting in Phase 1 (Section 13)."""
+
+    metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
 
 class Ticker(Base):
