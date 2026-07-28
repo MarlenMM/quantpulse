@@ -23,6 +23,14 @@ data/
 *.parquet
 .cache/
 
+# EXCEPT: the nightly-refreshed live-demo database (Section 17/ADR 4.4) is
+# deliberately committed by .github/workflows/refresh_data.yml so Streamlit
+# Community Cloud's auto-redeploy-on-push picks up fresh data. Kept at a
+# distinct root-level filename -- never `quantpulse.db`, your own local dev
+# DB above -- specifically so the two can never collide or get force-pushed
+# over each other.
+!quantpulse_demo.db
+
 # Testing & tooling
 .pytest_cache/
 .mypy_cache/

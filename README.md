@@ -72,6 +72,46 @@ uv run python scripts/refresh_data.py        # nightly incremental refresh + sco
 | **Backtest / Track Record** | Sharpe and CAGR with bootstrap confidence intervals, benchmark comparison, stated cost assumptions |
 | **Settings / About** | Data freshness per dataset, pipeline health, configuration, methodology and limitations |
 
+## Live Demo & Deployment
+
+`.github/workflows/refresh_data.yml` keeps a small, repo-committed demo
+database (`quantpulse_demo.db` — distinct from your own local
+`quantpulse.db`, see `.gitignore`) up to date every weeknight, so Streamlit
+Community Cloud can serve a public demo without the live app needing any API
+keys of its own (ADR 4.4). Two one-time steps, both manual — neither can be
+scripted from outside your own accounts:
+
+1. **Seed the demo database once**, locally, with your own free-tier keys:
+   ```bash
+   DATABASE_URL=sqlite:///./quantpulse_demo.db uv run alembic upgrade head
+   DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_data.py
+   git add quantpulse_demo.db && git commit -m "Seed the live-demo database" && git push
+   ```
+   After this, the nightly workflow takes over — it commits an updated
+   `quantpulse_demo.db` back to `main` every weeknight (see the workflow
+   file's own comments for why that's safe now that ADR 4.5's session-vs-
+   sqlite split exists). Also add `FINNHUB_API_KEY` / `FRED_API_KEY` /
+   `SEC_EDGAR_USER_AGENT` as **repo secrets** (Settings → Secrets and
+   variables → Actions) so the nightly job itself can fetch fresh data.
+
+2. **Connect the repo at [share.streamlit.io](https://share.streamlit.io)**:
+   point it at this repo, branch `main`, main file `app/Home.py`, then set
+   these under the *app's* own Settings → Secrets (a `.streamlit/secrets.toml`-
+   format screen, separate from the GitHub repo secrets above):
+   ```toml
+   DATABASE_URL = "sqlite:///./quantpulse_demo.db"
+   PORTFOLIO_BACKEND = "session"
+   ```
+   `PORTFOLIO_BACKEND=session` is the part that actually matters (ADR 4.5):
+   it keeps every visitor's portfolio entries in their own browser session
+   instead of the shared file, so the committed demo database only ever
+   holds the same public screener/market data every visitor already sees.
+   An LLM key (Section 4.3) is optional — the app runs fine without one.
+
+Streamlit Community Cloud auto-redeploys on every push to `main`, so each
+night's data commit above refreshes the live app automatically — no
+separate redeploy step to remember.
+
 ## Development
 
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`
