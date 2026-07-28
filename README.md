@@ -4,7 +4,7 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap).
 
-**Status:** Analysis engine and Streamlit UI are both built — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, and all six app pages. Accessibility/glossary polish is the remaining pass. Nothing here makes trade or investment decisions.
+**Status:** Analysis engine, Streamlit UI and the React + FastAPI stretch front end are all built — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, and all six app pages. Accessibility/glossary polish is the remaining pass. Nothing here makes trade or investment decisions.
 
 The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`), every number the app computes is still produced and displayed — you just don't get the plain-English paragraph next to it.
 
@@ -30,6 +30,29 @@ uv run pytest
 # 6. Launch the app (works against an empty database — it tells you how to populate it)
 uv run streamlit run app/Home.py
 ```
+
+## Two front ends, one engine
+
+The analysis engine never imports from a UI (Section 14), which is what makes
+two front ends possible without duplicating a line of analysis:
+
+| | Streamlit (`app/`) | React + FastAPI (`frontend/` + `src/quantpulse/api/`) |
+|---|---|---|
+| Role | The full app, including the Portfolio Manager | Stretch goal (ADR 4.1) — showcases the UI-agnostic engine |
+| Hosting | Streamlit Community Cloud, free and always-on | Render/Fly.io + Vercel free tiers |
+| Portfolio management | Yes | No — the API is read-only by design (see below) |
+
+```bash
+# React + FastAPI (two terminals)
+uv run uvicorn quantpulse.api.main:app --reload   # API on :8000, docs at /docs
+cd frontend && npm install && npm run dev          # SPA on :5173, proxies /api
+```
+
+**The API is deliberately read-only.** Portfolio state is per-user and ADR 4.5
+splits it between a browser session and a local SQLite file; neither maps onto
+a stateless REST API without the authentication the single-user MVP explicitly
+doesn't have (Section 18). Portfolio management therefore stays in Streamlit,
+where its storage backends already live.
 
 ### Populating it with real data
 
