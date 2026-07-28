@@ -2,11 +2,91 @@
 
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
-See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap).
+**Live demo:** not yet deployed — see [Live Demo & Deployment](#live-demo--deployment) below for the two steps to stand one up on Streamlit Community Cloud.
 
-**Status:** Analysis engine, Streamlit UI and the React + FastAPI stretch front end are all built — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, and all six app pages. Accessibility/glossary polish is the remaining pass. Nothing here makes trade or investment decisions.
+See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap) and [ARCHITECTURE.md](ARCHITECTURE.md) for a shorter, code-first tour of how it's actually laid out.
+
+**Status:** Phases 0–11 of the roadmap are complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, all six Streamlit pages plus the React + FastAPI stretch front end, the full unit/integration/property-based test suite, and CI/CD. Phase 12 (this polish pass) is in progress. Nothing here makes trade or investment decisions.
 
 The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`), every number the app computes is still produced and displayed — you just don't get the plain-English paragraph next to it.
+
+## By the numbers
+
+| | |
+|---|---|
+| Automated tests | **1,135** (unit, integration, and property-based via Hypothesis), all passing |
+| Core engine code | **~14,600** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
+| Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
+| Database | **23 tables**, **8 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
+| Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** |
+| Chart pattern families detected | **4** — head-and-shoulders, double top/bottom, triangles/wedges/channels, cup-and-handle |
+| Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, Monte Carlo simulation — each graded out-of-sample against the naive baseline |
+| Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
+| Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, Black-Litterman |
+| Front ends | **2** — a 6-page Streamlit app (full app, incl. Portfolio Manager) and a 5-page React + TypeScript SPA over an 11-endpoint read-only FastAPI |
+| Glossary terms | **63**, across 8 categories — one definition shared by every tooltip and both front ends |
+| Required budget | **$0** — every data source, model, and hosting option used is free-tier or open-source |
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph SRC["Free External Data Sources"]
+        YF["Yahoo Finance (yfinance)"]
+        FH["Finnhub free tier"]
+        FRED["FRED (Fed macro data)"]
+        EDGAR["SEC EDGAR (10-K/10-Q, Form 4, 13F)"]
+        GDELT["GDELT (global news)"]
+        RSS["Financial news RSS"]
+        REDDIT["Reddit"]
+        WIKI["Wikipedia (S&P 500 list)"]
+    end
+
+    subgraph ING["Ingestion Layer"]
+        SCHED["GitHub Actions cron (nightly)"]
+        FETCH["Rate-limited, circuit-broken, cached fetch clients"]
+    end
+
+    DB[("SQLite — 23 tables,<br/>Alembic-migrated")]
+
+    subgraph ENGINE["Analysis Engine"]
+        SIGNALS["Technical · Fundamental · News Intelligence<br/>· Smart Money · Market Regime"]
+        SCORE["Composite Scoring<br/>(7 categories, 6 investor profiles)"]
+        FCST["Forecasting & Backtesting<br/>(baseline/ARIMA/ML/Monte Carlo,<br/>walk-forward, bootstrap-CI)"]
+        RISK["Portfolio Risk & Optimization<br/>(VaR/Sharpe/beta, MPT/HRP/Black-Litterman)"]
+    end
+
+    subgraph PORT["Portfolio Manager"]
+        TX["FIFO tax-lot bookkeeping"]
+        REC["Add/Trim/Hold/Sell + rebalancing"]
+    end
+
+    OUT(("Ranked scores, forecasts,<br/>risk metrics, recommendations"))
+
+    NARR["Narrative Layer — optional<br/>Gemini / Groq / Ollama"]
+
+    subgraph APP["Presentation — two front ends, one engine"]
+        ST["Streamlit<br/>(full app, incl. Portfolio Manager)"]
+        API["FastAPI (read-only)"]
+        REACT["React + TypeScript SPA"]
+    end
+
+    SRC --> FETCH
+    SCHED --> FETCH
+    FETCH --> DB
+    DB --> SIGNALS --> SCORE
+    SCORE --> FCST
+    SCORE --> RISK
+    DB --> TX --> REC
+    RISK --> REC
+    SCORE & FCST & RISK & REC --> OUT
+    OUT --> NARR
+    OUT --> ST
+    NARR --> ST
+    SCORE & FCST --> API --> REACT
+```
+
+**Data flow in one sentence:** free APIs feed a scheduled ingestion job → normalized data lands in SQLite → a stack of independent, testable analysis modules score every stock on several dimensions → the scores combine into one ranking, a forecast, and portfolio-level guidance → two front ends display it, optionally narrated in plain English by a free-tier LLM. See [ARCHITECTURE.md](ARCHITECTURE.md) for the module-by-module tour.
 
 ## Quickstart
 
@@ -72,6 +152,26 @@ uv run python scripts/refresh_data.py        # nightly incremental refresh + sco
 | **Backtest / Track Record** | Sharpe and CAGR with bootstrap confidence intervals, benchmark comparison, stated cost assumptions |
 | **Settings / About** | Data freshness per dataset, pipeline health, configuration, methodology and limitations |
 
+## How QuantPulse compares
+
+Positioned deliberately, not as a like-for-like competitor to a commercial
+screener — see [Section 2 of the plan](PROJECT_PLAN.md#2-scope-what-this-is-and-isnt)
+for the full, honest list of what's explicitly out of scope:
+
+| | QuantPulse | Finviz / TradingView (free tiers) |
+|---|---|---|
+| Cost | $0, always | Free tier, paywall for the deeper screens/alerts |
+| Ranking methodology | Fully transparent — read the actual scoring source | Proprietary/opaque |
+| Backtesting | Built in: walk-forward, bootstrap-confidence-interval-aware | Not available on free tiers |
+| Portfolio-level guidance | Add/Trim/Hold/Sell + concentration/sector-gap warnings | Watchlists only, no guidance |
+| Data cadence | Nightly batch, by design (Section 2) — a research tool, not a ticker tape | Real-time |
+| Coverage | US equities & ETFs, S&P 500 universe | Global, much broader |
+| News/sentiment | 3-tier (company/industry/market), scored by a local FinBERT model | Headlines only, no built-in scoring |
+
+The honest trade: QuantPulse gives up real-time breadth and global coverage
+for full transparency, built-in backtesting rigor, and portfolio-specific
+guidance a free screener doesn't offer.
+
 ## Live Demo & Deployment
 
 `.github/workflows/refresh_data.yml` keeps a small, repo-committed demo
@@ -110,7 +210,9 @@ scripted from outside your own accounts:
 
 Streamlit Community Cloud auto-redeploys on every push to `main`, so each
 night's data commit above refreshes the live app automatically — no
-separate redeploy step to remember.
+separate redeploy step to remember. Once connected, replace the "not yet
+deployed" line near the top of this file with the actual `share.streamlit.io`
+URL.
 
 ## Development
 
@@ -120,8 +222,20 @@ separate redeploy step to remember.
 
 ## Project layout
 
-See [Section 14 of the plan](PROJECT_PLAN.md#14-project-folder-structure) for the full intended structure. The `analysis/` package never imports from `app/`, so the analysis engine stays UI-agnostic.
+[ARCHITECTURE.md](ARCHITECTURE.md) has the module-by-module tour; [Section 14
+of the plan](PROJECT_PLAN.md#14-project-folder-structure) has the original
+intended structure. The `analysis/` package never imports from `app/`, so the
+analysis engine stays UI-agnostic.
+
+## Roadmap
+
+Full detail in [Section 15 of the plan](PROJECT_PLAN.md#15-development-roadmap--milestones).
+Phases 0–11 (data layer through CI/CD) are complete; Phase 12 (this polish
+pass — README, architecture docs, screenshots, CONTRIBUTING.md) is in
+progress, followed by a standalone final look-ahead-bias/normalization-bug
+review across the whole scoring → forecasting → backtest chain before calling
+the project done.
 
 ## Disclaimer
 
-Educational/research tool. Not financial advice. Not a registered investment advisor.
+**Educational/research tool. Not financial advice. Not a registered investment advisor. Past backtested performance does not guarantee future results.**
