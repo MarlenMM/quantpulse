@@ -80,6 +80,94 @@ class TestRatingContext:
         )
 
 
+class TestForecastContext:
+    def _forecast(self, **overrides: object) -> narrative.ForecastNarrative:
+        defaults: dict[str, object] = {
+            "symbol": "NVDA",
+            "model_name": "gbr",
+            "last_close": 123.45,
+            "generated_on": date(2026, 7, 27),
+            "horizons": (
+                narrative.ForecastHorizon(
+                    horizon_days=5,
+                    point_return=0.0123,
+                    point_price=124.97,
+                    lower_price=120.10,
+                    upper_price=129.80,
+                    historical_hit_rate=0.58,
+                ),
+                narrative.ForecastHorizon(
+                    horizon_days=20,
+                    point_return=-0.0250,
+                    point_price=120.36,
+                ),
+            ),
+        }
+        defaults.update(overrides)
+        return narrative.ForecastNarrative(**defaults)  # type: ignore[arg-type]
+
+    def test_includes_the_model_and_every_horizon(self) -> None:
+        context = narrative.build_forecast_context(self._forecast())
+        assert "Symbol: NVDA" in context
+        assert "Forecast model: gbr" in context
+        assert "123.45" in context
+        assert "2026-07-27" in context
+        assert "5 trading days" in context
+        assert "20 trading days" in context
+
+    def test_returns_are_signed_so_direction_cannot_be_misread(self) -> None:
+        context = narrative.build_forecast_context(self._forecast())
+        assert "+1.23%" in context
+        assert "-2.50%" in context
+
+    def test_graded_horizon_carries_its_hit_rate(self) -> None:
+        context = narrative.build_forecast_context(self._forecast())
+        line = next(line for line in context.splitlines() if line.startswith("- 5 trading days"))
+        assert "58%" in line
+        assert "directional accuracy" in line
+
+    def test_ungraded_horizon_says_so_rather_than_omitting_the_track_record(self) -> None:
+        # Section 7.6: a forecast shown without its track record invites more
+        # confidence than it earned. A silently-missing hit rate would read as
+        # an unqualified prediction, so absence is stated explicitly.
+        context = narrative.build_forecast_context(self._forecast())
+        line = next(line for line in context.splitlines() if line.startswith("- 20 trading days"))
+        assert "has not been graded" in line
+        assert "unproven" in line
+
+    def test_band_is_labelled_a_confidence_range_not_a_floor_and_ceiling(self) -> None:
+        context = narrative.build_forecast_context(self._forecast())
+        assert "not price targets" in context
+        assert "not a floor and ceiling" in context
+
+    def test_no_horizons_says_so_explicitly(self) -> None:
+        context = narrative.build_forecast_context(
+            narrative.ForecastNarrative(symbol="AAPL", model_name="arima")
+        )
+        assert "No forecasts are stored" in context
+
+    def test_optional_fields_are_omitted_when_absent(self) -> None:
+        context = narrative.build_forecast_context(
+            narrative.ForecastNarrative(
+                symbol="AAPL",
+                model_name="baseline",
+                horizons=(narrative.ForecastHorizon(horizon_days=5, point_return=0.01),),
+            )
+        )
+        assert "Last close" not in context
+        assert "generated on" not in context
+        # Scoped to the horizon line: the standing caveat below it legitimately
+        # uses both words, so a whole-document check would pass vacuously.
+        line = next(line for line in context.splitlines() if line.startswith("- 5 trading days"))
+        assert "central price" not in line
+        assert "range" not in line
+
+    def test_context_is_deterministic(self) -> None:
+        assert narrative.build_forecast_context(
+            self._forecast()
+        ) == narrative.build_forecast_context(self._forecast())
+
+
 class TestExplainRating:
     def test_passes_context_and_returns_narration(self) -> None:
         provider = _stub_provider("NVDA ranks in the top decile.")
