@@ -6,7 +6,7 @@ this sentiment score move" summary over the headlines the News & Event
 Intelligence module flagged, and optional plain-English summaries of SEC filing
 excerpts. (The fourth, the chatbot, is `chatbot.py`.)
 
-**Every function comes in two halves, and the split is the point.**
+**Narration comes in two halves, and the split is the point.**
 `build_*_context()` turns already-computed structured data into a deterministic
 text block; `explain_*()` hands that block to the model. The builders are pure,
 have no network dependency, and are unit-tested directly -- so the exact
@@ -14,6 +14,12 @@ material the model is allowed to see is auditable and pinned by tests, rather
 than being assembled inline inside an untestable network call. If a number ever
 shows up in narration, it is because a builder put it in the context block, and
 that block is inspectable.
+
+`build_forecast_context` is deliberately a builder with no `explain_*` partner:
+its consumer is the chatbot, which needs the same auditable, tested grounding
+even though a prose restatement of the forecast table would add nothing to the
+page. The rule that matters is that every context block is built here and
+tested here -- not that every block also gets narrated.
 
 **The inputs are typed dataclasses, not free text.** `RatingNarrative`,
 `SentimentDriver` and friends carry numbers the engine computed. A caller
@@ -44,10 +50,13 @@ __all__ = [
     "MAX_SENTIMENT_DRIVERS",
     "MAX_FILING_EXCERPT_CHARS",
     "RatingNarrative",
+    "ForecastHorizon",
+    "ForecastNarrative",
     "SentimentDriver",
     "SentimentNarrative",
     "FilingExcerpt",
     "build_rating_context",
+    "build_forecast_context",
     "build_sentiment_context",
     "build_filing_context",
     "explain_rating",
@@ -167,6 +176,103 @@ def explain_rating(
         "reading rests on limited data. Do not restate every number; interpret them."
     )
     return generate(prompt, build_rating_context(narrative), provider=provider)
+
+
+# --------------------------------------------------------------------------- #
+# 1b. Forecast context -- a builder with no `explain_*` partner (see below)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ForecastHorizon:
+    """One model's forecast at one horizon, with that model's own track record.
+
+    `historical_hit_rate` is the model's out-of-sample directional accuracy at
+    this horizon, or `None` when the walk-forward has not graded it yet. It is
+    part of this dataclass rather than optional context precisely because
+    Section 7.6 requires the track record to travel *with* every individual
+    forecast -- see `build_forecast_context`.
+    """
+
+    horizon_days: int
+    point_return: float
+    point_price: float | None = None
+    lower_price: float | None = None
+    upper_price: float | None = None
+    historical_hit_rate: float | None = None
+
+
+@dataclass(frozen=True)
+class ForecastNarrative:
+    """One model's forecasts for one symbol, across horizons."""
+
+    symbol: str
+    model_name: str
+    horizons: Sequence[ForecastHorizon] = field(default_factory=tuple)
+    last_close: float | None = None
+    generated_on: date | None = None
+
+
+def build_forecast_context(narrative: ForecastNarrative) -> str:
+    """Render a symbol's stored forecasts as a context block.
+
+    Unlike the builders above and below, this one has no `explain_*` partner:
+    the Stock Detail page already renders the forecast table and its fan chart,
+    and a second prose restatement of it would add nothing. It exists so the
+    **chatbot** (`chatbot.py`) can be grounded in the forecasts a user is
+    looking at, instead of answering "the app doesn't show that" about a number
+    printed directly above the chat box.
+
+    **Every horizon line carries its own hit rate, including when there isn't
+    one.** Section 7.6: "a forecast without its own track record next to it
+    invites more confidence than it's earned." An ungraded model is stated as
+    ungraded rather than silently omitted, because a horizon line that simply
+    lacked the figure would read as an unqualified prediction.
+    """
+    lines = [
+        f"Symbol: {narrative.symbol}",
+        f"Forecast model: {narrative.model_name}",
+    ]
+    if narrative.last_close is not None:
+        lines.append(f"Last close: {narrative.last_close:.2f}")
+    if narrative.generated_on is not None:
+        lines.append(f"Forecast generated on: {narrative.generated_on.isoformat()}")
+
+    lines.append("")
+    horizons = list(narrative.horizons)
+    if not horizons:
+        lines.append("No forecasts are stored for this symbol.")
+        return "\n".join(lines)
+
+    lines.append("Forecasts by horizon:")
+    for horizon in horizons:
+        parts = [
+            f"- {horizon.horizon_days} trading days: predicted return {horizon.point_return:+.2%}"
+        ]
+        if horizon.point_price is not None:
+            parts.append(f"central price {horizon.point_price:.2f}")
+        if horizon.lower_price is not None and horizon.upper_price is not None:
+            parts.append(f"range {horizon.lower_price:.2f} to {horizon.upper_price:.2f}")
+        if horizon.historical_hit_rate is not None:
+            parts.append(
+                f"this model's out-of-sample directional accuracy at this horizon: "
+                f"{horizon.historical_hit_rate:.0%}"
+            )
+        else:
+            parts.append(
+                "this model's track record at this horizon has not been graded yet "
+                "(treat the forecast as unproven)"
+            )
+        lines.append("; ".join(parts))
+
+    lines.append("")
+    lines.append(
+        "Forecast caveat: these are model outputs with wide uncertainty, not price targets "
+        "or commitments. The range is a confidence band, not a floor and ceiling. A "
+        "directional accuracy near 50% means the model is no better than a coin flip at "
+        "that horizon."
+    )
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
