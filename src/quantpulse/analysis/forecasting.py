@@ -95,6 +95,11 @@ _MIN_BASELINE_BARS = 20
 _MIN_ARIMA_BARS = 60
 _MIN_ML_TRAIN_ROWS = 120
 _MIN_ML_VAL_ROWS = 20
+# Minimum core-fold rows left *after* purging the `horizon_days` rows whose
+# labels would otherwise reach into the holdout window (see `ml_forecast`).
+# Below this there isn't enough clean history to fit a band-estimating model,
+# so the empirical band is declined rather than fit on a handful of rows.
+_MIN_ML_CORE_ROWS = 60
 # A feature needs at least this many non-NaN rows in the fold being fit to be
 # usable: a column that's all-NaN within a fold (a long-lookback feature still
 # warming up over a short training window) can't be binned at all, and one with
@@ -567,6 +572,11 @@ def ml_forecast(
       would leak time order, so we disable it (`early_stopping=False`) and hold
       out the tail ourselves. Model hyperparameters are fixed and modest, not
       tuned to any backtest (Section 22).
+    * That chronological split is additionally **purged**: because row `t`'s
+      label is built from `close(t + h)`, the last `h` rows before the split
+      would otherwise be trained on outcomes drawn from inside the holdout
+      window. Those rows are dropped, so the residuals really are out-of-sample
+      and the band isn't quietly too narrow. See the inline note at the split.
     * The band is non-parametric: empirical quantiles of the holdout residuals
       (`actual - predicted`) added to the point forecast, so it makes no
       normality assumption and can be asymmetric.
@@ -608,14 +618,32 @@ def ml_forecast(
         return None
 
     # Chronological holdout for the residual band (rows are already date-sorted).
+    #
+    # **Purging.** A chronological split alone is NOT enough here, because the
+    # label of row `i` is built from `close[i + h]`. Every core row within `h`
+    # bars of the validation boundary therefore has a target computed from
+    # prices that lie *inside* the holdout window -- the core model is trained
+    # on the very outcomes it is about to be graded on. Untreated, that shrinks
+    # the residuals and hands out a prediction interval that is too narrow, i.e.
+    # a forecast that looks more certain than it is (Section 22's "presenting
+    # every number with the same confidence"). At h=252 with the default 20%
+    # holdout it is total: every bar of the validation window is reachable from
+    # some core label, so the "out-of-sample" band is not out of sample at all.
+    #
+    # The standard remedy (a purge/embargo) is to drop the last `h` core rows,
+    # which is exactly the set whose labels reach the boundary. If too little
+    # clean core history survives, we decline the empirical band entirely rather
+    # than compute a leaky one -- the caller already has an honest fallback
+    # (the random-walk volatility band below).
     n_val = int(len(x_train_full) * _ML_VAL_FRACTION)
-    use_holdout = n_val >= _MIN_ML_VAL_ROWS
+    n_core = len(x_train_full) - n_val - horizon_days
+    use_holdout = n_val >= _MIN_ML_VAL_ROWS and n_core >= _MIN_ML_CORE_ROWS
 
     # Prune features without enough coverage to be binned/learned. Coverage is
     # judged on the *core* fold when we hold one out -- the earliest, shortest
     # window, where a long-lookback feature may still be entirely NaN -- so the
     # holdout and final models share exactly one feature set.
-    coverage_ref = x_train_full.iloc[:-n_val] if use_holdout else x_train_full
+    coverage_ref = x_train_full.iloc[:n_core] if use_holdout else x_train_full
     usable_cols = [
         c for c in x_train_full.columns if coverage_ref[c].notna().sum() >= _MIN_FEATURE_NONNULL
     ]
@@ -639,7 +667,9 @@ def ml_forecast(
 
     residuals: np.ndarray | None = None
     if use_holdout:
-        x_core, y_core = x_train_full.iloc[:-n_val], y_train_full.iloc[:-n_val]
+        # `n_core` already excludes the purged `horizon_days` rows between the
+        # two folds, so no core label reads a price from the holdout window.
+        x_core, y_core = x_train_full.iloc[:n_core], y_train_full.iloc[:n_core]
         x_val, y_val = x_train_full.iloc[-n_val:], y_train_full.iloc[-n_val:]
         holdout_model = _new_model().fit(x_core, y_core)
         residuals = y_val.to_numpy(dtype=float) - holdout_model.predict(x_val)

@@ -152,11 +152,13 @@ def test_fetch_options_signals_returns_none_fields_when_no_expiration(tmp_path: 
 
 
 def test_fetch_options_signals_handles_zero_call_volume(tmp_path: Path) -> None:
+    # Puts clear the volume floor so this exercises the zero-denominator path
+    # specifically, not the thin-chain guard below.
     chain = _fake_chain(
         call_volumes=[0, 0],
         call_ivs=[0.25, 0.30],
         call_strikes=[95, 105],
-        put_volumes=[10, 5],
+        put_volumes=[30, 25],
         put_ivs=[0.35, 0.45],
         put_strikes=[95, 105],
         underlying_price=100.0,
@@ -173,6 +175,102 @@ def test_fetch_options_signals_handles_zero_call_volume(tmp_path: Path) -> None:
         result = options_client.fetch_options_signals("AAPL")
 
     assert result["put_call_ratio"] is None  # no division by zero
+
+
+# --- plausibility guards -------------------------------------------------------
+#
+# These reproduce what the nightly job actually persisted into the committed
+# demo database: 96% of stored ATM implied volatilities were below 5% (Apple at
+# 0.46%), and put/call ratios ran as high as 141 off a near-empty call side.
+# Both are artifacts of quoting outside regular trading hours, and both were
+# stored and ranked as if they were market readings.
+
+
+def _signals_from(tmp_path: Path, chain: Mock) -> dict:
+    with (
+        patch(
+            "quantpulse.ingestion.options_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch.object(options_client, "_select_expiration", return_value="2026-08-15"),
+        patch("quantpulse.ingestion.options_client.yf.Ticker") as mock_ticker_cls,
+    ):
+        mock_ticker_cls.return_value.option_chain.return_value = chain
+        return options_client.fetch_options_signals("AAPL")
+
+
+def test_implausibly_low_atm_iv_is_abstained_not_reported(tmp_path: Path) -> None:
+    # The exact shape of the real bad data: a stale overnight chain whose
+    # derived IV collapses toward zero. 0.46% annualized is not a market.
+    result = _signals_from(
+        tmp_path,
+        _fake_chain(
+            call_volumes=[500, 400],
+            call_ivs=[0.0046, 0.0047],
+            call_strikes=[95, 105],
+            put_volumes=[300, 200],
+            put_ivs=[0.0045, 0.0046],
+            put_strikes=[95, 105],
+            underlying_price=100.0,
+        ),
+    )
+    assert result["atm_implied_volatility"] is None
+    # The put/call ratio is independently fine and must survive the IV guard.
+    assert result["put_call_ratio"] == pytest.approx(500 / 900)
+
+
+def test_implausibly_high_atm_iv_is_abstained(tmp_path: Path) -> None:
+    result = _signals_from(
+        tmp_path,
+        _fake_chain(
+            call_volumes=[500, 400],
+            call_ivs=[8.0, 9.0],
+            call_strikes=[95, 105],
+            put_volumes=[300, 200],
+            put_ivs=[8.5, 9.5],
+            put_strikes=[95, 105],
+            underlying_price=100.0,
+        ),
+    )
+    assert result["atm_implied_volatility"] is None
+
+
+def test_a_genuine_low_volatility_reading_still_passes(tmp_path: Path) -> None:
+    # The guard must not swallow real quiet-market readings -- a calm mega-cap
+    # at 11% annualized is ordinary, not an artifact.
+    result = _signals_from(
+        tmp_path,
+        _fake_chain(
+            call_volumes=[500, 400],
+            call_ivs=[0.11, 0.12],
+            call_strikes=[95, 105],
+            put_volumes=[300, 200],
+            put_ivs=[0.11, 0.12],
+            put_strikes=[95, 105],
+            underlying_price=100.0,
+        ),
+    )
+    assert result["atm_implied_volatility"] == pytest.approx(0.115)
+
+
+def test_put_call_ratio_from_a_near_empty_chain_is_abstained(tmp_path: Path) -> None:
+    # One call contract against 98 puts is arithmetic, not positioning -- this
+    # is how the demo DB ended up with a "put/call ratio" of 141.
+    result = _signals_from(
+        tmp_path,
+        _fake_chain(
+            call_volumes=[1, 0],
+            call_ivs=[0.25, 0.30],
+            call_strikes=[95, 105],
+            put_volumes=[50, 48],
+            put_ivs=[0.35, 0.45],
+            put_strikes=[95, 105],
+            underlying_price=100.0,
+        ),
+    )
+    assert result["put_call_ratio"] is None
+    # IV is unaffected by the volume guard.
+    assert result["atm_implied_volatility"] is not None
 
 
 # --- compute_iv_rank -------------------------------------------------------------
