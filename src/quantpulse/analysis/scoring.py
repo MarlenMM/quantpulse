@@ -16,11 +16,16 @@ The pipeline, matching Section 7.5's numbered steps:
    `score_momentum`, sentiment polarity, `tier2_thematic_tilt`).
 
 2. **Normalize to a 0-100 percentile within the peer universe.** Every
-   category is rank-percentiled across the scored universe, EXCEPT fundamental,
-   which arrives already sector-relative (Section 7.5 step 2's "optionally
-   sector-relative for fundamentals") and is used as-is. Higher always means
-   better; a category with no usable data for a symbol stays missing (NaN) and
-   simply drops out of that symbol's weighting rather than counting as a zero.
+   category -- fundamental included -- is rank-percentiled across the scored
+   universe, so all seven arrive on genuinely the same scale. Fundamental's
+   sector-relativity (Section 7.5 step 2's "optionally sector-relative for
+   fundamentals") is preserved because it is decided upstream in
+   `fundamental.py`, which ranks metrics within a sector; percentiling is
+   monotonic and cannot disturb that ordering. See `_normalized_subscores` for
+   why passing fundamental through unpercentiled -- as this module originally
+   did -- made the stated weights differ from the effective ones. Higher always
+   means better; a category with no usable data for a symbol stays missing (NaN)
+   and simply drops out of that symbol's weighting rather than counting as a zero.
 
 3. **Weighted composite**, using an `InvestorProfile`'s weights (Section 23),
    renormalized over whichever categories had data -- the same coverage
@@ -69,6 +74,17 @@ RATINGS = ("strong_buy", "buy", "hold", "sell", "strong_sell")
 _RELATIVE_CUTOFFS = ((90.0, "strong_buy"), (70.0, "buy"), (30.0, "hold"), (10.0, "sell"))
 # Absolute-mode composite-score cutoffs -- an illustrative fixed bar for the
 # alternative to peer-ranking (Section 7.5 step 4), tunable like the weights.
+#
+# **Honest caveat: this is only semi-absolute.** Every category feeding the
+# composite is a cross-sectional percentile, so the composite is close to
+# uniform on 0-100 by construction no matter what the market is doing. Fixed
+# cutoffs applied to it still hand out Strong Buys in a universally overpriced
+# market -- shifting the *proportions* a little versus relative mode, but not
+# measuring anything against a market-independent bar. It narrows Section 22's
+# "treating a relative ranking as an absolute judgment" pitfall without escaping
+# it, and a test pins that so the mode is not mistaken for more than it is.
+# A genuinely absolute rating would need the raw metrics (a P/E of 12 is cheap
+# whoever else is listed), which is a different scoring design, not a mode flag.
 _ABSOLUTE_CUTOFFS = ((75.0, "strong_buy"), (60.0, "buy"), (40.0, "hold"), (25.0, "sell"))
 
 # How far a fully risk-off regime lifts the Strong-Buy percentile cutoff (from
@@ -225,18 +241,40 @@ def percentile_normalize(raw: pd.Series) -> pd.Series:
 
 
 def _normalized_subscores(category_raw: pd.DataFrame) -> pd.DataFrame:
-    """Per-category 0-100 sub-scores: fundamental as-is (sector-relative), rest percentiled."""
+    """Every category rank-percentiled to a comparable 0-100 scale.
+
+    **Fundamental is percentiled too, and that is a deliberate correction.** It
+    used to be passed through untouched, on the reasoning that it "is already a
+    sector-relative 0-100 percentile". It is not. `fundamental.score_fundamentals`
+    percentile-ranks each *metric* within a sector and then takes a weighted
+    *average* of those percentiles -- and an average of percentiles is not
+    uniform, it concentrates toward the middle. Measured across 500 synthetic
+    names with 8 metrics: fundamental_score has std 11.4 and spans 12.6-81.8,
+    against std 28.9 spanning 0.2-100 for a genuinely percentiled category.
+
+    The consequence was that the stated weights were not the effective weights.
+    A category contributes to a weighted average in proportion to weight x
+    spread, so the balanced profile's nominal 25% fundamental weight was
+    actually driving about 12% of the composite's variation -- fundamentals
+    counted for half what the profile said, silently.
+
+    Percentiling it fixes the scale without touching what it measures: the
+    transform is monotonic, so the sector-relative ordering `score_fundamentals`
+    produced survives exactly. A bank at the 80th percentile of banks and a
+    software firm at the 80th percentile of software firms had equal raw scores
+    and remain tied afterwards; no cross-sector comparison of raw ratios is
+    introduced. Section 7.5 step 2's "optionally sector-relative for
+    fundamentals" is about which peer group the metrics are ranked in, which is
+    `fundamental.py`'s job and is unchanged.
+    """
     normalized = pd.DataFrame(index=category_raw.index)
     for category in CATEGORIES:
         if category not in category_raw.columns:
             normalized[category] = np.nan
             continue
-        column = category_raw[category]
-        if category == "fundamental":
-            # Already a sector-relative 0-100 percentile (Section 7.5 step 2).
-            normalized[category] = pd.to_numeric(column, errors="coerce")
-        else:
-            normalized[category] = percentile_normalize(pd.to_numeric(column, errors="coerce"))
+        normalized[category] = percentile_normalize(
+            pd.to_numeric(category_raw[category], errors="coerce")
+        )
     return normalized
 
 

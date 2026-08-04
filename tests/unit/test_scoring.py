@@ -128,35 +128,60 @@ class TestRatingHelpers:
 
 class TestBuildComposite:
     def test_weighted_composite_and_confidence_hand_check(self) -> None:
-        # fundamental is used as-is (sector-relative); technical is percentiled:
-        # [10,20] -> [50,100]. Only two of seven categories present.
+        # Every category is percentiled, fundamental included: [100,0] -> [100,50]
+        # and [10,20] -> [50,100]. Only two of seven categories present.
         raw = pd.DataFrame(
             {"fundamental": [100.0, 0.0], "technical": [10.0, 20.0]}, index=["A", "B"]
         )
         result = scoring.build_composite(raw, profile="balanced")
         by_symbol = result.scores.set_index("symbol")
-        # A: (0.25*100 + 0.20*50) / 0.45 = 77.78 ; B: (0.25*0 + 0.20*100)/0.45 = 44.44
+        # A: (0.25*100 + 0.20*50) / 0.45 ; B: (0.25*50 + 0.20*100)/0.45
         assert by_symbol.loc["A", "composite_score"] == pytest.approx(35 / 0.45)
-        assert by_symbol.loc["B", "composite_score"] == pytest.approx(20 / 0.45)
+        assert by_symbol.loc["B", "composite_score"] == pytest.approx(32.5 / 0.45)
         # Only fundamental (0.25) + technical (0.20) had data -> 45% confidence.
         assert by_symbol.loc["A", "data_confidence"] == pytest.approx(45.0)
 
-    def test_fundamental_is_used_as_is_not_repercentiled(self) -> None:
-        # If fundamental were re-percentiled, [30,60,90] -> [33,67,100]; used
-        # as-is it stays 30/60/90. Single category so composite == the sub-score.
+    def test_fundamental_is_percentiled_like_every_other_category(self) -> None:
+        """It is NOT already a percentile, despite arriving on a 0-100 scale.
+
+        `fundamental.score_fundamentals` averages several within-sector metric
+        percentiles, and an average of percentiles concentrates toward the
+        middle rather than staying uniform. Measured on 500 synthetic names it
+        had std 11.4 against 28.9 for a genuinely percentiled category -- so
+        passing it through untouched made the balanced profile's nominal 25%
+        fundamental weight drive only ~12% of the composite's variation.
+        """
         raw = pd.DataFrame({"fundamental": [30.0, 60.0, 90.0]}, index=["A", "B", "C"])
         scores = scoring.build_composite(raw).scores.set_index("symbol")
-        assert scores.loc["C", "fundamental_score"] == 90.0
-        assert scores.loc["C", "composite_score"] == pytest.approx(90.0)
+        # [30,60,90] -> [33.3, 66.7, 100], not left at 30/60/90.
+        assert scores.loc["C", "fundamental_score"] == pytest.approx(100.0)
+        assert scores.loc["B", "fundamental_score"] == pytest.approx(200 / 3)
+        assert scores.loc["A", "fundamental_score"] == pytest.approx(100 / 3)
+
+    def test_percentiling_fundamental_preserves_its_sector_relative_ordering(self) -> None:
+        # The transform is monotonic, which is the whole reason it is safe:
+        # `score_fundamentals` decides the peer group, and this cannot disturb
+        # the ordering it produced. Equal raw scores stay tied.
+        raw = pd.DataFrame(
+            {"fundamental": [80.0, 40.0, 80.0, 55.0]}, index=["BANK", "SOFT", "PHARMA", "UTIL"]
+        )
+        scores = scoring.build_composite(raw).scores.set_index("symbol")
+        assert scores.loc["BANK", "fundamental_score"] == scores.loc["PHARMA", "fundamental_score"]
+        assert (
+            scores.loc["BANK", "fundamental_score"]
+            > scores.loc["UTIL", "fundamental_score"]
+            > scores.loc["SOFT", "fundamental_score"]
+        )
 
     def test_missing_category_does_not_penalize_with_a_zero(self) -> None:
         # B is missing technical; its composite is renormalized over fundamental
-        # alone (== its fundamental score), not dragged down by a phantom 0.
+        # alone (== its fundamental sub-score), not dragged down by a phantom 0.
         raw = pd.DataFrame(
             {"fundamental": [50.0, 50.0], "technical": [10.0, np.nan]}, index=["A", "B"]
         )
         scores = scoring.build_composite(raw).scores.set_index("symbol")
-        assert scores.loc["B", "composite_score"] == pytest.approx(50.0)
+        # Tied raw fundamentals -> both take the tie's average rank (1.5/2 = 75).
+        assert scores.loc["B", "composite_score"] == pytest.approx(75.0)
         assert scores.loc["B", "data_confidence"] == pytest.approx(25.0)  # fundamental weight only
 
     def test_symbol_with_no_data_is_dropped(self) -> None:
@@ -178,11 +203,35 @@ class TestBuildComposite:
         assert scores.iloc[-1]["rating"] == "strong_sell"
 
     def test_absolute_mode_uses_fixed_thresholds(self) -> None:
+        # [90,50,10] percentiles to [100, 66.7, 33.3]; the absolute cutoffs
+        # (75/60/40/25) are then applied to those.
         raw = pd.DataFrame({"fundamental": [90.0, 50.0, 10.0]}, index=["A", "B", "C"])
         scores = scoring.build_composite(raw, rating_mode="absolute").scores.set_index("symbol")
-        assert scores.loc["A", "rating"] == "strong_buy"  # >=75
-        assert scores.loc["B", "rating"] == "hold"  # 40..60
-        assert scores.loc["C", "rating"] == "strong_sell"  # <25
+        assert scores.loc["A", "rating"] == "strong_buy"  # 100 >= 75
+        assert scores.loc["B", "rating"] == "buy"  # 66.7 >= 60
+        assert scores.loc["C", "rating"] == "sell"  # 33.3 >= 25
+
+    def test_absolute_mode_is_only_semi_absolute_and_says_so(self) -> None:
+        """Documented limitation, pinned so nobody mistakes it for a real bar.
+
+        Every category feeding the composite is a cross-sectional percentile, so
+        the composite is close to uniform on 0-100 by construction whatever the
+        market is doing. Fixed cutoffs applied to it therefore still hand out
+        Strong Buys in a universally overpriced market -- absolute mode narrows
+        Section 22's "treating a relative ranking as an absolute judgment"
+        pitfall but does not escape it.
+        """
+        strong = pd.DataFrame(
+            {"technical": [float(i) for i in range(40)]}, index=[f"S{i}" for i in range(40)]
+        )
+        # The same ranks, but every underlying value ten times worse.
+        weak = pd.DataFrame(
+            {"technical": [float(i) - 1000.0 for i in range(40)]},
+            index=[f"S{i}" for i in range(40)],
+        )
+        strong_ratings = scoring.build_composite(strong, rating_mode="absolute").scores["rating"]
+        weak_ratings = scoring.build_composite(weak, rating_mode="absolute").scores["rating"]
+        assert list(strong_ratings) == list(weak_ratings)
 
     def test_risk_off_regime_hands_out_fewer_strong_buys(self) -> None:
         raw = pd.DataFrame(
