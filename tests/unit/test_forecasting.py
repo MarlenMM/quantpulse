@@ -235,11 +235,30 @@ class TestML:
         assert r.as_of == _prices(_random_walk(n, seed=9)).index[-1]
 
     def test_exog_forecast_runs_at_long_horizon(self) -> None:
-        prices = _prices(_random_walk(500, seed=4))
+        # A one-year horizon now needs ~three years of history (see
+        # `_MIN_HISTORY_HORIZON_MULT`), so this is sized to clear that gate --
+        # the point of the test is the exogenous-feature path at a long horizon,
+        # not the gate.
+        n = fc.min_bars_for_horizon(252, floor=fc._MIN_ML_TRAIN_ROWS) + 50
+        prices = _prices(_random_walk(n, seed=4))
         # Exogenous fundamental signal available every day.
-        exog = pd.DataFrame({"value_score": np.linspace(0, 1, 500)}, index=prices.index)
+        exog = pd.DataFrame({"value_score": np.linspace(0, 1, n)}, index=prices.index)
         r = fc.ml_forecast(prices, 252, exog=exog, exog_buckets={"value_score": "fundamental"})
         assert isinstance(r, Forecast)
+
+    def test_a_horizon_longer_than_the_history_supports_is_declined(self) -> None:
+        # The demo database really held 26 daily bars and was days from
+        # publishing a one-year forecast off 25 returns (+157% for Apple, with a
+        # nominal 90% band that never touched zero). Every model must abstain.
+        short = _prices(_random_walk(26, seed=5))
+        assert fc.baseline_forecast(short, 252) is None
+        assert fc.statistical_forecast(short, 252) is None
+        assert fc.ml_forecast(short, 252) is None
+        assert fc.monte_carlo_fan_chart(short, 252) is None
+        assert fc.simulate_gbm_paths(short, 252) is None
+        # ...while the short horizon its history *does* support still works.
+        assert fc.baseline_forecast(short, 5) is not None
+        assert fc.generate_forecasts(short) == fc.forecast_horizon(short, 5)
 
     def test_deterministic(self) -> None:
         prices = _prices(_random_walk(400, seed=11))
@@ -295,11 +314,13 @@ class TestMLHoldoutPurge:
     def test_long_horizon_declines_the_band_rather_than_leaking(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 400 bars at h=252 leaves no clean core after purging, so the empirical
-        # band must be declined outright -- only the point model is fit -- and
-        # the honest random-walk fallback (symmetric in log space) is used.
+        # Just enough history to clear the horizon gate at h=63, which still
+        # leaves no clean core after purging -- so the empirical band must be
+        # declined outright (only the point model is fit) and the honest
+        # random-walk fallback (symmetric in log space) is used instead.
         seen = self._spy_on_fits(monkeypatch)
-        result = fc.ml_forecast(_prices(_random_walk(400, seed=4)), 252)
+        bars = fc.min_bars_for_horizon(63, floor=fc._MIN_ML_TRAIN_ROWS)
+        result = fc.ml_forecast(_prices(_random_walk(bars, seed=4)), 63)
         assert result is not None
         assert len(seen) == 1, "a leaky holdout model must not be fit at all"
         assert result.lower_price < result.point_price < result.upper_price
