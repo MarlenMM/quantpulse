@@ -19,6 +19,7 @@ import streamlit as st
 from lib import data
 from lib.format import format_percent, format_ratio
 from lib.glossary import tip
+from quantpulse.portfolio.optimization import kelly_position_fraction
 
 st.set_page_config(page_title="QuantPulse — Track Record", page_icon="📊", layout="wide")
 
@@ -33,6 +34,53 @@ def interval_caption(low: float | None, high: float | None, level: float | None)
         "excludes zero" if excludes_zero else "**straddles zero — not distinguishable from luck**"
     )
     return f"{confidence} CI [{low:.2f}, {high:.2f}] — {verdict}"
+
+
+def render_position_sizing(latest: pd.Series) -> None:
+    """Section 27's fractional-Kelly sizing, derived from this run's own record.
+
+    The rest of this page answers "did the strategy work?". This answers "how
+    much would it have been rational to bet on it?", which is the question a
+    track record is actually *for*. Both inputs come from the same stored run --
+    its realized win rate and payoff ratio -- so the number cannot be more
+    confident than the history behind it.
+
+    Shown only when the backtest genuinely supports it: a run with no losing
+    periods has an undefined payoff ratio, and Kelly on an apparently
+    can't-lose bet would return a maximal position.
+    """
+    hit_rate = latest.get("win_rate")
+    payoff = latest.get("payoff_ratio")
+    if pd.isna(hit_rate) or pd.isna(payoff):
+        return
+
+    fraction = kelly_position_fraction(float(hit_rate), float(payoff))
+    if fraction is None:
+        return
+
+    st.divider()
+    st.subheader("How much to bet", help=tip("Kelly fraction"))
+    columns = st.columns(3)
+    columns[0].metric("Suggested position", format_percent(fraction))
+    columns[1].metric("Win rate used", format_percent(float(hit_rate)))
+    columns[2].metric("Payoff ratio used", format_ratio(float(payoff)))
+
+    if fraction <= 0:
+        st.info(
+            "The Kelly criterion says **do not take this bet at all** — at this win "
+            "rate and payoff ratio the strategy has no positive edge to size, so any "
+            "position is a losing proposition on average."
+        )
+    else:
+        st.caption(
+            f"A **quarter-Kelly** size: the growth-optimal bet given this run's own "
+            f"{format_percent(float(hit_rate))} win rate and "
+            f"{format_ratio(float(payoff))} payoff ratio, then cut to a quarter because "
+            "full Kelly is famously too volatile to live with and is exquisitely "
+            "sensitive to an over-estimated edge. Treat it as an upper bound, not a "
+            "recommendation — it assumes the future resembles this backtest, which is "
+            "exactly the assumption the confidence intervals above tell you to doubt."
+        )
 
 
 def main() -> None:
@@ -108,6 +156,8 @@ def main() -> None:
         "per unit of turnover — a conservative bid-ask stand-in. The benchmark is an "
         "equal-weight universe proxy (no S&P 500 price series is ingested)."
     )
+
+    render_position_sizing(latest)
 
     st.warning(
         "**Read this honestly.** These are backtested, hypothetical results on a "

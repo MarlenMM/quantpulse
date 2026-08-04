@@ -69,6 +69,25 @@ def analyst_consensus(symbol: str) -> dict[str, Any] | None:
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def short_interest(symbol: str) -> dict[str, Any] | None:
+    """One symbol's latest short-interest snapshot, or None if none is stored.
+
+    Section 24 requires both readings (bearish conviction vs squeeze setup) be
+    presented rather than collapsed into one directional signal, which is
+    exactly why `smart_money` keeps them out of its blended score. That only
+    works if a page actually shows them.
+    """
+    from datetime import date as _date
+
+    with get_session() as session:
+        frame = persistence.read_latest_short_interest(session, as_of=_date.today())
+    if frame.empty:
+        return None
+    row = frame[frame["symbol"] == symbol]
+    return None if row.empty else dict(row.iloc[0])
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
 def symbol_news(symbol: str, limit: int = 10) -> pd.DataFrame:
     with get_session() as session:
         return persistence.read_symbol_news(session, symbol, limit=limit)
