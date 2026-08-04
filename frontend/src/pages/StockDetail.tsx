@@ -180,7 +180,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               random-walk forecast over the same periods. Read them together: a hit
               rate only means something against that baseline, which on real history
               is close to "how often the market simply went up". A model at or below
-              the naive column has not demonstrated any skill.
+              the naive column has not demonstrated any skill. Note that{" "}
+              <strong>arima</strong> and <strong>baseline</strong> are near-duplicates
+              by construction — once ARIMA has a drift term it converges to the
+              random-walk-with-drift null — so the two agreeing is not corroboration.
             </p>
           </>
         ) : (
