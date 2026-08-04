@@ -205,16 +205,21 @@ def main() -> None:
 
     total_weight = sum(weights.values())
     if absolute_mode:
-        filtered = rescore_absolute(filtered, weights, profile_name)
-        if filtered is None:
+        rescored = rescore_absolute(filtered, weights, profile_name)
+        if rescored is None:
             st.warning(
                 "These rows were scored before raw category values were stored, so an "
                 "absolute rating cannot be derived from them. Showing the relative "
                 "ranking — the next nightly run will populate them."
             )
-            filtered = rows.copy().assign(custom_score=lambda f: f["composite_score"])
+            # Fall back on the *filtered* rows, not the whole universe: the
+            # sector/rating/coverage/search choices in the sidebar are still the
+            # user's, and silently re-showing every symbol because the rating
+            # scheme couldn't be applied is a different answer to a different
+            # question.
+            filtered = filtered.assign(custom_score=filtered["composite_score"])
         else:
-            filtered = filtered.sort_values("custom_score", ascending=False)
+            filtered = rescored.sort_values("custom_score", ascending=False)
     elif total_weight > 0:
         normalized = {k: v / total_weight for k, v in weights.items()}
         filtered = filtered.assign(custom_score=reweight(filtered, normalized))
