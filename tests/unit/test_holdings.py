@@ -244,6 +244,18 @@ class TestCsvRoundTrip:
         with pytest.raises(ValueError, match="empty"):
             hl.from_csv("")
 
+    @pytest.mark.parametrize("bad", ["nan", "NaN", "inf", "-inf", "0", "-5"])
+    def test_non_finite_or_non_positive_numbers_name_the_line(self, bad: str) -> None:
+        # `float("nan")` parses, and every comparison against NaN is False, so a
+        # plain `<= 0` guard lets it through. A NaN share count then silently
+        # erased the position further downstream instead of rejecting the file.
+        csv_text = f"symbol,action,shares,price,date\nAAPL,buy,{bad},10,2024-01-01\n"
+        with pytest.raises(ValueError, match="row 2 is invalid"):
+            hl.from_csv(csv_text)
+        csv_text = f"symbol,action,shares,price,date\nAAPL,buy,10,{bad},2024-01-01\n"
+        with pytest.raises(ValueError, match="row 2 is invalid"):
+            hl.from_csv(csv_text)
+
 
 class TestSectorWeights:
     def test_weights_sum_to_one(self) -> None:
@@ -283,3 +295,36 @@ class TestReplaceTransactions:
         store.save(hl.example_state())
         updated = hl.replace_transactions(store, [], cash=42.0)
         assert updated.cash == pytest.approx(42.0)
+
+
+# A restored log is validated in the shared helper, so BOTH backends have to
+# reject the same file -- ADR 4.5's "one code path, not two". Before this, the
+# session backend stored an unreplayable log and the Portfolio page then raised
+# on every later render, because the first thing it does is replay what it just
+# stored.
+@pytest.mark.parametrize("store", STORES, indirect=True)
+class TestReplaceTransactionsValidates:
+    def _impossible_log(self) -> list[Transaction]:
+        # Sells 5 shares that were never bought.
+        return [
+            Transaction(symbol="AAPL", action="sell", shares=5, price=100.0, date=date(2024, 1, 5))
+        ]
+
+    def test_an_unreplayable_log_is_rejected(self, store: hl.PortfolioStore) -> None:
+        with pytest.raises(ValueError, match="only 0.000000 were held"):
+            hl.replace_transactions(store, self._impossible_log())
+
+    def test_nothing_is_stored_when_it_is_rejected(self, store: hl.PortfolioStore) -> None:
+        store.add_transaction(_buy("MSFT", 4, 300.0, date(2024, 1, 2)))
+        with pytest.raises(ValueError):
+            hl.replace_transactions(store, self._impossible_log())
+        # The previous, valid log is untouched -- and, critically, still
+        # replayable, so the page can render.
+        state = store.load()
+        assert [tx.symbol for tx in state.transactions] == ["MSFT"]
+        assert store.current_positions()["MSFT"].shares == pytest.approx(4.0)
+
+    def test_a_valid_log_still_replaces(self, store: hl.PortfolioStore) -> None:
+        store.add_transaction(_buy("MSFT", 4, 300.0, date(2024, 1, 2)))
+        hl.replace_transactions(store, [_buy("TSLA", 2, 200.0, date(2025, 1, 1))])
+        assert [tx.symbol for tx in store.load().transactions] == ["TSLA"]
