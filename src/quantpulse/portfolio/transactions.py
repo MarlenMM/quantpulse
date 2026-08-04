@@ -269,9 +269,16 @@ def build_lot_book(
     """
     by_symbol_tx: dict[str, list[Transaction]] = {}
     for tx in transactions:
-        if tx.shares <= 0:
+        # `not (x > 0)` rather than `x <= 0` on purpose: every comparison
+        # against NaN is False, so `NaN <= 0` does not raise and a NaN share
+        # count used to sail through here. It then silently erased the position
+        # (NaN fails the later "still open" comparisons too), so an imported
+        # CSV could leave a holding out of the portfolio entirely without ever
+        # reporting an error. Infinity passed the old check legitimately and
+        # produced an infinite market value on the Portfolio page.
+        if not math.isfinite(tx.shares) or not tx.shares > 0:
             raise ValueError(f"transaction shares must be > 0, got {tx.shares} for {tx.symbol}")
-        if tx.price <= 0:
+        if not math.isfinite(tx.price) or not tx.price > 0:
             raise ValueError(f"transaction price must be > 0, got {tx.price} for {tx.symbol}")
         if tx.action not in ("buy", "sell"):
             raise ValueError(f"transaction action must be 'buy' or 'sell', got {tx.action!r}")
@@ -279,7 +286,7 @@ def build_lot_book(
 
     by_symbol_splits: dict[str, list[StockSplit]] = {}
     for sp in splits:
-        if sp.ratio <= 0:
+        if not math.isfinite(sp.ratio) or not sp.ratio > 0:
             raise ValueError(f"split ratio must be > 0, got {sp.ratio} for {sp.symbol}")
         by_symbol_splits.setdefault(sp.symbol, []).append(sp)
 
@@ -325,7 +332,7 @@ def positions(
 ) -> dict[str, Position]:
     """The current holdings snapshot Section 13's `portfolio_holdings` derives from `lot_book`.
 
-    A symbol missing (or non-positive/NaN) in `current_prices` gets
+    A symbol missing (or non-positive/NaN/infinite) in `current_prices` gets
     `current_price=None`, `market_value=None`, `unrealized_gain=None`, and
     `is_stale=True` -- Section 30's "fail gracefully... rather than erroring
     out the whole Portfolio page over one bad ticker" -- instead of raising.
@@ -338,9 +345,13 @@ def positions(
         shares = sum(lot.shares for lot in lots)
         cost_basis = sum(lot.cost_basis for lot in lots)
         raw_price = prices.get(symbol)
+        # `math.isfinite` covers NaN *and* infinity. Screening only for NaN let
+        # an infinite quote through, which produced an infinite market value
+        # presented as fresh (`is_stale=False`) -- a worse outcome than the
+        # stale-price path this guard exists to take.
         price = (
             float(raw_price)
-            if raw_price is not None and not math.isnan(raw_price) and raw_price > 0
+            if raw_price is not None and math.isfinite(raw_price) and raw_price > 0
             else None
         )
         market_value = shares * price if price is not None else None
