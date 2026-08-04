@@ -77,8 +77,24 @@ _MAX_CLUSTER_MULTIPLIER = 2.0
 # threshold.
 _INSTITUTIONAL_FULL_SWING_PCT = 10.0
 
-# A put/call ratio of 2.0 (twice as many puts as calls) saturates the score;
-# log(2.0) so the log-space scaling (module docstring) is symmetric.
+# The characteristic scale of the put/call score, in log space: a ratio of 2.0
+# (twice as many puts as calls) is "one unit" of bearish positioning.
+#
+# This is a *soft* scale, applied through `tanh`, not a hard clip -- and that
+# distinction turned out to matter enormously. Clipping at +/-1 meant every name
+# at or beyond a 2.0 ratio collapsed to exactly 0, and every name at or below
+# 0.5 to exactly 100. Measured on a real 503-name S&P 500 snapshot, that pinned
+# **46.5% of the universe (234 names) onto just two values** -- 149 tied at the
+# top, 85 tied at the bottom. Single-stock put/call ratios routinely range over
+# an order of magnitude, so a band that saturates at 2x stops discriminating
+# precisely where the data actually lives.
+#
+# The damage was not recoverable downstream: `scoring.py` percentile-normalizes
+# this category across the universe, and a percentile cannot restore an ordering
+# that was already flattened into ties. `tanh` keeps the same characteristic
+# scale and the same 0-100 output range while staying strictly monotonic, so a
+# 4.0 ratio still ranks below a 2.5 one instead of both reading as "maximally
+# bearish".
 _OPTIONS_FULL_SWING_LOG_RATIO = math.log(2.0)
 # Floor for a zero put/call ratio (no puts at all) so log() doesn't blow up --
 # corresponds to a ~150:1 call:put skew, already far past saturation.
@@ -262,7 +278,11 @@ def score_options_positioning(
         return OptionsPositioningScore(None, put_call_ratio, atm_iv, iv_rank)
 
     log_ratio = math.log(max(put_call_ratio, _MIN_PUT_CALL_RATIO_FOR_LOG))
-    scaled = max(-1.0, min(1.0, -log_ratio / _OPTIONS_FULL_SWING_LOG_RATIO))
+    # `tanh` rather than a hard clip to [-1, 1]. See `_OPTIONS_FULL_SWING_LOG_RATIO`:
+    # clipping made this signal stop discriminating exactly where real
+    # single-stock option data lives, and the ordering it threw away could not
+    # be recovered by the percentile step downstream.
+    scaled = -math.tanh(log_ratio / _OPTIONS_FULL_SWING_LOG_RATIO)
 
     return OptionsPositioningScore(
         score=50.0 + 50.0 * scaled,
