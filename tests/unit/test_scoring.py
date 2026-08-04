@@ -143,10 +143,10 @@ class TestRatingHelpers:
         assert scoring._rating_from_percentile(pr, strong_buy_cutoff=90.0) == expected
 
     def test_regime_lifts_strong_buy_cutoff_only_when_risk_off(self) -> None:
-        assert scoring._strong_buy_cutoff(None) == 90.0
-        assert scoring._strong_buy_cutoff(50.0) == 90.0  # neutral: unchanged
-        assert scoring._strong_buy_cutoff(0.0) == 95.0  # fully risk-off: +5
-        assert scoring._strong_buy_cutoff(25.0) == pytest.approx(92.5)
+        assert scoring.strong_buy_cutoff(None) == 90.0
+        assert scoring.strong_buy_cutoff(50.0) == 90.0  # neutral: unchanged
+        assert scoring.strong_buy_cutoff(0.0) == 95.0  # fully risk-off: +5
+        assert scoring.strong_buy_cutoff(25.0) == pytest.approx(92.5)
 
 
 class TestBuildComposite:
