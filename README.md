@@ -18,8 +18,8 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,135** (unit, integration, and property-based via Hypothesis), all passing |
-| Core engine code | **~14,600** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
+| Automated tests | **1,177** (unit, integration, and property-based via Hypothesis), all passing |
+| Core engine code | **~14,800** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **8 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
 | Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** |
