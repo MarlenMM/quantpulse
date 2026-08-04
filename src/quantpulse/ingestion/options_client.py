@@ -38,6 +38,33 @@ _SOURCE = "yfinance_options"
 _DEFAULT_MIN_DAYS_OUT = 7
 _ATM_STRIKE_COUNT = 3  # strikes closest to the underlying price, averaged for one side's ATM IV
 
+# --------------------------------------------------------------------------- #
+# Plausibility guards on what the chain reports.
+#
+# yfinance serves whatever the upstream quote carries, and outside regular
+# trading hours a large share of contracts come back with stale or placeholder
+# quotes whose derived `impliedVolatility` collapses toward zero. Averaging
+# those produces a number that is well-formed, confident-looking and physically
+# impossible -- an ATM implied volatility of 0.46% for Apple, say. Because that
+# value is then persisted and ranked by `compute_iv_rank`, a silent bad read
+# does not stay local: it becomes a percentile that looks like a real signal.
+#
+# So a reading outside the band below is treated as *absent*, not as data. An
+# abstention is honest and visible downstream (every consumer already handles
+# None); a fabricated 0.5% volatility is neither.
+#
+# The floor is deliberately conservative -- far below any equity that has ever
+# actually traded (the quietest mega-cap utilities sit near 10-12%, and index
+# options only reach ~5% in the calmest regimes) -- so it rejects artifacts
+# without second-guessing genuine low-volatility readings.
+_MIN_PLAUSIBLE_ATM_IV = 0.01  # 1% annualized
+_MAX_PLAUSIBLE_ATM_IV = 5.0  # 500% annualized; above this is a bad quote, not a market
+# A put/call ratio built on a handful of contracts is arithmetic, not
+# positioning: at these volumes the ratio's own sampling error swamps the signal
+# (and a single call contract against 98 puts yields a "ratio" of 98). Both
+# sides must clear this before the ratio is reported at all.
+_MIN_CHAIN_VOLUME = 20.0
+
 # Same unofficial-endpoint caution as yfinance_client (Section 5).
 _rate_limiter = SimpleRateLimiter(min_interval_seconds=0.5)
 
@@ -94,6 +121,13 @@ def fetch_options_signals(
     expiration at least `min_days_out` days out. `atm_implied_volatility` is
     a raw snapshot, not an IV-rank — see `compute_iv_rank` and the module
     docstring.
+
+    Either signal is independently `None` when the chain doesn't actually
+    support it: an implied volatility outside `_MIN_PLAUSIBLE_ATM_IV` ..
+    `_MAX_PLAUSIBLE_ATM_IV`, or a put/call ratio whose either side traded fewer
+    than `_MIN_CHAIN_VOLUME` contracts. Both are common in free overnight data,
+    and reporting an impossible number is strictly worse than reporting none
+    (Section 22).
     """
     expiration = _select_expiration(symbol, min_days_out=min_days_out)
     if expiration is None:
@@ -111,7 +145,8 @@ def fetch_options_signals(
 
         call_volume = float(chain.calls["volume"].fillna(0).sum())
         put_volume = float(chain.puts["volume"].fillna(0).sum())
-        put_call_ratio = put_volume / call_volume if call_volume > 0 else None
+        thin = call_volume < _MIN_CHAIN_VOLUME or put_volume < _MIN_CHAIN_VOLUME
+        put_call_ratio = None if thin else put_volume / call_volume
 
         underlying_price = float(chain.underlying.get("regularMarketPrice") or 0.0)
         side_ivs = [
@@ -123,6 +158,10 @@ def fetch_options_signals(
             if iv is not None
         ]
         atm_implied_volatility = sum(side_ivs) / len(side_ivs) if side_ivs else None
+        if atm_implied_volatility is not None and not (
+            _MIN_PLAUSIBLE_ATM_IV <= atm_implied_volatility <= _MAX_PLAUSIBLE_ATM_IV
+        ):
+            atm_implied_volatility = None  # a bad quote, not a market reading
 
         return {
             "symbol": symbol,

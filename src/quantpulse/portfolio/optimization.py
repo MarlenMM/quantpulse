@@ -439,9 +439,12 @@ def views_from_composite_scores(
     * The mapping is rank-preserving and sign-symmetric about the mean, so a
       score above the universe average always produces a positive tilt.
 
-    `confidences` (0-1, intended for Section 7.5's `data_confidence`) shrinks
-    each view *toward the prior* individually -- a thinly-covered stock makes a
-    weaker claim rather than an equally loud one. Read
+    `confidences` shrinks each view *toward the prior* individually -- a
+    thinly-covered stock makes a weaker claim rather than an equally loud one.
+    It must be a **0-1 fraction**; Section 7.5's `data_confidence` is on a
+    0-100 scale, so pass `data_confidence / 100.0`. Values outside [0, 1] raise
+    rather than being clipped, because clipping would silently turn every
+    `data_confidence` into 1.0 and quietly disable the whole mechanism. Read
     `black_litterman_optimize`'s docstring before using it: non-uniform
     confidences interact with the covariance coupling in a way that can move a
     name against its own view.
@@ -459,7 +462,24 @@ def views_from_composite_scores(
 
     if confidences is not None:
         weight = pd.to_numeric(confidences, errors="coerce").reindex(tilt.index).fillna(0.0)
-        tilt = tilt * weight.clip(0.0, 1.0)
+        # Reject an out-of-range scale loudly instead of clipping it away. This
+        # parameter's documented source is Section 7.5's `data_confidence`,
+        # which `scoring.build_composite` emits on a **0-100** scale -- and a
+        # silent `.clip(0, 1)` would map every one of those values to exactly
+        # 1.0, so a thinly-covered stock and a fully-covered one would make
+        # equally loud claims while the caller believed they were being
+        # down-weighted. That is the failure this check exists to prevent: pass
+        # `data_confidence / 100.0`.
+        out_of_range = weight[(weight < 0.0) | (weight > 1.0)]
+        if not out_of_range.empty:
+            worst = float(out_of_range.abs().max())
+            raise ValueError(
+                "confidences must be fractions in [0, 1], but "
+                f"{len(out_of_range)} value(s) fall outside it (max magnitude "
+                f"{worst:g}). Section 7.5's `data_confidence` is on a 0-100 "
+                "scale -- pass `data_confidence / 100.0`."
+            )
+        tilt = tilt * weight
 
     return prior.reindex(tilt.index) + tilt
 

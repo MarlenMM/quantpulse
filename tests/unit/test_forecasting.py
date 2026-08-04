@@ -250,6 +250,80 @@ class TestML:
 
 
 # --------------------------------------------------------------------------- #
+# Residual-band holdout purging
+#
+# Row `t`'s label is `close(t + h)`, so a plain chronological split still lets
+# the last `h` core rows be trained on outcomes drawn from inside the holdout
+# window. That makes the residuals -- and therefore the published prediction
+# interval -- narrower than the model has earned. These tests pin the purge.
+# --------------------------------------------------------------------------- #
+
+
+class TestMLHoldoutPurge:
+    @staticmethod
+    def _spy_on_fits(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+        """Record the training-row count of every model fit, in order."""
+        import sklearn.ensemble as skl
+
+        real = skl.HistGradientBoostingRegressor
+        seen: list[int] = []
+
+        class Spy(real):  # type: ignore[misc,valid-type]
+            def fit(self, x, y, **kwargs):  # type: ignore[no-untyped-def]
+                seen.append(len(x))
+                return super().fit(x, y, **kwargs)
+
+        monkeypatch.setattr(skl, "HistGradientBoostingRegressor", Spy)
+        return seen
+
+    def test_core_fold_drops_exactly_the_horizon_rows_before_the_split(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen = self._spy_on_fits(monkeypatch)
+        n, h = 500, 63
+        result = fc.ml_forecast(_prices(_random_walk(n, seed=3)), h)
+        assert result is not None
+        # Two fits: the holdout (band) model, then the final point model on all
+        # training rows. The second is the honest count of trainable rows.
+        assert len(seen) == 2
+        n_core, n_train = seen
+        n_val = int(n_train * fc._ML_VAL_FRACTION)
+        assert n_core == n_train - n_val - h, (
+            "core fold must exclude the holdout AND the h rows whose labels reach into it"
+        )
+
+    def test_long_horizon_declines_the_band_rather_than_leaking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 400 bars at h=252 leaves no clean core after purging, so the empirical
+        # band must be declined outright -- only the point model is fit -- and
+        # the honest random-walk fallback (symmetric in log space) is used.
+        seen = self._spy_on_fits(monkeypatch)
+        result = fc.ml_forecast(_prices(_random_walk(400, seed=4)), 252)
+        assert result is not None
+        assert len(seen) == 1, "a leaky holdout model must not be fit at all"
+        assert result.lower_price < result.point_price < result.upper_price
+        assert result.point_price**2 == pytest.approx(
+            result.lower_price * result.upper_price, rel=1e-9
+        )
+
+    def test_residuals_come_only_from_rows_the_core_model_never_saw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The property the purge exists to guarantee, stated directly: the last
+        # bar any core label reads (core_end - 1 + h) must fall strictly before
+        # the first holdout row. Without the purge this is violated for every
+        # horizon >= 1.
+        seen = self._spy_on_fits(monkeypatch)
+        n, h = 500, 63
+        assert fc.ml_forecast(_prices(_random_walk(n, seed=7)), h) is not None
+        n_core, n_train = seen
+        first_holdout_row = n_train - int(n_train * fc._ML_VAL_FRACTION)
+        last_bar_a_core_label_reads = (n_core - 1) + h
+        assert last_bar_a_core_label_reads < first_holdout_row
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 
