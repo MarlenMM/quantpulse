@@ -203,35 +203,72 @@ class TestBuildComposite:
         assert scores.iloc[-1]["rating"] == "strong_sell"
 
     def test_absolute_mode_uses_fixed_thresholds(self) -> None:
-        # [90,50,10] percentiles to [100, 66.7, 33.3]; the absolute cutoffs
-        # (75/60/40/25) are then applied to those.
+        # Absolute mode uses the raw fixed-bar readings, NOT peer percentiles,
+        # so a 90 is a 90 whoever else is in the universe.
         raw = pd.DataFrame({"fundamental": [90.0, 50.0, 10.0]}, index=["A", "B", "C"])
         scores = scoring.build_composite(raw, rating_mode="absolute").scores.set_index("symbol")
-        assert scores.loc["A", "rating"] == "strong_buy"  # 100 >= 75
-        assert scores.loc["B", "rating"] == "buy"  # 66.7 >= 60
-        assert scores.loc["C", "rating"] == "sell"  # 33.3 >= 25
+        assert scores.loc["A", "rating"] == "strong_buy"  # >=75
+        assert scores.loc["B", "rating"] == "hold"  # 40..60
+        assert scores.loc["C", "rating"] == "strong_sell"  # <25
+        # And the sub-score itself is the raw reading, not a rank.
+        assert scores.loc["A", "fundamental_score"] == pytest.approx(90.0)
 
-    def test_absolute_mode_is_only_semi_absolute_and_says_so(self) -> None:
-        """Documented limitation, pinned so nobody mistakes it for a real bar.
+    def test_absolute_mode_judges_against_a_fixed_bar_not_the_peer_group(self) -> None:
+        """The whole point of the mode, and what it previously failed to do.
 
-        Every category feeding the composite is a cross-sectional percentile, so
-        the composite is close to uniform on 0-100 by construction whatever the
-        market is doing. Fixed cutoffs applied to it therefore still hand out
-        Strong Buys in a universally overpriced market -- absolute mode narrows
-        Section 22's "treating a relative ranking as an absolute judgment"
-        pitfall but does not escape it.
+        Two universes with IDENTICAL internal ranking but very different
+        underlying quality must not receive the same absolute ratings. While
+        absolute mode ran on percentile-normalized inputs it did exactly that --
+        the composite was near-uniform on 0-100 by construction, so fixed
+        cutoffs handed out the same count of Strong Buys in a boom and a crash
+        (Section 22's "treating a relative ranking as an absolute judgment").
         """
-        strong = pd.DataFrame(
-            {"technical": [float(i) for i in range(40)]}, index=[f"S{i}" for i in range(40)]
+        index = [f"S{i}" for i in range(40)]
+        # `technical` is a fixed 0-100 reading: 50 is neutral, 90 is strong.
+        healthy = pd.DataFrame({"technical": [60.0 + i * 0.5 for i in range(40)]}, index=index)
+        crashing = pd.DataFrame({"technical": [5.0 + i * 0.5 for i in range(40)]}, index=index)
+
+        healthy_ratings = list(
+            scoring.build_composite(healthy, rating_mode="absolute").scores["rating"]
         )
-        # The same ranks, but every underlying value ten times worse.
-        weak = pd.DataFrame(
-            {"technical": [float(i) - 1000.0 for i in range(40)]},
-            index=[f"S{i}" for i in range(40)],
+        crashing_ratings = list(
+            scoring.build_composite(crashing, rating_mode="absolute").scores["rating"]
         )
-        strong_ratings = scoring.build_composite(strong, rating_mode="absolute").scores["rating"]
-        weak_ratings = scoring.build_composite(weak, rating_mode="absolute").scores["rating"]
-        assert list(strong_ratings) == list(weak_ratings)
+
+        assert healthy_ratings != crashing_ratings
+        # A crashing market earns no Strong Buys at all, however its names rank
+        # against each other.
+        assert "strong_buy" in healthy_ratings
+        assert "strong_buy" not in crashing_ratings
+
+    def test_relative_mode_still_ranks_against_peers_in_any_market(self) -> None:
+        # The counterpart, and why both modes exist: relative mode is SUPPOSED
+        # to produce the same distribution regardless of market level.
+        index = [f"S{i}" for i in range(40)]
+        healthy = pd.DataFrame({"technical": [60.0 + i * 0.5 for i in range(40)]}, index=index)
+        crashing = pd.DataFrame({"technical": [5.0 + i * 0.5 for i in range(40)]}, index=index)
+        assert list(scoring.build_composite(healthy).scores["rating"]) == list(
+            scoring.build_composite(crashing).scores["rating"]
+        )
+
+    def test_absolute_mode_maps_polarity_and_momentum_onto_the_same_bar(self) -> None:
+        # Categories whose raw form is not 0-100 still have to land on the same
+        # fixed scale, or the weighted average mixes incompatible units.
+        raw = pd.DataFrame(
+            {
+                "sentiment": [1.0, 0.0, -1.0],
+                "industry_macro": [1.0, 0.0, -1.0],
+                "momentum": [10.0, 0.0, -10.0],  # far beyond the band
+            },
+            index=["A", "B", "C"],
+        )
+        absolute = scoring._absolute_subscores(raw)
+        assert absolute.loc["B", "sentiment"] == pytest.approx(50.0)
+        assert absolute.loc["A", "sentiment"] == pytest.approx(100.0)
+        assert absolute.loc["C", "industry_macro"] == pytest.approx(0.0)
+        assert absolute.loc["B", "momentum"] == pytest.approx(50.0)
+        assert absolute.loc["A", "momentum"] > 99.0
+        assert absolute.loc["C", "momentum"] < 1.0
 
     def test_risk_off_regime_hands_out_fewer_strong_buys(self) -> None:
         raw = pd.DataFrame(
