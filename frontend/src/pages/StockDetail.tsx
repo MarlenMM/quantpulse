@@ -157,6 +157,13 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                   <th scope="col" className="num">High</th>
                   <th scope="col" className="num">Hit rate</th>
                   <th scope="col" className="num">vs naive</th>
+                  <th
+                    scope="col"
+                    className="num"
+                    title="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record."
+                  >
+                    Windows
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -169,6 +176,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                     <td className="num">{formatPrice(f.upper_price)}</td>
                     <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
                     <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
+                    <td className="num">{f.hit_rate_windows ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -180,7 +188,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               random-walk forecast over the same periods. Read them together: a hit
               rate only means something against that baseline, which on real history
               is close to "how often the market simply went up". A model at or below
-              the naive column has not demonstrated any skill. Note that{" "}
+              the naive column has not demonstrated any skill.{" "}
+              <strong>Windows</strong> is how many separate historical periods those
+              rates were measured over; a dash means too few for a rate to mean
+              anything, so none is shown rather than a flattering one. Note that{" "}
               <strong>arima</strong> and <strong>baseline</strong> are near-duplicates
               by construction — once ARIMA has a drift term it converges to the
               random-walk-with-drift null — so the two agreeing is not corroboration.

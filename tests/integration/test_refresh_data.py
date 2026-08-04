@@ -9,10 +9,12 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
+from quantpulse.analysis import backtest as bt
 from quantpulse.storage.models import (
     AnalystConsensus,
     Base,
@@ -30,10 +32,34 @@ def _empty_df(columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
+def _stamp_migration_head(eng: Engine) -> None:
+    """Record the current Alembic head on a `create_all`-built database.
+
+    `run()` refuses to start against a database that isn't migrated up to head,
+    and it now checks that through its *own* session -- i.e. the temporary
+    database these tests actually use. A `create_all` schema has the right
+    tables but no `alembic_version` row at all, so without this the guard sees
+    "no revision" and (correctly) refuses. Stamping mirrors what
+    `alembic upgrade head` leaves behind.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[2]
+    head = ScriptDirectory.from_config(Config(str(root / "alembic.ini"))).get_current_head()
+    with eng.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE IF NOT EXISTS alembic_version (version_num TEXT)"))
+        connection.execute(sa.text("DELETE FROM alembic_version"))
+        connection.execute(
+            sa.text("INSERT INTO alembic_version (version_num) VALUES (:v)"), {"v": head}
+        )
+
+
 @pytest.fixture
 def engine(tmp_path: Path) -> Engine:
     eng = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
     Base.metadata.create_all(eng)
+    _stamp_migration_head(eng)
     return eng
 
 
@@ -862,3 +888,73 @@ class TestCriticalStepsFailLoudly:
         step("composite_scores", ok=False)
         step("tier1_news", ok=False)
         assert status == "failed"
+
+
+class TestPooledHitRateWindows:
+    """A pooled hit rate is only worth as much as its number of distinct windows.
+
+    Pooling twenty symbols multiplies the graded-pair count twentyfold without
+    adding a single window -- they all share one trading calendar, so they are
+    twenty readings of the same history. Measured on real data that inflated the
+    one-year horizon's apparent sample from 1-3 windows to 20-60 pairs, and the
+    ML model's "60% hit rate vs 52% naive" there was twenty correlated readings
+    of a single year.
+    """
+
+    @staticmethod
+    def _frames(n_symbols: int, bars: int) -> dict[str, pd.DataFrame]:
+        index = pd.DatetimeIndex(pd.bdate_range("2020-01-01", periods=bars))
+        out: dict[str, pd.DataFrame] = {}
+        for i in range(n_symbols):
+            rng = np.random.default_rng(100 + i)
+            close = 100 * np.exp(np.cumsum(rng.normal(0.0004, 0.015, bars)))
+            out[f"S{i}"] = pd.DataFrame(
+                {
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "volume": 1_000_000,
+                },
+                index=index,
+            )
+        return out
+
+    def _rates(self, frames: dict[str, pd.DataFrame], horizons: tuple[int, ...]):
+        with (
+            patch.object(refresh_data, "_FORECAST_HORIZONS", horizons),
+            patch.object(
+                refresh_data,
+                "_FORECAST_RUNNERS",
+                {"baseline": refresh_data._FORECAST_RUNNERS["baseline"]},
+            ),
+        ):
+            return refresh_data._pooled_hit_rates(frames)
+
+    def test_windows_count_periods_not_pooled_pairs(self) -> None:
+        # Ten symbols on one shared calendar: the pair count is ten times the
+        # window count, and it is the window count that gets reported.
+        frames = self._frames(n_symbols=10, bars=700)
+        rates = self._rates(frames, (5,))
+        assert ("baseline", 5) in rates
+        _rate, windows = rates[("baseline", 5)]
+        single = self._rates({"S0": frames["S0"]}, (5,))
+        assert windows == single[("baseline", 5)][1], (
+            "adding nine more symbols over the same dates must not add windows"
+        )
+
+    def test_a_thin_horizon_is_not_published_at_all(self) -> None:
+        # 700 bars grades plenty of 5-day windows and far too few 252-day ones
+        # (the horizon gate alone leaves almost no room), so the long horizon
+        # must be absent rather than reported from a handful of periods.
+        frames = self._frames(n_symbols=5, bars=700)
+        rates = self._rates(frames, (5, 252))
+        assert ("baseline", 5) in rates
+        assert rates[("baseline", 5)][1] >= bt.MIN_GRADED_WINDOWS
+        assert ("baseline", 252) not in rates
+
+    def test_a_published_rate_always_clears_the_minimum(self) -> None:
+        frames = self._frames(n_symbols=3, bars=900)
+        for (_model, _h), (rate, windows) in self._rates(frames, (5, 20, 63, 252)).items():
+            assert 0.0 <= rate <= 1.0
+            assert windows >= bt.MIN_GRADED_WINDOWS

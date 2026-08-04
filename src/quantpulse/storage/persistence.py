@@ -804,6 +804,7 @@ def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
             Forecast.upper_price,
             Forecast.historical_hit_rate,
             Forecast.baseline_hit_rate,
+            Forecast.hit_rate_windows,
             Forecast.generated_date,
         )
         .where(Forecast.symbol == symbol, Forecast.generated_date == latest)
@@ -821,6 +822,7 @@ def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
             "upper_price",
             "historical_hit_rate",
             "baseline_hit_rate",
+            "hit_rate_windows",
             "generated_date",
         ],
     )
