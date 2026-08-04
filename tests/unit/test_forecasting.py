@@ -581,3 +581,44 @@ class TestBandCalibration:
         corrected_width = corrected.upper_return - corrected.lower_return
         uncorrected_width = uncorrected.upper_return - uncorrected.lower_return
         assert corrected_width > uncorrected_width
+
+
+class TestArimaDrift:
+    """ARIMA must be able to express a horizon-dependent view.
+
+    statsmodels silently defaults to `trend="n"` when `d > 0`. With no drift
+    term the h-step forecast of a differenced series decays to a constant within
+    a few steps, so the model returned the SAME number at 5, 20, 63 and 252 days
+    for every symbol -- 83% of them under 0.1% on real history. It was presented
+    as one of three competing models, with its own track record, while being
+    structurally incapable of forecasting anything.
+    """
+
+    def test_forecast_scales_with_the_horizon(self) -> None:
+        # A series with real drift must produce a visibly larger move at a
+        # longer horizon. This is the exact property `trend="n"` destroyed.
+        prices = _prices(_random_walk(900, mu=0.0006, sigma=0.012, seed=31))
+        short = fc.statistical_forecast(prices, 5)
+        long = fc.statistical_forecast(prices, 252)
+        assert short is not None and long is not None
+        assert abs(long.point_return) > abs(short.point_return) * 5
+
+    def test_no_drift_collapses_to_a_flat_forecast(self) -> None:
+        # Pins the diagnosis itself, so a future edit that drops the trend term
+        # fails here with an explanation rather than silently regressing.
+        prices = _prices(_random_walk(900, mu=0.0006, sigma=0.012, seed=31))
+        flat = [
+            fc.statistical_forecast(prices, h, trend="n").point_return  # type: ignore[union-attr]
+            for h in (20, 63, 252)
+        ]
+        assert max(flat) - min(flat) < 1e-4, "no-drift ARIMA is flat across horizons"
+        assert all(abs(v) < 0.01 for v in flat)
+
+    def test_recovers_the_drift_of_a_deterministic_ramp(self) -> None:
+        # An exponential ramp has a known constant log-drift; a drifting ARIMA
+        # should forecast close to `drift * h` in log space.
+        n, per_bar = 600, 0.0005
+        path = 100.0 * np.exp(np.arange(n) * per_bar)
+        result = fc.statistical_forecast(_prices(path), 63)
+        assert result is not None
+        assert np.log1p(result.point_return) == pytest.approx(per_bar * 63, rel=0.25)
