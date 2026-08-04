@@ -93,6 +93,11 @@ _VOL_LOOKBACKS: tuple[int, ...] = (10, 21, 63)
 # spuriously-confident number off a handful of bars.
 _MIN_BASELINE_BARS = 20
 _MIN_ARIMA_BARS = 60
+# Drift specification for the ARIMA fit. statsmodels silently defaults to "n"
+# (no trend) when d > 0, which makes the h-step forecast flat at every horizon;
+# "t" is a time trend on the undifferenced log price, i.e. drift on the returns.
+# See `statistical_forecast`'s docstring for the measurements behind this.
+_ARIMA_TREND = "t"
 _MIN_ML_TRAIN_ROWS = 120
 _MIN_ML_VAL_ROWS = 20
 # Minimum core-fold rows left *after* purging the `horizon_days` rows whose
@@ -342,6 +347,7 @@ def statistical_forecast(
     confidence_level: float = DEFAULT_CONFIDENCE,
     order: tuple[int, int, int] = (1, 1, 1),
     seasonal_order: tuple[int, int, int, int] | None = None,
+    trend: str = _ARIMA_TREND,
 ) -> Forecast | None:
     """ARIMA/SARIMA forecast on the log-price series (Section 7.6).
 
@@ -357,6 +363,20 @@ def statistical_forecast(
     below `_MIN_ARIMA_BARS` bars, or if the fit fails to converge -- a graceful
     degradation to "no statistical forecast," never a crash (many real series
     won't fit a given order).
+
+    **`trend` must include a drift term, and that is not a detail.** statsmodels
+    defaults to `trend="n"` whenever `d > 0`, and with no drift the h-step
+    forecast of a differenced series decays to a constant within a few steps.
+    This model ran that way against real history and the result was a forecast
+    that was *identical at 5, 20, 63 and 252 days* for every symbol, 83% of them
+    under 0.1% -- a model structurally incapable of expressing a view, presented
+    to users as one of three competing forecasts with its own track record. With
+    `trend="t"` (a time trend on the undifferenced log price, i.e. drift on the
+    returns) the forecast scales with the horizon as it should: measured on AMD,
+    +0.21% / +0.85% / +2.69% / +10.78%, implying a per-bar drift of 0.000428
+    against the series' actual 0.000429. Note `"c"` and `"ct"` are rejected
+    outright by statsmodels when `d > 0`, so `"t"` is the drift specification
+    here, not a stylistic pick.
     """
     _validate_horizon(horizon_days)
     close = _close_series(prices)
@@ -375,6 +395,7 @@ def statistical_forecast(
                 log_price,
                 order=order,
                 seasonal_order=seasonal_order or (0, 0, 0, 0),
+                trend=trend,
             ).fit()
             forecast = fitted.get_forecast(steps=horizon_days)
             mean_path = np.asarray(forecast.predicted_mean, dtype=float)
