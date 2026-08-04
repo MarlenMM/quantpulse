@@ -73,7 +73,14 @@ def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
         df.index = df.index.tz_localize(None).normalize()
         df.index.name = "date"
         df.insert(0, "symbol", symbol)
-        return df.reset_index()
+        # Drop bars missing any OHLCV field at the source. Every one of these
+        # columns is NOT NULL in `price_history`, and yfinance emits partial
+        # bars for halted sessions and around listing changes -- deep history
+        # for a long-dead ticker is full of them. Both writers (the nightly and
+        # the cold-start seed) keep their own guard as well, but doing it here
+        # means a bar that cannot be stored never leaves the ingestion layer,
+        # so a third consumer can't reintroduce the same crash.
+        return df.dropna(subset=list(_PRICE_COLUMNS[2:])).reset_index()
 
     # `period` must be in the cache key: a 5d nightly pull and a max/10y seed
     # backfill for the same symbol are different data and must not collide.

@@ -193,6 +193,55 @@ def test_backfill_prices_skips_already_backfilled_and_fetches_the_rest(
     assert written == 3
 
 
+def test_backfill_drops_incomplete_bars_instead_of_aborting(factory: sessionmaker) -> None:
+    # The first real 1,206-symbol run died 12 seconds in on
+    # "NOT NULL constraint failed: price_history.close" -- deep history for a
+    # long-dead ticker is full of partial bars. One must cost one bar.
+    with factory() as session:
+        session.add(Ticker(symbol="AABA", name="AABA"))
+        session.commit()
+
+    df = _price_df("AABA", "2015-01-05")
+    df.loc[1, "close"] = float("nan")
+
+    with patch.object(seed.yfinance_client, "fetch_price_history", return_value=df):
+        written, _ = seed.backfill_prices(
+            ["AABA"],
+            period="max",
+            session_factory=_session_factory(factory),
+            today=date(2026, 7, 22),
+        )
+
+    assert written == 2
+    with factory() as session:
+        assert len(session.scalars(select(PriceHistory)).all()) == 2
+
+
+def test_one_unstorable_symbol_does_not_abort_the_whole_backfill(factory: sessionmaker) -> None:
+    # The caller's try/except used to wrap only the fetch, so a write failure
+    # took the entire run with it. Symbols after the bad one must still land.
+    with factory() as session:
+        for sym in ("AABA", "GOOD"):
+            session.add(Ticker(symbol=sym, name=sym))
+        session.commit()
+
+    broken = _price_df("AABA", "2015-01-05").drop(columns=["adj_close"])
+    good = _price_df("GOOD", "2015-01-05")
+
+    with patch.object(seed.yfinance_client, "fetch_price_history", side_effect=[broken, good]):
+        written, _ = seed.backfill_prices(
+            ["AABA", "GOOD"],
+            period="max",
+            session_factory=_session_factory(factory),
+            today=date(2026, 7, 22),
+        )
+
+    assert written == 3, "the symbol after the failure must still be written"
+    with factory() as session:
+        stored = {row.symbol for row in session.scalars(select(PriceHistory)).all()}
+    assert stored == {"GOOD"}
+
+
 def test_run_end_to_end_historical_mode(factory: sessionmaker) -> None:
     current = pd.DataFrame(
         [{"symbol": "AAPL", "name": "Apple Inc.", "sector": "Tech", "industry": "Devices"}]

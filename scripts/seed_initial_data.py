@@ -198,12 +198,26 @@ def _needs_backfill(session: Session, symbol: str, cutoff: date) -> bool:
     return oldest is None or oldest > cutoff
 
 
+# Every column `PriceHistory` declares NOT NULL (mirrors refresh_data's list).
+_PRICE_REQUIRED_COLUMNS = ("open", "high", "low", "close", "adj_close", "volume")
+
+
 def _upsert_price_history(session: Session, df: pd.DataFrame) -> int:
     # Mirrors refresh_data._upsert_price_history; kept local so the two one-off
     # scripts stay independent. Point-in-time rows are keyed by (symbol, date).
     if df.empty:
         return 0
-    records = df.to_dict("records")
+    # A bar missing a NOT NULL field aborts the insert, and here that used to
+    # abort the ENTIRE backfill: the caller's try/except wrapped only the fetch,
+    # so a single partial bar 40 years back killed a 1,206-symbol run 12 seconds
+    # in. `yfinance_client` now drops these at the source too; this stays as the
+    # write-boundary guard, because that independence is the whole reason the
+    # same defect could be fixed in the nightly and survive here.
+    present = [c for c in _PRICE_REQUIRED_COLUMNS if c in df.columns]
+    clean = df.dropna(subset=present) if present else df
+    if clean.empty:
+        return 0
+    records = clean.to_dict("records")
     stmt = sqlite_insert(PriceHistory).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["symbol", "date"],
@@ -230,14 +244,18 @@ def backfill_prices(
                 skipped += 1
                 continue
 
+        # The WRITE has to be inside this guard too, not just the fetch. With
+        # only the fetch protected, one unstorable row aborted the whole run --
+        # which is exactly what happened on the first real 1,206-symbol attempt.
+        # A symbol that cannot be stored costs that symbol.
         try:
             df = yfinance_client.fetch_price_history(symbol, period=period)
+            with session_factory() as session:
+                written = _upsert_price_history(session, df)
         except Exception:
             logger.exception("Backfill failed for %s (continuing)", symbol)
             continue
 
-        with session_factory() as session:
-            written = _upsert_price_history(session, df)
         rows_written += written
         logger.info("[%d/%d] %s: stored %d price rows", index, len(symbols), symbol, written)
 
