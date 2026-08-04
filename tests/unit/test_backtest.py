@@ -516,3 +516,50 @@ class TestStrategySignificance:
         assert result is not None and result.n_periods < 8
         significance = bt.bootstrap_strategy_significance(result)
         assert significance.sharpe is None and significance.cagr is None
+
+
+class TestPayoffRatio:
+    """The "b" in Kelly: what a win pays relative to what a loss costs.
+
+    Exists because `optimization.kelly_position_fraction` needs it and its own
+    docstring points at this module for it -- but nothing measured it, which is
+    why that Section 27 function had no caller at all.
+    """
+
+    def test_ratio_of_mean_win_to_mean_loss(self) -> None:
+        # wins mean +0.06, losses mean -0.02 -> ratio 3.0
+        returns = pd.Series([0.04, 0.08, -0.01, -0.03])
+        assert bt.payoff_ratio(returns) == pytest.approx(3.0)
+
+    def test_none_without_any_loss(self) -> None:
+        # No losses makes the ratio infinite, not large -- and an infinite payoff
+        # ratio would feed Kelly a bet it believes cannot lose.
+        assert bt.payoff_ratio(pd.Series([0.01, 0.02, 0.03])) is None
+
+    def test_none_without_any_win(self) -> None:
+        assert bt.payoff_ratio(pd.Series([-0.01, -0.02])) is None
+
+    def test_flat_periods_count_as_neither(self) -> None:
+        with_flat = pd.Series([0.04, 0.08, 0.0, 0.0, -0.01, -0.03])
+        without = pd.Series([0.04, 0.08, -0.01, -0.03])
+        assert bt.payoff_ratio(with_flat) == pytest.approx(bt.payoff_ratio(without))
+
+    def test_empty_and_all_nan_are_none(self) -> None:
+        assert bt.payoff_ratio(pd.Series(dtype=float)) is None
+        assert bt.payoff_ratio(pd.Series([float("nan"), float("nan")])) is None
+
+    def test_strategy_result_carries_it(self) -> None:
+        # It must reach the dataclass the refresh job persists from, not just
+        # exist as a loose helper.
+        index = pd.date_range("2021-01-01", periods=260, freq="B")
+        panel = pd.DataFrame(
+            {
+                "AAA": np.linspace(100, 180, len(index)),
+                "BBB": np.linspace(100, 120, len(index)),
+                "CCC": np.linspace(100, 90, len(index)),
+            },
+            index=index,
+        )
+        result = bt.backtest_strategy(panel, signal_fn=lambda as_of, hist: {"AAA": 1.0, "BBB": 0.5})
+        assert result is not None
+        assert result.payoff_ratio is None or result.payoff_ratio > 0

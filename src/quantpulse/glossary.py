@@ -310,6 +310,30 @@ TERMS: dict[str, tuple[str, str]] = {
         "ways, not one: it can mean sophisticated money betting against the company, or "
         "fuel for a squeeze if sentiment turns.",
     ),
+    "Days to cover": (
+        "Smart money",
+        "How many days of normal trading it would take short sellers to buy back "
+        "everything they have sold short. A high number means crowded positioning: "
+        "it is harder to exit quietly, which is what makes a squeeze possible.",
+    ),
+    "Monte Carlo fan chart": (
+        "Track record",
+        "Thousands of simulated future price paths, summarised by the range the middle "
+        "of them fall in. The fan widens with time because uncertainty compounds — that "
+        "widening is the point, not a flaw.",
+    ),
+    "Correlation cluster": (
+        "Portfolio",
+        "A group of holdings whose prices have tended to move together. Owning several "
+        "names from one cluster is less diversification than the count of holdings "
+        "suggests, because they are liable to fall at the same time.",
+    ),
+    "Kelly fraction": (
+        "Portfolio",
+        "A position size derived from a strategy's own win rate and average win/loss — "
+        "the mathematically growth-optimal bet. Full Kelly is famously too aggressive to "
+        "live with, so a fraction of it (here a quarter) is the practical form.",
+    ),
     # -- Portfolio bookkeeping --------------------------------------------- #
     "Cost basis": (
         "Portfolio",

@@ -36,7 +36,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice, search_symbols
-from quantpulse.analysis import risk
+from quantpulse.analysis import clustering, risk
 from quantpulse.portfolio import holdings as holdings_lib
 from quantpulse.portfolio import recommendations as recs
 from quantpulse.portfolio.transactions import Transaction, build_lot_book, holding_term, positions
@@ -349,6 +349,67 @@ def render_risk(frame: pd.DataFrame, cash: float) -> None:
                     else ""
                 )
             )
+
+    render_correlation_clusters(summary.correlations)
+
+
+# At least this many holdings before clustering says anything a reader couldn't
+# see by eye, and at least this many names per cluster on average so the answer
+# isn't "every holding is its own group".
+_MIN_HOLDINGS_TO_CLUSTER = 4
+_NAMES_PER_CLUSTER = 2
+
+
+def render_correlation_clusters(correlations: pd.DataFrame) -> None:
+    """Group holdings that move together (Section 7.1's correlation clustering).
+
+    The heatmap above shows every pairwise number; this answers the question a
+    reader actually has, which is "how many genuinely different bets do I own?"
+    Holding six names from one cluster is far less diversification than six
+    holdings implies, and that is invisible in a grid of pairwise numbers.
+
+    `risk.correlation_matrix` deliberately leaves a pair NaN when the two names
+    share too little overlapping history, and `cluster_by_correlation` refuses
+    to run on a matrix containing NaN rather than silently imputing. So thin
+    names are dropped here first, and reported as dropped.
+    """
+    if correlations is None or correlations.empty:
+        return
+
+    usable = correlations.dropna(axis=0, how="any").dropna(axis=1, how="any")
+    usable = usable.loc[usable.index, usable.index]
+    dropped = [s for s in correlations.index if s not in usable.index]
+    if len(usable) < _MIN_HOLDINGS_TO_CLUSTER:
+        return
+
+    n_clusters = max(2, min(len(usable) // _NAMES_PER_CLUSTER, 5))
+    try:
+        assignment = clustering.cluster_by_correlation(usable, n_clusters)
+    except ValueError:
+        return
+
+    groups: dict[int, list[str]] = {}
+    for symbol, cluster_id in assignment.items():
+        groups.setdefault(cluster_id, []).append(symbol)
+
+    st.markdown("**Correlation clusters**", help=tip("Correlation cluster"))
+    for members in sorted(groups.values(), key=len, reverse=True):
+        names = ", ".join(sorted(members))
+        if len(members) > 1:
+            st.markdown(f"- **{len(members)} names move together:** {names}")
+        else:
+            st.markdown(f"- **On its own:** {names}")
+    st.caption(
+        f"{len(groups)} distinct group(s) across {len(usable)} holdings. Names in the "
+        "same group have tended to rise and fall together, so they are closer to one "
+        "bet than to several — the count of holdings overstates diversification when "
+        "they cluster."
+        + (
+            f" Excluded for too little shared history: {', '.join(sorted(dropped))}."
+            if dropped
+            else ""
+        )
+    )
 
 
 def render_recommendations(frame: pd.DataFrame, cash: float) -> None:

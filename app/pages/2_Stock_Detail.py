@@ -35,6 +35,7 @@ from lib.format import (
     confidence_label,
     format_percent,
     format_price,
+    format_ratio,
     format_score,
     format_signed_percent,
     freshness_label,
@@ -43,6 +44,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice
+from quantpulse.analysis import forecasting, smart_money
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import chatbot
 from quantpulse.llm import narrative as llm_narrative
@@ -51,6 +53,12 @@ from quantpulse.llm.providers import get_provider
 st.set_page_config(page_title="QuantPulse — Stock Detail", page_icon="🔬", layout="wide")
 
 SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
+
+# Monte Carlo settings. A quarter ahead is long enough for the fan to visibly
+# widen without running past the point the calibration means anything; the path
+# count is `forecasting`'s own default, kept explicit so the caption can state it.
+_MONTE_CARLO_HORIZON = 63
+_MONTE_CARLO_PATHS = 10_000
 
 
 def render_analyst_comparison(symbol: str, row: pd.Series) -> None:
@@ -83,6 +91,91 @@ def render_analyst_comparison(symbol: str, row: pd.Series) -> None:
         f"{total} analysts · mean target {format_price(target)} · as of {consensus['as_of_date']}"
     )
     st.plotly_chart(charts.sector_bar(counts, title="Analyst rating counts"), width="stretch")
+
+
+def render_short_interest(symbol: str) -> None:
+    """Section 24's short-interest panel — deliberately two readings, not one.
+
+    Section 24 is explicit and emphatic that this signal must not be collapsed
+    into a single directional verdict: heavy shorting can mean sophisticated
+    money is betting against the company, *or* it can set up a squeeze if
+    sentiment turns. `smart_money.py` honours that by keeping short interest out
+    of its blended score entirely and returning both readings intact — which
+    only means anything if a page shows them, and until now none did.
+    """
+    reading_row = data.short_interest(symbol)
+    if reading_row is None:
+        return
+
+    reading = smart_money.read_short_interest(reading_row)
+    if reading.pct_float_short is None and reading.days_to_cover is None:
+        return
+
+    st.subheader("Short interest", help=tip("Short interest"))
+    left, right = st.columns(2)
+    left.metric(
+        "% of float short",
+        format_percent(reading.pct_float_short / 100.0)
+        if reading.pct_float_short is not None
+        else "—",
+        help=tip("Short interest"),
+    )
+    right.metric(
+        "Days to cover",
+        format_ratio(reading.days_to_cover) if reading.days_to_cover is not None else "—",
+        help=tip("Days to cover"),
+    )
+    if reading.elevated:
+        st.warning(
+            "**Elevated short interest — and that cuts both ways.** It can mean "
+            "informed investors are betting against this company. It can equally "
+            "set up a **short squeeze**: a crowded short position that has to buy "
+            "back quickly if the story improves, which pushes the price *up*. "
+            "QuantPulse does not score this as bullish or bearish, because the same "
+            "number genuinely supports both readings."
+        )
+    else:
+        st.caption(
+            "Short interest is not elevated. Shown as context only — it is "
+            "deliberately excluded from the Smart Money score, since the same "
+            "figure can be read as bearish conviction or as squeeze potential."
+        )
+
+
+def render_monte_carlo(symbol: str, bars: pd.DataFrame) -> None:
+    """Section 7.6's Monte Carlo fan chart — simulated paths, not a point forecast.
+
+    Deliberately separate from the stored-forecast fan above, and labelled as a
+    different *kind* of answer. The models above each commit to one number per
+    horizon; this simulates thousands of random-walk paths calibrated to this
+    stock's own history and reports the range they spread into. It is the same
+    random-walk-with-drift model `baseline_forecast` uses, executed by
+    simulation instead of closed form, which is exactly why it is NOT entered as
+    a fourth competing model in the table above — it would be grading the
+    baseline against itself under simulation noise.
+    """
+    if bars.empty or len(bars) < 60:
+        return
+
+    prices = bars.rename(columns=str.lower)
+    fan = forecasting.monte_carlo_fan_chart(prices, _MONTE_CARLO_HORIZON)
+    if fan is None:
+        return
+
+    st.subheader("Simulated price paths", help=tip("Monte Carlo fan chart"))
+    st.caption(
+        f"{_MONTE_CARLO_PATHS:,} random-walk paths over the next "
+        f"{_MONTE_CARLO_HORIZON} trading days, calibrated to this stock's own "
+        "historical drift and volatility. The shaded band is the middle 90% of "
+        "simulated outcomes; it widens with time because uncertainty compounds — "
+        "that widening is the message. This is a range of possibilities, not a "
+        "prediction, and it assumes the future resembles the past."
+    )
+    st.plotly_chart(charts.monte_carlo_fan_chart(bars, fan), width="stretch")
+    st.caption(
+        f"Calibrated on {fan.n_train:,} daily returns "
+        f"(drift {fan.mu * 100:.3f}%/day, volatility {fan.sigma * 100:.2f}%/day)."
+    )
 
 
 def _none_if_nan(value: object) -> float | None:
@@ -360,8 +453,11 @@ def main() -> None:
             "horizon (Section 7.6) — shown next to the forecast, not hidden on another page."
         )
 
+    render_monte_carlo(symbol, bars)
+
     st.divider()
     render_analyst_comparison(symbol, row)
+    render_short_interest(symbol)
 
     st.divider()
     st.subheader("What's driving this", help=tip("Sentiment score"))

@@ -498,6 +498,7 @@ class BacktestResult(Base):
     ci_confidence_level: Mapped[float | None] = mapped_column(Float)
     max_drawdown: Mapped[float | None] = mapped_column(Float)
     win_rate: Mapped[float | None] = mapped_column(Float)
+    payoff_ratio: Mapped[float | None] = mapped_column(Float)
     benchmark_cagr: Mapped[float | None] = mapped_column(Float)
     benchmark_sharpe: Mapped[float | None] = mapped_column(Float)
     avg_turnover: Mapped[float | None] = mapped_column(Float)
