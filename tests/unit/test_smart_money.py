@@ -135,15 +135,34 @@ def test_options_neutral_ratio_is_50() -> None:
 def test_options_log_scale_is_symmetric() -> None:
     bearish = sm.score_options_positioning({"put_call_ratio": 2.0, "atm_implied_volatility": 0.3})
     bullish = sm.score_options_positioning({"put_call_ratio": 0.5, "atm_implied_volatility": 0.3})
-    assert bearish.score == pytest.approx(0.0)
-    assert bullish.score == pytest.approx(100.0)
-    # Symmetric distance from neutral (50), not a raw linear-ratio distance.
+    neutral = sm.score_options_positioning({"put_call_ratio": 1.0, "atm_implied_volatility": 0.3})
+    assert neutral.score == pytest.approx(50.0)
+    # Reciprocal ratios sit equally far either side of neutral, in log space --
+    # not a raw linear-ratio distance.
     assert (50.0 - bearish.score) == pytest.approx(bullish.score - 50.0)
 
 
-def test_options_partial_ratio_between_neutral_and_saturation() -> None:
+def test_options_score_never_saturates_so_ordering_survives() -> None:
+    """The fix for a signal that stopped discriminating where the data lives.
+
+    Hard-clipping at a 2.0 ratio pinned 46.5% of a real 503-name S&P 500
+    snapshot (234 names) onto exactly two values. Single-stock put/call ratios
+    routinely span an order of magnitude, and `scoring.py` percentile-normalizes
+    this category afterwards -- a percentile cannot restore an ordering that has
+    already been flattened into ties, so the information was gone for good.
+    """
+    ratios = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 10.0, 50.0, 141.0]
+    scores = [sm.score_options_positioning({"put_call_ratio": r}).score for r in ratios]
+
+    # Strictly decreasing: every distinguishable ratio keeps a distinct rank.
+    assert all(a > b for a, b in zip(scores, scores[1:], strict=False))
+    # And none collapses onto the boundary, even at the real-data extreme of 141.
+    assert all(0.0 < s < 100.0 for s in scores)
+
+
+def test_options_partial_ratio_between_neutral_and_the_bearish_end() -> None:
     result = sm.score_options_positioning({"put_call_ratio": 1.4, "atm_implied_volatility": 0.3})
-    assert 0.0 < result.score < 50.0  # more puts than calls -> below neutral, not yet saturated
+    assert 0.0 < result.score < 50.0  # more puts than calls -> below neutral
 
 
 def test_options_zero_ratio_does_not_crash_and_saturates_bullish() -> None:
