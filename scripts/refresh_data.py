@@ -13,6 +13,7 @@ only add "database is locked" failures without buying any real parallelism.
 """
 
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -374,10 +375,31 @@ def fetch_ticker_data(
     return result
 
 
+# Every column `PriceHistory` declares NOT NULL. A bar missing any of them is
+# not a bar -- yfinance emits these for halted names, the not-yet-settled
+# current session, and tickers that changed listing status mid-fetch.
+_PRICE_REQUIRED_COLUMNS = ("open", "high", "low", "close", "adj_close", "volume")
+
+
 def _upsert_price_history(session: Session, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
-    records = df.to_dict("records")
+    # Drop incomplete bars *before* the insert. Passing a NaN into a NOT NULL
+    # column raises IntegrityError, and because this loop is the one write stage
+    # that isn't behind `step()`, that exception used to abort the entire
+    # nightly run: every later ticker's prices, fundamentals and smart-money
+    # rows were rolled back with it. That is exactly how the deployed demo went
+    # four days without a price update while GitHub Actions still reported
+    # success (see run 30878926050). A missing bar should cost that one bar.
+    present = [c for c in _PRICE_REQUIRED_COLUMNS if c in df.columns]
+    clean = df.dropna(subset=present) if present else df
+    if len(clean) < len(df):
+        dropped = len(df) - len(clean)
+        symbol = df["symbol"].iloc[0] if "symbol" in df.columns and not df.empty else "?"
+        logger.warning("%s: dropped %d incomplete price bar(s)", symbol, dropped)
+    if clean.empty:
+        return 0
+    records = clean.to_dict("records")
     stmt = sqlite_insert(PriceHistory).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["symbol", "date"],
@@ -1112,7 +1134,7 @@ def refresh_tier2_news(session: Session, today: date) -> int:
     return persistence.upsert_news_events(session, records)
 
 
-def run(job_name: str = "refresh_data") -> None:
+def run(job_name: str = "refresh_data") -> str:
     run_id = configure_logging(get_settings().log_level)
     logger.info("%s starting (run_id=%s)", job_name, run_id)
     started_at = datetime.now()
@@ -1131,7 +1153,7 @@ def run(job_name: str = "refresh_data") -> None:
                     rows_updated=0,
                 )
             )
-        return
+        return "skipped_non_trading_day"
 
     def step(name: str, fn: "Any") -> int:
         """Run one refresh sub-step, degrading a failure to 'partial' rather than aborting.
@@ -1192,22 +1214,36 @@ def run(job_name: str = "refresh_data") -> None:
                 if result.errors:
                     logger.warning("%s: %s", result.symbol, "; ".join(result.errors))
                     status = "partial"
-                if result.price_df is not None:
-                    rows_updated += _upsert_price_history(session, result.price_df)
-                if result.fundamentals is not None:
-                    _upsert_fundamentals(
-                        session,
-                        result.symbol,
-                        today,
-                        _fundamentals_with_ffo(result.fundamentals, result.ffo_inputs),
-                    )
-                    rows_updated += 1
-                if result.analyst_consensus is not None:
-                    _upsert_analyst_consensus(
-                        session, result.symbol, today, result.analyst_consensus
-                    )
-                    rows_updated += 1
-                rows_updated += _persist_per_ticker_smart_money(session, result, today)
+                # Each symbol's writes go in their own SAVEPOINT. Every other
+                # stage in this run is isolated behind `step()`; without the
+                # same treatment here, a single malformed row from one of ~500
+                # tickers raises mid-loop and discards every symbol's writes,
+                # turning one bad ticker into a total outage that still exits 0.
+                # Now a bad ticker costs that ticker and downgrades to "partial".
+                try:
+                    with session.begin_nested():
+                        symbol_rows = 0
+                        if result.price_df is not None:
+                            symbol_rows += _upsert_price_history(session, result.price_df)
+                        if result.fundamentals is not None:
+                            _upsert_fundamentals(
+                                session,
+                                result.symbol,
+                                today,
+                                _fundamentals_with_ffo(result.fundamentals, result.ffo_inputs),
+                            )
+                            symbol_rows += 1
+                        if result.analyst_consensus is not None:
+                            _upsert_analyst_consensus(
+                                session, result.symbol, today, result.analyst_consensus
+                            )
+                            symbol_rows += 1
+                        symbol_rows += _persist_per_ticker_smart_money(session, result, today)
+                except Exception:
+                    logger.exception("Failed persisting %s; skipping it", result.symbol)
+                    status = "partial"
+                else:
+                    rows_updated += symbol_rows
 
         # Daily cross-asset ingestion feeds the (daily) Market Regime Index.
         rows_updated += step(
@@ -1273,7 +1309,15 @@ def run(job_name: str = "refresh_data") -> None:
                 rows_updated=rows_updated,
             )
         )
+    return status
 
 
 if __name__ == "__main__":
-    run()
+    # Exit non-zero on a hard failure so the scheduled workflow actually goes
+    # red. Previously `run()` caught everything, recorded status="failed" in
+    # `refresh_log`, and still exited 0 -- so GitHub Actions reported four
+    # consecutive successes while the deployed demo's prices sat frozen and
+    # nobody had any reason to look. "partial" stays green on purpose: that is
+    # the designed degradation for one flaky upstream source, not an outage.
+    if run() == "failed":
+        sys.exit(1)

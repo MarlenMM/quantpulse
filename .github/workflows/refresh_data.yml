@@ -52,7 +52,14 @@ jobs:
       # also what keeps the scheduled workflow itself from being
       # auto-disabled after 60 days of no repo activity (ADR 4.4's own
       # caveat) -- a side effect, not a separate thing to remember to do.
+      #
+      # `if: always()` because the refresh step now exits non-zero on a hard
+      # failure (so the job actually goes red instead of silently reporting
+      # success for days). Whatever data did land before the failure is still
+      # worth committing -- the point of the exit code is visibility, not
+      # discarding a partly-successful night's work.
       - name: Commit refreshed demo database
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
