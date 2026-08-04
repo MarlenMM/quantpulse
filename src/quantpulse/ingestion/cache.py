@@ -22,13 +22,31 @@ def cached_dataframe(
     cache_dir: Path,
     ttl: timedelta | None = None,
 ) -> pd.DataFrame:
-    """Return `fetch()`, cached as Parquet under `cache_dir/{key}.parquet`."""
+    """Return `fetch()`, cached as Parquet under `cache_dir/{key}.parquet`.
+
+    **An empty result is never cached.** Emptiness from these sources is almost
+    always transient -- a throttled request, a 404 during a listing change --
+    not a durable fact about the symbol, and persisting it converts a momentary
+    failure into a lasting one for the whole TTL. That is not hypothetical: the
+    first full cold-start backfill cached an empty frame for `AAPL`, and every
+    later call read that back for 12 hours without touching the network, so 625
+    of 1,067 symbols -- including Apple, Amazon and Adobe -- silently ended up
+    with no price history at all.
+
+    Re-fetching a genuinely dataless symbol costs one request; caching a
+    throttled one costs that symbol for the rest of the TTL. The asymmetry is
+    the whole argument.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / f"{key}.parquet"
     if _is_fresh(path, ttl):
-        return pd.read_parquet(path)
+        cached = pd.read_parquet(path)
+        # Tolerate empties already on disk from before this rule existed.
+        if not cached.empty:
+            return cached
     df = fetch()
-    df.to_parquet(path)
+    if not df.empty:
+        df.to_parquet(path)
     return df
 
 
