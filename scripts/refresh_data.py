@@ -760,6 +760,15 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
             "momentum_score": _none_if_nan(row.momentum_score),
             "industry_macro_score": _none_if_nan(row.industry_macro_score),
             "smart_money_score": _none_if_nan(row.smart_money_score),
+            # The pre-normalization inputs, so a stored row can be re-scored in
+            # absolute mode later -- a percentile cannot be un-ranked.
+            "fundamental_raw": _none_if_nan(row.fundamental_raw),
+            "technical_raw": _none_if_nan(row.technical_raw),
+            "analyst_raw": _none_if_nan(row.analyst_raw),
+            "sentiment_raw": _none_if_nan(row.sentiment_raw),
+            "momentum_raw": _none_if_nan(row.momentum_raw),
+            "industry_macro_raw": _none_if_nan(row.industry_macro_raw),
+            "smart_money_raw": _none_if_nan(row.smart_money_raw),
             "composite_score": float(row.composite_score),
             "percentile_rank": _none_if_nan(row.percentile_rank),
             "rating": row.rating,

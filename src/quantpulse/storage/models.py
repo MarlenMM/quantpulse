@@ -397,6 +397,28 @@ class CompositeScore(Base):
     momentum_score: Mapped[float | None] = mapped_column(Float)
     industry_macro_score: Mapped[float | None] = mapped_column(Float)
     smart_money_score: Mapped[float | None] = mapped_column(Float)
+    # The per-category values BEFORE normalization, on each scorer's own native
+    # scale (0-100 fixed readings for fundamental/technical/analyst/smart_money,
+    # a [-1, 1] polarity for sentiment/industry_macro, a raw mean/std ratio for
+    # momentum).
+    #
+    # Stored because the `*_score` columns above are cross-sectional percentiles,
+    # and that transform is lossy in exactly the way that matters: an absolute
+    # rating cannot be recovered from a rank. Without these, `rating_mode=
+    # "absolute"` was correct code that no UI could ever reach.
+    #
+    # They belong on this profile-keyed row rather than in a separate table
+    # because they really are profile-dependent: the conservative profile's
+    # `prefer_low_volatility` makes `score_momentum` return negative volatility
+    # instead of a risk-adjusted return, so "the raw momentum for AAPL today"
+    # has no single profile-independent answer.
+    fundamental_raw: Mapped[float | None] = mapped_column(Float)
+    technical_raw: Mapped[float | None] = mapped_column(Float)
+    analyst_raw: Mapped[float | None] = mapped_column(Float)
+    sentiment_raw: Mapped[float | None] = mapped_column(Float)
+    momentum_raw: Mapped[float | None] = mapped_column(Float)
+    industry_macro_raw: Mapped[float | None] = mapped_column(Float)
+    smart_money_raw: Mapped[float | None] = mapped_column(Float)
     composite_score: Mapped[float] = mapped_column(Float)
     percentile_rank: Mapped[float | None] = mapped_column(Float)
     rating: Mapped[str] = mapped_column(String(15))

@@ -65,6 +65,12 @@ from quantpulse.analysis.investor_profiles import CATEGORIES, InvestorProfile, g
 
 # Column name each category writes to `composite_scores` (Section 13).
 CATEGORY_SCORE_COLUMNS: dict[str, str] = {category: f"{category}_score" for category in CATEGORIES}
+# The pre-normalization inputs, carried through to `composite_scores` alongside
+# the normalized ones. The normalized columns are cross-sectional percentiles,
+# and a rank cannot be turned back into an absolute reading -- so without these
+# a stored row can only ever be re-scored in relative mode, whatever
+# `rating_mode` a caller asks for later.
+CATEGORY_RAW_COLUMNS: dict[str, str] = {category: f"{category}_raw" for category in CATEGORIES}
 
 RATINGS = ("strong_buy", "buy", "hold", "sell", "strong_sell")
 
@@ -454,9 +460,18 @@ def build_composite(
         else:
             result["rating"] = result["composite_score"].apply(_rating_from_absolute)
 
+    # Carry the inputs through untouched next to the normalized outputs, so a
+    # stored row can be re-scored in EITHER mode later (see CATEGORY_RAW_COLUMNS).
+    for category in CATEGORIES:
+        source = category_raw[category] if category in category_raw.columns else np.nan
+        result[CATEGORY_RAW_COLUMNS[category]] = pd.to_numeric(
+            pd.Series(source, index=category_raw.index), errors="coerce"
+        ).reindex(result.index)
+
     ordered_columns = (
         ["symbol"]
         + [CATEGORY_SCORE_COLUMNS[c] for c in CATEGORIES]
+        + [CATEGORY_RAW_COLUMNS[c] for c in CATEGORIES]
         + ["composite_score", "percentile_rank", "rating", "data_confidence"]
     )
     result = result.rename(columns=CATEGORY_SCORE_COLUMNS)
