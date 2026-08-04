@@ -145,6 +145,38 @@ uv run python scripts/seed_initial_data.py   # one-time historical backfill (slo
 uv run python scripts/refresh_data.py        # nightly incremental refresh + scoring
 ```
 
+The backfill takes a few hours for the full ~1,200-symbol universe and is
+resumable — it infers progress from the database, so re-running it continues
+rather than starting over. Expect roughly 300 MB.
+
+#### Known limitation: survivorship coverage of delisted companies
+
+The backtest is built to be survivorship-bias-free: `index_membership_history`
+records point-in-time index membership, so a company that was in the S&P 500 in
+2019 and later went bankrupt is *in* the 2019 rebalance and realises its loss
+rather than vanishing from history.
+
+That machinery only helps if those companies have **prices**. They largely
+don't. On a real full backfill, price history was available for **98.8% of
+current members but only 49% of delisted ones** — free sources simply do not
+carry most long-dead tickers. `seed_initial_data.py` measures this and reports
+status `partial_survivorship_gap` when coverage falls below 50%, rather than
+letting it pass silently.
+
+**What this means when reading a backtest result here:** the losers are
+under-represented, so the track record is flattered by an unknown amount. The
+membership data is honest; the price coverage behind it is partial. This is
+stated rather than engineered around because no amount of code fixes a source
+that doesn't have the data (Section 22: an honestly-labelled limitation beats a
+silently inflated number).
+
+A related data-quality note: adjusted-close history for long-delisted names is
+frequently corrupt — one real example moved from $0.005 to $305.00 in a single
+bar. `read_adj_close_panel` drops any symbol containing a greater-than-10x
+bar-to-bar move, since a broken adjustment factor corrupts the whole series it
+scales. On the real universe this removed 26 of 825 symbols, and that count did
+not grow when the panel expanded by 330 names.
+
 ## Pages
 
 | Page | What it shows |
