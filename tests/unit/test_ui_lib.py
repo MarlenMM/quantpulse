@@ -188,6 +188,43 @@ class TestCharts:
         fig = charts.subscore_radar({"a": 10.0, "b": 20.0})
         assert "Not enough scored categories" in fig.layout.annotations[0].text
 
+    def test_horizon_offsets_are_trading_days_not_calendar_days(self) -> None:
+        # Every horizon in the project counts trading sessions -- (5, 20, 63,
+        # 252) is a week/month/quarter/year of *sessions*. Adding them as
+        # calendar days (what this used to do) drew the one-year forecast at
+        # roughly the eight-month mark: 114 days early, against real price
+        # history on the same axis.
+        anchor = pd.Timestamp("2026-08-04")  # a Tuesday, a real NYSE session
+        five, twenty, quarter, year = charts.horizon_dates(anchor, [5, 20, 63, 252])
+
+        assert five == pd.Timestamp("2026-08-11")
+        assert twenty == pd.Timestamp("2026-09-01")
+        # 252 sessions is a calendar year, not 252 calendar days.
+        assert 360 <= (year - anchor).days <= 372
+        assert (year - anchor).days - 252 > 100  # the size of the old error
+        # Strictly increasing, strictly after the anchor, and every point is a
+        # real trading day (no weekend/holiday markers on the axis).
+        assert anchor < five < twenty < quarter < year
+        for point in (five, twenty, quarter, year):
+            assert point.weekday() < 5
+
+    def test_forecast_fan_places_each_horizon_on_its_real_date(self) -> None:
+        forecasts = pd.DataFrame(
+            {
+                "model_name": ["gbr"] * 2,
+                "horizon_days": [5, 252],
+                "point_price": [105.0, 130.0],
+                "lower_price": [100.0, 90.0],
+                "upper_price": [110.0, 180.0],
+                "generated_date": [date(2026, 8, 4)] * 2,
+            }
+        )
+        fig = charts.forecast_fan_chart(self._ohlcv(), forecasts, model_name="gbr")
+        point_trace = next(t for t in fig.data if t.name == "Forecast")
+        far = pd.Timestamp(list(point_trace.x)[-1])
+        assert far == charts.horizon_dates(pd.Timestamp("2026-08-04"), [252])[0]
+        assert (far - pd.Timestamp("2026-08-04")).days > 350
+
     def test_forecast_fan_draws_a_band(self) -> None:
         forecasts = pd.DataFrame(
             {

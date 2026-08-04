@@ -15,17 +15,20 @@ channel: every chart that encodes a rating also labels it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
 
 from lib.format import RATING_DISPLAY, humanize
+from quantpulse.utils.market_calendar import trading_days_between
 
 __all__ = [
     "empty_figure",
     "price_chart",
     "subscore_radar",
+    "horizon_dates",
     "forecast_fan_chart",
     "monte_carlo_fan_chart",
     "allocation_pie",
@@ -140,6 +143,46 @@ def subscore_radar(sub_scores: dict[str, float | None], *, name: str = "") -> go
     return _base_layout(fig, height=380)
 
 
+# A generous calendar-days-per-trading-day ratio for sizing the session lookup
+# window: the real figure is ~1.45 (365 / 252), so 1.6 plus a fortnight always
+# spans far enough, including across a holiday-heavy stretch.
+_CALENDAR_SPAN_PER_TRADING_DAY = 1.6
+
+
+def horizon_dates(anchor: pd.Timestamp, offsets: Sequence[int]) -> list[pd.Timestamp]:
+    """Real calendar dates `offsets` **trading** days after `anchor`.
+
+    Every horizon in this project is counted in trading days -- `forecasting.
+    DEFAULT_HORIZONS` is `(5, 20, 63, 252)`, i.e. a week, a month, a quarter and
+    a year of *sessions* -- so plotting them by adding that many *calendar* days
+    puts every forecast in the wrong place on a date axis, and increasingly so
+    with distance: measured against the NYSE calendar from 2026-08-04, the
+    20-day point landed 8 days early, the 63-day point 27 days early, and the
+    252-day point **114 days early**. The one-year forecast was drawn at roughly
+    the eight-month mark, next to eight-month-old price history, which is the
+    kind of quietly-wrong picture Section 22 is about.
+
+    Falls back to a proportional calendar estimate only if the exchange calendar
+    somehow cannot reach the requested horizon, so a chart still draws.
+    """
+    if not offsets:
+        return []
+    steps = [int(offset) for offset in offsets]
+    furthest = max(steps)
+    window_end = anchor + pd.Timedelta(days=int(furthest * _CALENDAR_SPAN_PER_TRADING_DAY) + 21)
+    sessions = [
+        pd.Timestamp(day)
+        for day in trading_days_between(anchor.date(), window_end.date())
+        if pd.Timestamp(day) > anchor
+    ]
+    return [
+        sessions[step - 1]
+        if 0 < step <= len(sessions)
+        else anchor + pd.Timedelta(days=round(step * 365.0 / 252.0))
+        for step in steps
+    ]
+
+
 def forecast_fan_chart(
     history: pd.DataFrame, forecasts: pd.DataFrame, *, model_name: str | None = None
 ) -> go.Figure:
@@ -161,7 +204,8 @@ def forecast_fan_chart(
 
     selected = selected.sort_values("horizon_days")
     generated = pd.Timestamp(selected["generated_date"].iloc[0])
-    future_dates = [generated + pd.Timedelta(days=int(h)) for h in selected["horizon_days"]]
+    # `horizon_days` counts trading sessions, not calendar days (see `horizon_dates`).
+    future_dates = horizon_dates(generated, list(selected["horizon_days"]))
 
     fig = go.Figure()
     if not history.empty:
@@ -344,7 +388,11 @@ def monte_carlo_fan_chart(history: pd.DataFrame, fan: Any) -> go.Figure:
     generated = (
         pd.Timestamp(history["date"].iloc[-1]) if not history.empty else pd.Timestamp.today()
     )
-    future_dates = [generated + pd.Timedelta(days=int(d)) for d in fan.days]
+    # `fan.days` are trading-day offsets (1..horizon_days), so they have to be
+    # walked along the exchange calendar rather than added as calendar days --
+    # otherwise the fan is drawn compressed into two-thirds of the time it
+    # actually covers. See `horizon_dates`.
+    future_dates = horizon_dates(generated, list(fan.days))
 
     fig = go.Figure()
     if not history.empty:
