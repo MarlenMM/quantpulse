@@ -847,6 +847,12 @@ def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> 
                     "lower_price": fc.lower_price,
                     "upper_price": fc.upper_price,
                     "historical_hit_rate": hit_rates.get((fc.model_name, fc.horizon_days)),
+                    # The naive null's rate over the same horizon, so the UI can
+                    # show "55% vs 53% naive" instead of a bare number that
+                    # reads as skill. `baseline` is itself one of the runners,
+                    # so this is the identical pooling over the identical
+                    # sample -- not a second, differently-computed statistic.
+                    "baseline_hit_rate": hit_rates.get(("baseline", fc.horizon_days)),
                 }
             )
     return persistence.upsert_forecasts(session, records)

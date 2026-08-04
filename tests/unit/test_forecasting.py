@@ -513,3 +513,71 @@ class TestValidation:
     def test_confidence_out_of_range_raises(self) -> None:
         with pytest.raises(ValueError, match="confidence_level"):
             fc.baseline_forecast(_prices(_random_walk(300)), 20, confidence_level=1.5)
+
+
+class TestBandCalibration:
+    """The residual band must be as wide as it claims to be.
+
+    Measured on real history before this correction, the nominal 90% band
+    contained the realized return only 78.8% of the time across 236
+    non-overlapping folds -- reality landed outside it about twice as often as
+    advertised. Two finite-sample causes: overlapping horizon returns mean `n`
+    residuals carry only ~`n/h` independent observations, and extreme order
+    statistics of a small sample are biased inward.
+    """
+
+    def test_correction_widens_the_band_relative_to_the_plain_quantiles(self) -> None:
+        lower, upper = fc._calibrated_residual_quantiles(200, horizon_days=5, confidence_level=0.90)
+        assert lower < 0.05 and upper > 0.95, "must be wider than the naive 5th/95th"
+        assert lower == pytest.approx(1.0 - upper), "band stays symmetric in level"
+
+    def test_more_overlap_means_a_wider_band_for_the_same_residual_count(self) -> None:
+        # Same 200 residuals, longer horizon -> fewer independent observations
+        # -> the band must widen, not stay put.
+        _, short_h = fc._calibrated_residual_quantiles(200, horizon_days=5, confidence_level=0.90)
+        _, long_h = fc._calibrated_residual_quantiles(200, horizon_days=20, confidence_level=0.90)
+        assert long_h > short_h
+
+    def test_collapses_to_the_observed_extremes_when_too_few_independent_residuals(self) -> None:
+        # 200 residuals at h=63 is ~3 independent observations; a two-sided 90%
+        # band needs ~19. The honest answer is the widest the sample supports --
+        # the observed min/max -- not an interpolated, tighter one.
+        lower, upper = fc._calibrated_residual_quantiles(
+            200, horizon_days=63, confidence_level=0.90
+        )
+        assert (lower, upper) == (0.0, 1.0)
+
+    def test_never_exceeds_the_valid_quantile_range(self) -> None:
+        for n_res in (10, 60, 200, 5_000):
+            for h in (1, 5, 20, 63, 252):
+                for conf in (0.5, 0.8, 0.9, 0.99):
+                    lower, upper = fc._calibrated_residual_quantiles(
+                        n_res, horizon_days=h, confidence_level=conf
+                    )
+                    assert 0.0 <= lower <= 0.5 <= upper <= 1.0
+
+    def test_a_real_forecast_band_is_wider_than_the_uncorrected_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # End to end: the published band must be strictly wider than the plain
+        # empirical quantiles it replaced, on the same series and residuals.
+        prices = _prices(_random_walk(900, seed=21))
+        corrected = fc.ml_forecast(prices, 20)
+
+        monkeypatch.setattr(
+            fc,
+            "_calibrated_residual_quantiles",
+            lambda n, *, horizon_days, confidence_level: (
+                (1.0 - confidence_level) / 2.0,
+                1.0 - (1.0 - confidence_level) / 2.0,
+            ),
+        )
+        uncorrected = fc.ml_forecast(prices, 20)
+
+        assert corrected is not None and uncorrected is not None
+        assert corrected.point_return == pytest.approx(uncorrected.point_return), (
+            "the correction must move only the band, never the point forecast"
+        )
+        corrected_width = corrected.upper_return - corrected.lower_return
+        uncorrected_width = uncorrected.upper_return - uncorrected.lower_return
+        assert corrected_width > uncorrected_width

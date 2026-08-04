@@ -544,6 +544,44 @@ def select_features(meta: dict[str, tuple[str, int | None]], horizon_days: int) 
     return selected
 
 
+def _calibrated_residual_quantiles(
+    n_residuals: int, *, horizon_days: int, confidence_level: float
+) -> tuple[float, float]:
+    """Quantile levels for the residual band, corrected for overlap and small samples.
+
+    Taking the plain empirical `(1±C)/2` quantiles of the holdout residuals
+    produces a band that is **narrower than it claims to be**. Measured on real
+    history (four names, 236 non-overlapping folds, h=20), the nominal 90% band
+    contained the realized return only 78.8% of the time -- reality landed
+    outside it roughly twice as often as advertised.
+
+    Two compounding reasons, both finite-sample rather than modelling errors:
+
+    * **The residuals overlap.** Consecutive horizon returns share `h - 1` days,
+      so `n` residuals carry only about `n / h` independent observations. The
+      raw count flatters the quantile estimate enormously: 200 residuals at
+      h=20 are worth roughly 10.
+    * **Extreme order statistics of a small sample are biased inward.** The
+      empirical 5th percentile of `k` draws is, in expectation, less extreme
+      than the true 5th percentile -- precisely the tail the band is made of.
+
+    The fix is the standard split-conformal finite-sample correction, applied at
+    the *effective* sample size rather than the raw count: use the
+    `(n_eff + 1) / n_eff` inflated tail level. When even that cannot be
+    supported -- fewer independent residuals than a two-sided band at this
+    confidence needs -- the levels collapse to the observed min/max residual,
+    the widest honest statement the sample can make, rather than interpolating
+    a tighter one that the data does not support.
+
+    Returns `(lower_level, upper_level)` for `np.quantile`, symmetric about 0.5.
+    """
+    tail = (1.0 - confidence_level) / 2.0
+    n_eff = max(1, int(n_residuals // max(1, horizon_days)))
+    inflated = (1.0 - tail) * (n_eff + 1) / n_eff
+    upper = min(1.0, inflated)
+    return 1.0 - upper, upper
+
+
 def ml_forecast(
     prices: pd.DataFrame,
     horizon_days: int,
@@ -680,9 +718,11 @@ def ml_forecast(
     mean_log = float(point_model.predict(x_predict)[0])
 
     if residuals is not None and residuals.size:
-        lower_q = (1.0 - confidence_level) / 2.0
+        lower_q, upper_q = _calibrated_residual_quantiles(
+            residuals.size, horizon_days=horizon_days, confidence_level=confidence_level
+        )
         lower_log = mean_log + float(np.quantile(residuals, lower_q))
-        upper_log = mean_log + float(np.quantile(residuals, 1.0 - lower_q))
+        upper_log = mean_log + float(np.quantile(residuals, upper_q))
     else:
         # Too little holdout for an empirical band: fall back to a random-walk
         # volatility band around the ML point, so the forecast is never handed
