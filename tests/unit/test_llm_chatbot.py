@@ -110,6 +110,23 @@ class TestAnswer:
         assert chatbot.answer("   ", ["data"], provider=provider) is None
         provider.generate.assert_not_called()
 
+    def test_an_over_long_question_is_truncated_not_sent_whole(self) -> None:
+        # The question is re-sent with every later turn, and the deployed demo
+        # shares one free-tier key across all visitors -- so an unbounded box is
+        # the cheapest way for one paste to exhaust everyone's daily quota.
+        provider = _stub_provider()
+        chatbot.answer("Q" * 50_000, ["data"], provider=provider)
+        prompt, _ = provider.generate.call_args[0]
+        sent = prompt.split("User question: ", 1)[1]
+        assert sent == "Q" * chatbot.MAX_QUESTION_CHARS
+
+    def test_a_normal_length_question_is_untouched(self) -> None:
+        provider = _stub_provider()
+        question = "Why is NVDA rated Strong Buy?"
+        chatbot.answer(question, ["data"], provider=provider)
+        prompt, _ = provider.generate.call_args[0]
+        assert question in prompt
+
     def test_works_with_no_context_blocks_at_all(self) -> None:
         provider = _stub_provider()
         chatbot.answer("What is a P/E ratio?", provider=provider)
