@@ -429,6 +429,16 @@ class Forecast(Base):
     directional accuracy at this horizon (Section 7.6: shown alongside every
     forecast so a prediction never invites more confidence than it has earned);
     null until a backtest has graded the model.
+
+    `baseline_hit_rate` is the naive random-walk-drift null's accuracy over the
+    same horizon, and exists because the model's own figure is close to
+    meaningless without it. A hit rate is not a skill measure -- it has to be
+    read against the base rate. Measured on real history, the baseline's rate
+    was *exactly* the fraction of periods that happened to be up (63.6% at
+    h=63), while ARIMA scored 50.0% over the same folds: a bare "53%" reads as
+    modest skill to a non-expert when it is a coin flip, and can hide a model
+    doing materially worse than the null it is supposed to beat.
+    `walk_forward_accuracy` always computed this; it simply had nowhere to live.
     """
 
     __tablename__ = "forecasts"
@@ -442,6 +452,7 @@ class Forecast(Base):
     lower_price: Mapped[float | None] = mapped_column(Float)
     upper_price: Mapped[float | None] = mapped_column(Float)
     historical_hit_rate: Mapped[float | None] = mapped_column(Float)
+    baseline_hit_rate: Mapped[float | None] = mapped_column(Float)
 
 
 class BacktestResult(Base):

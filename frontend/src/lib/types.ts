@@ -81,6 +81,7 @@ export interface ForecastRow {
   lower_price: number | null;
   upper_price: number | null;
   historical_hit_rate: number | null;
+  baseline_hit_rate: number | null;
   generated_date: string;
 }
 

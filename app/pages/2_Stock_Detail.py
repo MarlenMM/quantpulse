@@ -305,12 +305,28 @@ def main() -> None:
         )
         table = forecast_rows[forecast_rows["model_name"] == model].copy()
         table["Return"] = table["point_return"].map(format_signed_percent)
+        # Always paired with the naive null's rate. A hit rate alone is not a
+        # skill measure -- on real history the baseline's rate was exactly the
+        # fraction of periods that happened to be up, so a bare "53%" reads as
+        # modest skill when it is a coin flip, and can even hide a model doing
+        # worse than the null it exists to beat (Section 7.6).
         table["Hit rate"] = table["historical_hit_rate"].map(
+            lambda v: "—" if pd.isna(v) else format_percent(v, digits=0)
+        )
+        table["vs naive"] = table["baseline_hit_rate"].map(
             lambda v: "—" if pd.isna(v) else format_percent(v, digits=0)
         )
         st.dataframe(
             table[
-                ["horizon_days", "Return", "point_price", "lower_price", "upper_price", "Hit rate"]
+                [
+                    "horizon_days",
+                    "Return",
+                    "point_price",
+                    "lower_price",
+                    "upper_price",
+                    "Hit rate",
+                    "vs naive",
+                ]
             ].rename(
                 columns={
                     "horizon_days": "Horizon (days)",
