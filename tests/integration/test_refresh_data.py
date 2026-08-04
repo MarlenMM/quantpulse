@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 import pytest
 from sqlalchemy import Engine, create_engine, select
@@ -760,3 +761,36 @@ def test_ticker_fetches_run_concurrently_and_survive_one_failure(engine: Engine)
     assert written_symbols == set(symbols) - {"SYM3"}
     assert len(logs) == 1
     assert logs[0].status == "partial"  # downgraded, not aborted (Section 6.12)
+
+
+def test_equal_weight_benchmark_survives_a_zero_first_price() -> None:
+    # One symbol whose first observation is 0.0 used to turn the whole
+    # benchmark into `inf` (it is rebased by division), so every
+    # strategy-vs-market comparison on the Track Record page was against
+    # infinity. Real case: DEC, 732 bars of adj_close = 0.0.
+    index = pd.date_range("2024-01-01", periods=4, freq="D")
+    panel = pd.DataFrame(
+        {
+            "GOOD": [10.0, 11.0, 12.0, 13.0],
+            "ALSOGOOD": [50.0, 50.0, 55.0, 60.0],
+            "DEC": [0.0, 0.0, 0.0, 0.0],
+        },
+        index=index,
+    )
+
+    benchmark = refresh_data._equal_weight_benchmark(panel)
+
+    assert np.isfinite(benchmark).all(), "a zero-priced symbol must not make the index infinite"
+    assert benchmark.iloc[0] == pytest.approx(1.0)
+    # Exactly the mean of the two usable names' rebased levels.
+    assert benchmark.iloc[-1] == pytest.approx((13.0 / 10.0 + 60.0 / 50.0) / 2)
+
+
+def test_equal_weight_benchmark_is_empty_when_no_symbol_is_usable() -> None:
+    index = pd.date_range("2024-01-01", periods=3, freq="D")
+    panel = pd.DataFrame({"DEC": [0.0, 0.0, 0.0]}, index=index)
+
+    benchmark = refresh_data._equal_weight_benchmark(panel)
+
+    assert len(benchmark) == 3
+    assert benchmark.isna().all(), "no usable name -> no benchmark, not a fabricated one"
