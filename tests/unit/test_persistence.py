@@ -532,3 +532,73 @@ class TestAdjClosePanelExcludesUnusablePrices:
         )
 
         assert panel["DEC"].dropna().tolist() == [5.0]
+
+
+class TestBrokenAdjustmentSeriesAreDropped:
+    """A broken split/dividend adjustment factor invents enormous fake returns.
+
+    Real measurements from a 495-symbol backfill: CBE moves $0.005 -> $305.00 in
+    a single bar (a 3,399,900% "return"), TNB reaches $31,080, COMS spans 16.7
+    BILLION times end to end. Any momentum signal ranks those top, "buys" them,
+    and books the fiction. Left in, the strategy backtest reported CAGR 64.77%
+    against a 12.66% benchmark, with a bootstrap interval that EXCLUDED ZERO --
+    a statistically significant edge made entirely of bad data. Sanitized, the
+    same run reports 9.53% against a 13.01% benchmark: it loses to buy-and-hold.
+    """
+
+    @staticmethod
+    def _bar(session: Session, symbol: str, day: int, adj_close: float) -> None:
+        session.add(
+            PriceHistory(
+                symbol=symbol,
+                date=date(2024, 1, day),
+                open=10.0,
+                high=10.0,
+                low=10.0,
+                close=10.0,
+                adj_close=adj_close,
+                volume=100,
+            )
+        )
+
+    def _panel(self, session: Session):
+        return persistence.read_adj_close_panel(
+            session, start=date(2024, 1, 1), end=date(2024, 1, 31)
+        )
+
+    def test_a_symbol_with_an_impossible_jump_is_removed_entirely(self, session: Session) -> None:
+        session.add(Ticker(symbol="CBE", name="Broken", asset_type="equity", is_active=False))
+        for day, px in ((2, 10.0), (3, 11.0), (4, 12.0)):
+            self._bar(session, "AAPL", day, px)
+        # The real CBE shape: a sub-penny price stepping to hundreds of dollars.
+        for day, px in ((2, 0.005), (3, 305.0), (4, 300.0)):
+            self._bar(session, "CBE", day, px)
+        session.commit()
+
+        panel = self._panel(session)
+
+        assert "CBE" not in panel.columns
+        # The whole series goes, not just the offending bar: one bad adjustment
+        # factor scales every price it touches, so the rest isn't trustworthy.
+        assert "AAPL" in panel.columns
+        assert list(panel["AAPL"]) == [10.0, 11.0, 12.0]
+
+    def test_a_large_but_believable_move_is_kept(self, session: Session) -> None:
+        # A takeover pop or a biotech readout can double or triple a stock in a
+        # day. The guard must not throw those away.
+        for day, px in ((2, 10.0), (3, 28.0), (4, 26.0)):
+            self._bar(session, "AAPL", day, px)
+        session.commit()
+
+        panel = self._panel(session)
+
+        assert "AAPL" in panel.columns
+        assert list(panel["AAPL"]) == [10.0, 28.0, 26.0]
+
+    def test_a_crash_as_well_as_a_spike_is_caught(self, session: Session) -> None:
+        session.add(Ticker(symbol="CBE", name="Broken", asset_type="equity", is_active=False))
+        for day, px in ((2, 500.0), (3, 0.01), (4, 0.01)):
+            self._bar(session, "CBE", day, px)
+        session.commit()
+
+        assert "CBE" not in self._panel(session).columns

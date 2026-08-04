@@ -21,6 +21,7 @@ job's ``rows_updated`` accounting stays uniform.
 """
 
 import hashlib
+import logging
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -52,6 +53,8 @@ from quantpulse.storage.models import (
     ThematicBasket,
     Ticker,
 )
+
+logger = logging.getLogger(__name__)
 
 # The plain metric columns of a fundamentals snapshot (the JSON sector-specific
 # column is unpacked separately into `p_ffo`).
@@ -565,7 +568,53 @@ def read_adj_close_panel(
         return pd.DataFrame()
     panel = long_df.pivot_table(index="date", columns="symbol", values="adj_close")
     panel.index = pd.DatetimeIndex(pd.to_datetime(panel.index))
-    return panel.sort_index()
+    return _drop_broken_adjustment_series(panel.sort_index())
+
+
+# A bar-to-bar price ratio beyond this is not a market move, it is a broken
+# split/dividend adjustment factor. Real index constituents top out around a
+# 2-3x single-day move (a takeover pop, a biotech readout); 10x is far above
+# anything genuine and still catches the real artefacts by orders of magnitude.
+_MAX_PLAUSIBLE_BAR_RATIO = 10.0
+
+
+def _drop_broken_adjustment_series(panel: pd.DataFrame) -> pd.DataFrame:
+    """Remove symbols whose adjusted-close series contains an impossible jump.
+
+    Free sources serve badly-adjusted history for long-delisted names, and the
+    damage is not subtle. Measured on a real 495-symbol backfill: CBE moves
+    $0.005 -> $305.00 in one bar (a 3,399,900% "return"), TNB reaches $31,080,
+    and COMS spans 16.7 BILLION times end to end. 10,689 bars carry sub-penny
+    adjusted closes.
+
+    A backtest cannot survive this. Those names get ranked top by any momentum
+    signal, "bought", and realize million-percent gains -- which is exactly what
+    happened: the strategy reported Sharpe 0.310, CAGR 64.77% and a bootstrap
+    interval that *excluded zero*, i.e. a statistically significant edge made
+    entirely of broken data. That is the worst failure mode this project has,
+    because every honesty mechanism downstream (cost model, survivorship
+    handling, confidence intervals) faithfully described a fiction.
+
+    The whole symbol is dropped, not the offending bar: a broken adjustment
+    factor corrupts the entire series it scales, so the rest of that history
+    cannot be trusted either. Dropping loses a name; keeping it loses the
+    backtest.
+    """
+    if panel.empty:
+        return panel
+    ratio = panel / panel.shift(1)
+    extreme = ((ratio > _MAX_PLAUSIBLE_BAR_RATIO) | (ratio < 1.0 / _MAX_PLAUSIBLE_BAR_RATIO)).any()
+    broken = [str(symbol) for symbol, flagged in extreme.items() if bool(flagged)]
+    if not broken:
+        return panel
+    logger.warning(
+        "Dropping %d symbol(s) with an implausible price jump (>%gx in one bar), "
+        "which indicates a broken adjustment factor rather than a market move: %s",
+        len(broken),
+        _MAX_PLAUSIBLE_BAR_RATIO,
+        ", ".join(sorted(broken)[:20]),
+    )
+    return panel.drop(columns=broken)
 
 
 # --------------------------------------------------------------------------- #
