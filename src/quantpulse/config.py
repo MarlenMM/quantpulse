@@ -71,7 +71,21 @@ class Settings(BaseSettings):
     historical_constituents_path: str | None = None
 
     # Section 6.2: how far back the one-time cold-start backfill pulls prices.
-    seed_history_period: str = "max"
+    #
+    # NOT "max", despite that being the obvious choice. Yahoo's endpoint serves
+    # `period="max"` unreliably: on a paced test (5s apart, nothing else
+    # running) it returned ZERO rows for AAPL, MSFT, KO and AMZN, while
+    # `period="10y"` returned a full 2,512 bars for every one of them. The
+    # first real cold-start run used "max" and finished with price history for
+    # only 496 of 1,206 symbols -- including no data at all for Apple, Amazon
+    # and Adobe -- which read as "these symbols have no history" rather than
+    # "this period argument is broken".
+    #
+    # 10 years comfortably covers everything downstream: the strategy backtest
+    # looks back 5 years, the longest forecast horizon is 252 trading days, and
+    # the forecast price window is 1,280 days. It also roughly halves the
+    # database, which matters because the demo DB is committed to git.
+    seed_history_period: str = "10y"
 
 
 @lru_cache
