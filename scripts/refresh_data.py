@@ -60,7 +60,7 @@ from quantpulse.news_intelligence import (
     thematic_mapping,
 )
 from quantpulse.storage import persistence
-from quantpulse.storage.db import get_session
+from quantpulse.storage.db import assert_schema_current, get_session
 from quantpulse.storage.models import (
     AnalystConsensus,
     FundamentalsSnapshot,
@@ -184,6 +184,18 @@ _INSTITUTIONAL_COLUMNS = (
     "change_from_prior_quarter",
 )
 
+
+# Steps the app is genuinely unusable without. A failure in one of these makes
+# the whole run "failed" (red in CI), rather than the "partial" that every
+# optional source failure produces.
+#
+# The distinction exists because it was missing: a run reported "partial" and
+# exited 0 while `composite_scores` -- every rating in the Screener, on Home and
+# on every Stock Detail page -- was completely empty. Prices and options had
+# landed, so "partial" was literally true and entirely misleading. News, 13F and
+# macro genuinely are optional: the ratings still compute without them, just
+# with lower `data_confidence`, which the UI already shows.
+_CRITICAL_STEPS = frozenset({"composite_scores", "market_regime"})
 
 _REIT_SECTOR = "Real Estate"
 
@@ -1169,6 +1181,10 @@ def refresh_tier2_news(session: Session, today: date) -> int:
 def run(job_name: str = "refresh_data") -> str:
     run_id = configure_logging(get_settings().log_level)
     logger.info("%s starting (run_id=%s)", job_name, run_id)
+    # Before anything expensive. A missed `alembic upgrade head` otherwise
+    # surfaces as "table X has no column named Y" from whichever step writes
+    # that column first -- nine minutes and 503 tickers into the run.
+    assert_schema_current()
     started_at = datetime.now()
     # The trading day is decided in EXCHANGE time, not the runner's. GitHub's
     # runners are UTC, and the schedule fires in the US evening -- so a naive
@@ -1180,6 +1196,7 @@ def run(job_name: str = "refresh_data") -> str:
     today = datetime.now(_MARKET_TZ).date()
     status = "success"
     rows_updated = 0
+    failed_steps: list[str] = []
 
     if not is_trading_day(today):
         logger.info("%s: market closed today (%s), skipping refresh", job_name, today)
@@ -1195,18 +1212,30 @@ def run(job_name: str = "refresh_data") -> str:
         return "skipped_non_trading_day"
 
     def step(name: str, fn: "Any") -> int:
-        """Run one refresh sub-step, degrading a failure to 'partial' rather than aborting.
+        """Run one refresh sub-step, isolating its failure from the rest of the run.
 
         A single source being down (GDELT, SEC, Finnhub) must not take out the
-        rest of the nightly run, so every optional step is isolated here and
-        the run still records whatever else succeeded (Section 6.12).
+        rest of the nightly run, so every step is isolated here and the run still
+        records whatever else succeeded (Section 6.12).
+
+        **But not every step is equally optional**, and treating them alike is
+        how a run reports "partial" while having produced nothing a user can
+        see. `_CRITICAL_STEPS` names the ones the app is unusable without:
+        if one of those fails the run is "failed", not "partial", so the
+        workflow goes red. Everything else degrades quietly as before, and the
+        names are collected so the summary can say *what* degraded rather than
+        leaving a reader to grep a nine-minute log.
         """
         nonlocal status
         try:
             return fn()
         except Exception:
             logger.exception("%s: step %s failed", job_name, name)
-            status = "partial"
+            failed_steps.append(name)
+            if name in _CRITICAL_STEPS:
+                status = "failed"
+            elif status != "failed":
+                status = "partial"
             return 0
 
     try:
@@ -1338,6 +1367,15 @@ def run(job_name: str = "refresh_data") -> str:
     except Exception:
         logger.exception("%s failed", job_name)
         status = "failed"
+
+    if failed_steps:
+        # Name them. "partial" on its own sends a reader to grep a long log for
+        # a traceback; this puts the answer in the last line.
+        logger.warning(
+            "%s finished %s -- failed step(s): %s", job_name, status, ", ".join(failed_steps)
+        )
+    else:
+        logger.info("%s finished %s (%d rows)", job_name, status, rows_updated)
 
     with get_session() as session:
         session.add(
