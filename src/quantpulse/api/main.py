@@ -40,6 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from quantpulse.analysis import scoring
 from quantpulse.api.schemas import (
     AnalystConsensusModel,
     BacktestRun,
@@ -153,9 +154,17 @@ def screener(
     """
     frame = persistence.read_screener_rows(session, profile=profile)
     rows = [ScreenerRow(**row) for row in _rows(frame)]
+    as_of = rows[0].date if rows else None
     return ScreenerResponse(
-        as_of=rows[0].date if rows else None,
+        as_of=as_of,
         profile=profile,
+        # The client re-rates locally when the sliders move, so it needs the
+        # same Strong-Buy cutoff the stored ratings used -- including tonight's
+        # risk-off lift. Derived here rather than in TypeScript so there is one
+        # implementation of the Tier-3 dampener.
+        strong_buy_cutoff=scoring.strong_buy_cutoff(
+            persistence.read_latest_regime_score(session, as_of=as_of) if as_of else None
+        ),
         count=len(rows),
         rows=rows,
     )

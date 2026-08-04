@@ -374,8 +374,15 @@ def _rating_from_absolute(composite_score: float) -> str:
     return "strong_sell"
 
 
-def _strong_buy_cutoff(regime_score: float | None) -> float:
-    """The Strong-Buy percentile cutoff, lifted in a risk-off regime (Section 7.3 Tier 3)."""
+def strong_buy_cutoff(regime_score: float | None) -> float:
+    """The Strong-Buy percentile cutoff, lifted in a risk-off regime (Section 7.3 Tier 3).
+
+    Public because the React front end re-rates client-side and has to use the
+    *same* cutoff as the Python that produced the stored ratings -- otherwise a
+    risk-off night quietly hands out a different number of Strong Buys in each
+    front end. Served in the screener API response rather than re-derived in
+    TypeScript, so there is one implementation of the dampener.
+    """
     base = _RELATIVE_CUTOFFS[0][0]
     if regime_score is None:
         return base
@@ -455,7 +462,7 @@ def build_composite(
         percentile_rank = result["composite_score"].rank(pct=True) * 100.0
         result["percentile_rank"] = percentile_rank
         if rating_mode == "relative":
-            cutoff = _strong_buy_cutoff(regime_score)
+            cutoff = strong_buy_cutoff(regime_score)
             result["rating"] = percentile_rank.apply(lambda pr: _rating_from_percentile(pr, cutoff))
         else:
             result["rating"] = result["composite_score"].apply(_rating_from_absolute)

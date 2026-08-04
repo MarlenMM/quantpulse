@@ -50,6 +50,11 @@ export interface ScreenerResponse {
   as_of: string | null;
   profile: string;
   rating_mode: string;
+  // Percentile a name must reach to be a Strong Buy tonight: normally 90,
+  // lifted toward 95 by the Market Regime Index in a risk-off market. Sent by
+  // the API so client-side re-rating uses the same dampener the stored ratings
+  // did, rather than a second implementation of it in TypeScript.
+  strong_buy_cutoff: number;
   count: number;
   rows: ScreenerRow[];
 }
