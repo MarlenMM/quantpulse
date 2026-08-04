@@ -2,10 +2,29 @@ name: Nightly Data Refresh
 
 on:
   schedule:
-    # 02:00 UTC ~= 9-10pm US/Eastern depending on DST (Section 6.4) -- the
-    # script itself checks the NYSE calendar, so an imprecise cron just
-    # means an occasional no-op run, not a correctness issue.
-    - cron: "0 2 * * 1-5"
+    # 22:00 UTC = 17:00 EST / 18:00 EDT -- one to two hours after the 16:00 ET
+    # close, on the SAME calendar day in New York. Moved here from 02:00 UTC,
+    # which was wrong in three compounding ways:
+    #
+    #  * **Stale option quotes.** GitHub's scheduler routinely slips ~3 hours
+    #    under load, so a 02:00 UTC job actually ran around 04:45-05:30 UTC,
+    #    i.e. roughly 00:45-01:30 ET. By then Yahoo's option chain has gone
+    #    stale overnight, which is how the database ended up with an implied
+    #    volatility of 0.46% for Apple and sub-penny values for 96% of names.
+    #  * **Friday was never captured.** At 02:00 UTC the run lands on the
+    #    *previous* US evening, so Mon-Fri UTC covered Sunday through Thursday
+    #    in New York. Friday's close needed a Saturday 02:00 UTC run, which
+    #    `1-5` excludes. Firing at 22:00 UTC makes the UTC weekday and the ET
+    #    trading day the same, so Mon-Fri means Mon-Fri.
+    #  * **The date was off by one.** `run()` derived "today" from the runner's
+    #    UTC clock, which at 02:00 UTC is already tomorrow in New York -- so
+    #    Monday's closing data was stamped Tuesday and `is_trading_day` was
+    #    asked about the wrong date. That is now fixed in the script itself
+    #    (it reads the date in exchange time), and this schedule keeps the two
+    #    aligned even without it.
+    #
+    # The script still checks the NYSE calendar, so a holiday is a cheap no-op.
+    - cron: "0 22 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
