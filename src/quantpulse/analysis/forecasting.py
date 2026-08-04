@@ -73,6 +73,7 @@ __all__ = [
     "horizon_feature_weights",
     "build_features",
     "select_features",
+    "min_bars_for_horizon",
     "MonteCarloFanChart",
     "simulate_gbm_paths",
     "monte_carlo_fan_chart",
@@ -93,6 +94,29 @@ _VOL_LOOKBACKS: tuple[int, ...] = (10, 21, 63)
 # spuriously-confident number off a handful of bars.
 _MIN_BASELINE_BARS = 20
 _MIN_ARIMA_BARS = 60
+
+# ...and a second floor that scales WITH the horizon. The fixed floors above are
+# about estimating a daily volatility; they say nothing about how far it is
+# reasonable to extrapolate. Every model here projects a per-day estimate `h`
+# days forward, so a drift measured over five weeks and multiplied by 252 is not
+# a one-year forecast, it is five weeks of noise with a year's leverage on it.
+#
+# This is not hypothetical. The deployed demo database held 26 daily bars, which
+# cleared `_MIN_BASELINE_BARS` comfortably, and the weekly job was days away
+# from publishing a one-year forecast for all 503 names off 25 daily returns:
+# Apple at **+157%** with a nominal 90% band of [+36%, +384%] -- an interval
+# that never touches zero, i.e. the app asserting 90% confidence in a 36%
+# minimum gain. Nothing on screen would have contradicted it, because no model
+# had enough history to be graded either, so the hit-rate columns read "--".
+#
+# Requiring `_MIN_HISTORY_HORIZON_MULT` x horizon bars means a 5-day forecast
+# still needs only its fixed floor, while a one-year forecast needs about three
+# years of history. Three is a deliberately modest multiple: it is the point at
+# which the horizon is a minority of the sample rather than a multiple of it,
+# not a claim that three observations of a year make a year predictable. A model
+# that cannot meet it abstains, the same discipline every other coverage gate in
+# this project uses -- an absent forecast is honest, a fabricated one is not.
+_MIN_HISTORY_HORIZON_MULT = 3
 # Drift specification for the ARIMA fit. statsmodels silently defaults to "n"
 # (no trend) when d > 0, which makes the h-step forecast flat at every horizon;
 # "t" is a time trend on the undifferenced log price, i.e. drift on the returns.
@@ -243,6 +267,18 @@ def _close_series(prices: pd.DataFrame) -> pd.Series:
     return close
 
 
+def min_bars_for_horizon(horizon_days: int, *, floor: int) -> int:
+    """Bars of history a model needs before it will speak about `horizon_days`.
+
+    The larger of the model's own fixed floor and `_MIN_HISTORY_HORIZON_MULT` x
+    the horizon -- see that constant for why the second term exists. Public
+    because callers (the nightly refresh, the UI) legitimately want to know why
+    a horizon produced nothing.
+    """
+    _validate_horizon(horizon_days)
+    return max(floor, _MIN_HISTORY_HORIZON_MULT * horizon_days)
+
+
 def _z_for(confidence_level: float) -> float:
     if not 0.0 < confidence_level < 1.0:
         raise ValueError(f"confidence_level must be in (0, 1), got {confidence_level}")
@@ -310,7 +346,7 @@ def baseline_forecast(
     """
     _validate_horizon(horizon_days)
     close = _close_series(prices)
-    if len(close) < _MIN_BASELINE_BARS:
+    if len(close) < min_bars_for_horizon(horizon_days, floor=_MIN_BASELINE_BARS):
         return None
     calibration = _calibrate_random_walk(close, lookback, drift=drift)
     if calibration is None:
@@ -405,7 +441,7 @@ def statistical_forecast(
     """
     _validate_horizon(horizon_days)
     close = _close_series(prices)
-    if len(close) < _MIN_ARIMA_BARS:
+    if len(close) < min_bars_for_horizon(horizon_days, floor=_MIN_ARIMA_BARS):
         return None
 
     from statsmodels.tsa.arima.model import ARIMA
@@ -677,6 +713,8 @@ def ml_forecast(
     """
     _validate_horizon(horizon_days)
     close = _close_series(prices)
+    if len(close) < min_bars_for_horizon(horizon_days, floor=_MIN_ML_TRAIN_ROWS):
+        return None
     features, meta = build_features(prices, exog=exog, exog_buckets=exog_buckets)
     selected = select_features(meta, horizon_days)
     if not selected:
@@ -826,7 +864,7 @@ def simulate_gbm_paths(
     if n_paths < 1:
         raise ValueError(f"n_paths must be >= 1, got {n_paths}")
     close = _close_series(prices)
-    if len(close) < _MIN_BASELINE_BARS:
+    if len(close) < min_bars_for_horizon(horizon_days, floor=_MIN_BASELINE_BARS):
         return None
     calibration = _calibrate_random_walk(close, lookback)
     if calibration is None:
@@ -901,7 +939,7 @@ def monte_carlo_fan_chart(
             raise ValueError(f"each percentile must be in [0, 100], got {p}")
 
     close = _close_series(prices)
-    if len(close) < _MIN_BASELINE_BARS:
+    if len(close) < min_bars_for_horizon(horizon_days, floor=_MIN_BASELINE_BARS):
         return None
     calibration = _calibrate_random_walk(close, lookback)
     if calibration is None:
