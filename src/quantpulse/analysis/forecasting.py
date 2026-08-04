@@ -377,6 +377,31 @@ def statistical_forecast(
     against the series' actual 0.000429. Note `"c"` and `"ct"` are rejected
     outright by statsmodels when `d > 0`, so `"t"` is the drift specification
     here, not a stylistic pick.
+
+    **What this model is worth, measured rather than assumed.** Walked forward
+    over 6 names and their last 1,200 bars, drift-ARIMA is statistically
+    indistinguishable from `baseline_forecast`: mean |prediction| 0.00249 vs
+    0.00224 at h=5, 0.00939 vs 0.00918 at h=20, 0.03290 vs 0.03192 at h=63,
+    with hit rates and RMSE matching to the third decimal. That is not a defect
+    -- it is what ARIMA(1,1,1) *is* once it has a drift term. The ARMA(1,1) part
+    captures a little short-range autocorrelation, and beyond a few steps the
+    forecast converges to drift x h, which is precisely the random-walk-with-
+    drift null. Neither beat that null on the sample (hit rates 0.44-0.48).
+
+    Two consequences worth stating plainly, because the UI shows three model
+    names and a reader will assume three independent opinions:
+
+    * `arima` and `baseline` are *near-duplicates by construction*, not two
+      independent votes. Agreement between them is not corroboration.
+    * The model is kept anyway -- Section 7.6 asks for a statistical model, and
+      the `vs naive` column now makes its (lack of) edge visible instead of
+      implied. Showing honestly that a classical time-series model does not beat
+      a random walk is a more useful result than hiding the comparison.
+
+    **Deliberately NOT done: searching `order` for something that beats the
+    baseline.** That is Section 22's overfitting trap exactly -- trying a dozen
+    specifications and keeping whichever scored best on history is fitting
+    noise, not discovering signal. The order stays a fixed, documented default.
     """
     _validate_horizon(horizon_days)
     close = _close_series(prices)

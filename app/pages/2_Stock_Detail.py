@@ -296,6 +296,14 @@ def main() -> None:
     else:
         models = sorted(forecast_rows["model_name"].unique())
         model = st.selectbox("Model", models, index=0)
+        st.caption(
+            "**Hit rate** is this model's own out-of-sample directional accuracy; "
+            "**vs naive** is the same measure for a naive random-walk forecast over "
+            "the same periods. Read them together — a model at or below the naive "
+            "column has not demonstrated any skill. Note `arima` and `baseline` are "
+            "near-duplicates by construction (a drifting ARIMA converges to the "
+            "random-walk-with-drift null), so the two agreeing is not corroboration."
+        )
         # Built from the model the user actually selected, so the chat box below
         # is grounded in the same forecasts the table and fan chart are showing.
         last_close = None if bars.empty else float(bars["close"].iloc[-1])
