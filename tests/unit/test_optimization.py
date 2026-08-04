@@ -212,6 +212,22 @@ class TestViewsFromScores:
         )
         assert damped.abs().sum() == pytest.approx(full.abs().sum() * 0.25)
 
+    def test_rejects_data_confidence_on_its_native_0_100_scale(self) -> None:
+        # The trap this guard exists for: `data_confidence` is 0-100, and a
+        # silent clip to [0, 1] would map every value to 1.0 -- so a 20%-covered
+        # stock and a 90%-covered one would tilt identically while the caller
+        # believed coverage was being respected. It must raise, and say so.
+        prior = self._prior()
+        scores = pd.Series({f"S{i}": 10.0 + i * 16 for i in range(6)})
+        raw = pd.Series({s: 45.0 for s in prior.index})  # a real data_confidence
+        with pytest.raises(ValueError, match="0-100"):
+            opt.views_from_composite_scores(scores, prior, confidences=raw)
+
+        # ...and the documented remedy actually works.
+        scaled = opt.views_from_composite_scores(scores, prior, confidences=raw / 100.0)
+        full = opt.views_from_composite_scores(scores, prior) - prior
+        assert (scaled - prior).abs().sum() == pytest.approx(full.abs().sum() * 0.45)
+
     def test_rejects_a_non_positive_tilt_cap(self) -> None:
         with pytest.raises(ValueError, match="max_tilt"):
             opt.views_from_composite_scores(pd.Series({"S0": 50.0}), self._prior(), max_tilt=0.0)
