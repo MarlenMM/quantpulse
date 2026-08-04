@@ -156,6 +156,58 @@ def test_upsert_price_history_is_idempotent(session: Session) -> None:
     assert len(rows) == 3  # same (symbol, date) keys -> updated in place, not duplicated
 
 
+def test_upsert_price_history_drops_bars_missing_a_required_field(session: Session) -> None:
+    # The exact production failure (Actions run 30878926050): yfinance returned
+    # a bar with a NaN close, the NOT NULL insert raised, and the whole nightly
+    # run rolled back -- leaving the deployed demo four days stale while the
+    # workflow still exited 0. An incomplete bar must cost that bar only.
+    df = _price_df("AAPL", rows=3)
+    df.loc[1, "close"] = float("nan")
+
+    written = refresh_data._upsert_price_history(session, df)
+    session.flush()
+
+    rows = session.scalars(select(PriceHistory).where(PriceHistory.symbol == "AAPL")).all()
+    assert written == 2
+    assert len(rows) == 2
+    assert all(row.close == 1.5 for row in rows)
+
+
+def test_upsert_price_history_skips_a_frame_with_no_complete_bar(session: Session) -> None:
+    df = _price_df("AAPL", rows=2)
+    df["adj_close"] = float("nan")
+
+    assert refresh_data._upsert_price_history(session, df) == 0
+    session.flush()
+    assert session.scalars(select(PriceHistory)).all() == []
+
+
+def test_one_bad_ticker_does_not_discard_every_other_tickers_writes(session: Session) -> None:
+    # Per-symbol SAVEPOINT isolation: the loop in `run()` writes ~500 tickers in
+    # one session, so an exception on one used to take the whole batch with it.
+    good_before = refresh_data._upsert_price_history(session, _price_df("AAPL", rows=2))
+
+    try:
+        with session.begin_nested():
+            # A frame missing a NOT NULL column entirely still raises at insert
+            # (the dropna guard can only drop rows, not invent a column) --
+            # standing in for any per-symbol write failure.
+            broken = _price_df("NOSUCH", rows=2).drop(columns=["adj_close"])
+            refresh_data._upsert_price_history(session, broken)
+            session.flush()
+    except Exception:
+        pass
+
+    good_after = refresh_data._upsert_price_history(session, _price_df("MSFT", rows=2))
+    session.flush()
+
+    symbols = {row.symbol for row in session.scalars(select(PriceHistory)).all()}
+    assert good_before == 2 and good_after == 2
+    assert "AAPL" in symbols, "writes made before the failure must survive it"
+    assert "MSFT" in symbols, "writes made after the failure must still land"
+    assert "NOSUCH" not in symbols
+
+
 def test_upsert_fundamentals_does_not_overwrite_same_day_snapshot(session: Session) -> None:
     today = date(2026, 7, 21)
     refresh_data._upsert_fundamentals(session, "AAPL", today, {"symbol": "AAPL", "pe": 10.0})
