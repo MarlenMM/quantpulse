@@ -260,3 +260,65 @@ def test_fetch_analyst_consensus_handles_missing_recommendations(tmp_path: Path)
 
     assert result["strong_buy"] == 0
     assert result["mean_price_target"] is None
+
+
+def test_fetch_price_history_drops_non_positive_adjusted_closes(tmp_path: Path) -> None:
+    # Free sources emit adj_close = 0 for some delisted names (DEC ships 732
+    # such bars while its raw close is $1.44). One of them turns the
+    # equal-weight benchmark into `inf`, so they never leave ingestion.
+    raw = pd.DataFrame(
+        {
+            "Open": [1.0, 1.0, 1.0],
+            "High": [2.0, 2.0, 2.0],
+            "Low": [0.5, 0.5, 0.5],
+            "Close": [1.44, 1.44, 1.44],
+            "Adj Close": [0.0, 1.44, -1.0],
+            "Volume": [100, 100, 100],
+        },
+        index=pd.DatetimeIndex(
+            ["2026-07-20", "2026-07-21", "2026-07-22"], name="Date", tz="America/New_York"
+        ),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = raw
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        df = yfinance_client.fetch_price_history("DEC", period="max")
+
+    assert len(df) == 1
+    assert df.iloc[0]["adj_close"] == 1.44
+
+
+def test_fetch_price_history_keeps_zero_volume_bars(tmp_path: Path) -> None:
+    # Zero VOLUME is a legitimate untraded day, unlike a zero adjusted close --
+    # the guard above must not quietly discard those.
+    raw = pd.DataFrame(
+        {
+            "Open": [1.0],
+            "High": [2.0],
+            "Low": [0.5],
+            "Close": [1.5],
+            "Adj Close": [1.5],
+            "Volume": [0],
+        },
+        index=pd.DatetimeIndex(["2026-07-20"], name="Date", tz="America/New_York"),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = raw
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        df = yfinance_client.fetch_price_history("QUIET", period="5d")
+
+    assert len(df) == 1
