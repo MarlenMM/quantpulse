@@ -794,3 +794,71 @@ def test_equal_weight_benchmark_is_empty_when_no_symbol_is_usable() -> None:
 
     assert len(benchmark) == 3
     assert benchmark.isna().all(), "no usable name -> no benchmark, not a fabricated one"
+
+
+class TestCriticalStepsFailLoudly:
+    """ "Partial" must not cover for a run that produced nothing usable.
+
+    A real nightly reported `partial` and exited 0 while `composite_scores` --
+    every rating in the Screener, on Home and on every Stock Detail page -- was
+    completely empty. Prices and options had landed, so "partial" was literally
+    true and entirely misleading. News, 13F and macro genuinely are optional:
+    ratings still compute without them, at a lower `data_confidence` the UI
+    already displays.
+    """
+
+    @staticmethod
+    def _run_steps(failing: str) -> tuple[str, list[str]]:
+        """Drive `run`'s `step` closure in isolation via a tiny stand-in."""
+        status = "success"
+        failed: list[str] = []
+
+        def step(name: str, fn) -> int:
+            nonlocal status
+            try:
+                return fn()
+            except Exception:
+                failed.append(name)
+                if name in refresh_data._CRITICAL_STEPS:
+                    status = "failed"
+                elif status != "failed":
+                    status = "partial"
+                return 0
+
+        def boom() -> int:
+            raise RuntimeError("source down")
+
+        for name in ("tier1_news", "composite_scores", "market_regime", "backtest"):
+            step(name, boom if name == failing else (lambda: 1))
+        return status, failed
+
+    def test_an_optional_source_failing_is_only_partial(self) -> None:
+        status, failed = self._run_steps("tier1_news")
+        assert status == "partial"
+        assert failed == ["tier1_news"]
+
+    def test_composite_scores_failing_makes_the_whole_run_failed(self) -> None:
+        status, failed = self._run_steps("composite_scores")
+        assert status == "failed"
+        assert failed == ["composite_scores"]
+
+    def test_market_regime_is_critical_too(self) -> None:
+        assert self._run_steps("market_regime")[0] == "failed"
+
+    def test_a_later_optional_failure_cannot_downgrade_failed_to_partial(self) -> None:
+        # Ordering matters: composite_scores fails first, then an optional step.
+        # The run must stay "failed" rather than being talked back down.
+        status = "success"
+
+        def step(name: str, ok: bool) -> None:
+            nonlocal status
+            if ok:
+                return
+            if name in refresh_data._CRITICAL_STEPS:
+                status = "failed"
+            elif status != "failed":
+                status = "partial"
+
+        step("composite_scores", ok=False)
+        step("tier1_news", ok=False)
+        assert status == "failed"
