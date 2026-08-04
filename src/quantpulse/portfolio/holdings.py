@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, MutableMapping, Sequence
 from contextlib import AbstractContextManager
@@ -389,14 +390,28 @@ def from_csv(text: str) -> list[Transaction]:
                 Transaction(
                     symbol=row["symbol"].upper(),
                     action="buy" if action == "buy" else "sell",
-                    shares=float(row["shares"]),
-                    price=float(row["price"]),
+                    shares=_positive_number(row["shares"], "shares"),
+                    price=_positive_number(row["price"], "price"),
                     date=date.fromisoformat(row["date"]),
                 )
             )
         except (KeyError, ValueError) as exc:
             raise ValueError(f"row {line_number} is invalid: {exc}") from exc
     return parsed
+
+
+def _positive_number(text: str, field: str) -> float:
+    """A finite, strictly-positive float from a CSV cell, or `ValueError` naming the field.
+
+    `float()` happily parses "nan" and "inf", and every comparison against NaN
+    is False -- so a plain `value <= 0` check lets both through. This function's
+    caller promises to name the offending *row*, which is only useful if the bad
+    value is rejected here rather than several layers down in `build_lot_book`.
+    """
+    value = float(text)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{field} must be a finite number > 0, got {text!r}")
+    return value
 
 
 def example_state(cash: float = 5_000.0) -> PortfolioState:
@@ -414,9 +429,23 @@ def example_state(cash: float = 5_000.0) -> PortfolioState:
 def replace_transactions(
     store: PortfolioStore, transactions: Iterable[Transaction], *, cash: float | None = None
 ) -> PortfolioState:
-    """Replace the whole log (a CSV restore), keeping cash/watchlist unless overridden."""
+    """Replace the whole log (a CSV restore), keeping cash/watchlist unless overridden.
+
+    The replacement log is replayed through `build_lot_book` **before** anything
+    is stored, for exactly the reason `PortfolioStore.add_transaction` does it:
+    otherwise the two backends disagree about what is valid, which is what ADR
+    4.5's "one code path, not two" exists to prevent. Uploading a CSV that sells
+    more shares than it ever bought (or carries a NaN share count) used to be
+    accepted outright by the session backend, and the Portfolio page then raised
+    on *every* subsequent render, because the first thing it does is replay the
+    log it just stored. The SQLite backend happened to catch the same file
+    inside `save`, but only after issuing its DELETEs, and reported it as an
+    unhandled traceback rather than a message about the file.
+    """
+    candidate = list(transactions)
+    build_lot_book(candidate)  # raises on an impossible log; nothing saved
     state = store.load()
-    updated = replace(state, transactions=list(transactions))
+    updated = replace(state, transactions=candidate)
     if cash is not None:
         updated.cash = float(cash)
     store.save(updated)

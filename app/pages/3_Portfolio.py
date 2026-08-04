@@ -156,9 +156,18 @@ def render_data_controls(store: holdings_lib.PortfolioStore) -> None:
         except ValueError as exc:
             st.error(f"Could not read that CSV: {exc}")
         else:
-            holdings_lib.replace_transactions(store, parsed)
-            st.success(f"Restored {len(parsed)} transactions.")
-            st.rerun()
+            try:
+                # An unreadable file and an unreplayable one are both the file's
+                # problem, not the app's -- e.g. a log that sells more shares
+                # than it ever bought parses fine and then cannot be booked.
+                # Surfaced here the same way the entry form surfaces its own
+                # rejections, rather than escaping as a page traceback.
+                holdings_lib.replace_transactions(store, parsed)
+            except ValueError as exc:
+                st.error(f"Could not restore that portfolio: {exc}")
+            else:
+                st.success(f"Restored {len(parsed)} transactions.")
+                st.rerun()
 
     if columns[3].button("Clear portfolio"):
         store.clear()
