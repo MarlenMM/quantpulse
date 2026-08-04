@@ -993,6 +993,7 @@ def refresh_backtest(session: Session, today: date) -> int:
             "ci_confidence_level": any_ci.confidence_level if any_ci else None,
             "max_drawdown": result.max_drawdown,
             "win_rate": result.win_rate,
+            "payoff_ratio": result.payoff_ratio,
             "benchmark_cagr": result.benchmark_cagr,
             "benchmark_sharpe": result.benchmark_sharpe,
             "avg_turnover": result.avg_turnover,

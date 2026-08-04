@@ -874,6 +874,7 @@ def read_backtest_history(session: Session, *, limit: int = 20) -> pd.DataFrame:
                 "ci_confidence_level": row.ci_confidence_level,
                 "max_drawdown": row.max_drawdown,
                 "win_rate": row.win_rate,
+                "payoff_ratio": row.payoff_ratio,
                 "benchmark_cagr": row.benchmark_cagr,
                 "benchmark_sharpe": row.benchmark_sharpe,
                 "avg_turnover": row.avg_turnover,

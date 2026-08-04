@@ -53,6 +53,7 @@ __all__ = [
     "cagr",
     "max_drawdown",
     "directional_hit_rate",
+    "payoff_ratio",
     "rmse",
     "AccuracyResult",
     "walk_forward_accuracy",
@@ -197,6 +198,31 @@ def directional_hit_rate(
         return None
     hits = np.sign(pred[gradable]) == np.sign(act[gradable])
     return float(hits.mean())
+
+
+def payoff_ratio(returns: pd.Series) -> float | None:
+    """Mean winning period divided by mean losing period, both as magnitudes.
+
+    The "b" in the Kelly criterion: how much a win pays relative to what a loss
+    costs. Paired with a hit rate it is everything
+    `optimization.kelly_position_fraction` needs, and that function's docstring
+    points here deliberately -- a position size is only as honest as the track
+    record behind it, and this is the module that measures one out-of-sample.
+
+    `None` unless there is at least one win *and* one loss: with no losses the
+    ratio is infinite rather than large, and an infinite payoff ratio would feed
+    Kelly a bet it thinks cannot lose. Flat periods (exactly zero) count as
+    neither, so they neither flatter nor penalize the ratio.
+    """
+    clean = pd.to_numeric(returns, errors="coerce").dropna()
+    wins = clean[clean > 0]
+    losses = clean[clean < 0]
+    if wins.empty or losses.empty:
+        return None
+    mean_loss = float(losses.abs().mean())
+    if mean_loss <= 0:
+        return None
+    return float(wins.mean()) / mean_loss
 
 
 def rmse(
@@ -350,6 +376,13 @@ class StrategyResult:
     cagr: float | None
     max_drawdown: float
     win_rate: float | None
+    # Mean winning period / mean losing period, both as positive magnitudes.
+    # Together with `win_rate` this is exactly what a Kelly position size needs
+    # (`optimization.kelly_position_fraction`), and its docstring points here
+    # because this is the only place in the project that measures either from a
+    # real out-of-sample track record. `None` when the run has no wins or no
+    # losses -- a payoff ratio needs both sides to be defined.
+    payoff_ratio: float | None
     benchmark_return: pd.Series
     benchmark_cagr: float | None
     benchmark_sharpe: float | None
@@ -509,6 +542,7 @@ def backtest_strategy(
         cagr=cagr(returns, periods_per_year=ppy),
         max_drawdown=max_drawdown(returns),
         win_rate=float((returns > 0).mean()) if not returns.empty else None,
+        payoff_ratio=payoff_ratio(returns),
         benchmark_return=bench,
         benchmark_cagr=cagr(bench, periods_per_year=ppy) if not bench.empty else None,
         benchmark_sharpe=sharpe_ratio(bench, periods_per_year=ppy) if not bench.empty else None,

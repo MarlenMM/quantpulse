@@ -27,6 +27,7 @@ __all__ = [
     "price_chart",
     "subscore_radar",
     "forecast_fan_chart",
+    "monte_carlo_fan_chart",
     "allocation_pie",
     "equity_curve_chart",
     "regime_gauge",
@@ -321,3 +322,73 @@ def rating_distribution(counts: dict[str, int]) -> go.Figure:
         )
     )
     return _base_layout(fig, height=300)
+
+
+def monte_carlo_fan_chart(history: pd.DataFrame, fan: Any) -> go.Figure:
+    """A simulated-path fan: percentile price bands widening day by day.
+
+    Distinct from `forecast_fan_chart`, which draws a stored model's point and
+    band at each *stored horizon*. This draws a `forecasting.MonteCarloFanChart`
+    -- a percentile price at every trading day out to the horizon -- so the
+    uncertainty widens continuously the way a random walk's actually does,
+    rather than stepping between a handful of horizons. Section 7.6 calls that
+    the most honest way to show a possible price path.
+
+    The median is drawn as a line; each symmetric percentile pair around it is
+    drawn as a filled band. Nothing here computes anything: the simulation is
+    `forecasting.monte_carlo_fan_chart`'s job, this only draws it.
+    """
+    if fan is None:
+        return empty_figure("Not enough price history to simulate paths")
+
+    generated = (
+        pd.Timestamp(history["date"].iloc[-1]) if not history.empty else pd.Timestamp.today()
+    )
+    future_dates = [generated + pd.Timedelta(days=int(d)) for d in fan.days]
+
+    fig = go.Figure()
+    if not history.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=history["date"],
+                y=history["close"],
+                name="Close",
+                mode="lines",
+                line=dict(color=_MUTED, width=1.5),
+            )
+        )
+
+    levels = sorted(fan.percentiles)
+    # Pair the outermost percentiles inward, so a 5/95 band sits behind a 25/75.
+    for low, high in zip(levels, reversed(levels), strict=False):
+        if low >= high:
+            break
+        fig.add_trace(
+            go.Scatter(
+                x=[*future_dates, *future_dates[::-1]],
+                y=[*fan.percentiles[high], *fan.percentiles[low][::-1]],
+                fill="toself",
+                fillcolor=_BAND,
+                line=dict(width=0),
+                hoverinfo="skip",
+                name=f"{low:g}-{high:g}%",
+            )
+        )
+
+    median = min(levels, key=lambda p: abs(p - 50.0))
+    fig.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=fan.percentiles[median],
+            name=f"{median:g}th percentile",
+            mode="lines",
+            line=dict(color=_ACCENT, width=2, dash="dot"),
+        )
+    )
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=380,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=-0.2),
+    )
+    return fig
