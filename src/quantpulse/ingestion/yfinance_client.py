@@ -80,7 +80,14 @@ def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
         # the cold-start seed) keep their own guard as well, but doing it here
         # means a bar that cannot be stored never leaves the ingestion layer,
         # so a third consumer can't reintroduce the same crash.
-        return df.dropna(subset=list(_PRICE_COLUMNS[2:])).reset_index()
+        clean = df.dropna(subset=list(_PRICE_COLUMNS[2:]))
+        # A non-positive adjusted close is not a price -- free sources emit
+        # zeros for some delisted names (DEC ships 732 such bars while its raw
+        # close is $1.44). One of them turns the equal-weight benchmark into
+        # `inf`, so drop them at the source instead of letting each consumer
+        # discover it. `volume` is legitimately 0 on an untraded day and is
+        # deliberately not screened here.
+        return clean[clean["adj_close"] > 0].reset_index()
 
     # `period` must be in the cache key: a 5d nightly pull and a max/10y seed
     # backfill for the same symbol are different data and must not collide.

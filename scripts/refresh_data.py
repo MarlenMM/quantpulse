@@ -891,9 +891,20 @@ def _equal_weight_benchmark(panel: pd.DataFrame) -> pd.Series:
     averaged across whatever names exist on each date. A dedicated S&P 500 price
     series isn't ingested, so this survivorship-aware average of the universe is
     the honest stand-in for the buy-and-hold benchmark (Section 7.6).
+
+    Names whose first observation is not strictly positive are dropped rather
+    than rebased. Dividing by a zero first price yields `inf` for that column,
+    and one such column drags the whole cross-sectional mean to `inf` -- a
+    single bad symbol silently destroying the benchmark every strategy number
+    is compared against. `persistence.read_adj_close_panel` already filters
+    these out; this is the second line of defence for any other caller.
     """
-    first = panel.apply(lambda col: col.dropna().iloc[0] if col.notna().any() else np.nan)
-    normalized = panel.divide(first, axis=1)
+    positive = panel.where(panel > 0)
+    first = positive.apply(lambda col: col.dropna().iloc[0] if col.notna().any() else np.nan)
+    usable = first[first > 0].index
+    if len(usable) == 0:
+        return pd.Series(index=panel.index, dtype=float)
+    normalized = positive[usable].divide(first[usable], axis=1)
     return normalized.mean(axis=1, skipna=True)
 
 

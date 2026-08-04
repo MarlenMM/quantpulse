@@ -478,3 +478,57 @@ class TestFreshnessAndUniverse:
 
     def test_latest_prices_empty_input(self, ui_session) -> None:
         assert persistence.read_latest_prices(ui_session, []) == {}
+
+
+class TestAdjClosePanelExcludesUnusablePrices:
+    """A non-positive adjusted close is not a price, and one poisons everything.
+
+    Real example from the cold-start backfill: `DEC` carries 732 bars whose
+    `adj_close` is exactly 0.0 while its raw `close` is $1.44. Left in the
+    panel, `refresh_data._equal_weight_benchmark` rebases each name to its own
+    first observation -- so dividing by that zero makes the ENTIRE benchmark
+    index `inf`, and every strategy-vs-market number on the Track Record page
+    is compared against infinity.
+    """
+
+    @staticmethod
+    def _bar(session: Session, symbol: str, day: int, adj_close: float) -> None:
+        session.add(
+            PriceHistory(
+                symbol=symbol,
+                date=date(2024, 1, day),
+                open=10.0,
+                high=10.0,
+                low=10.0,
+                close=10.0,
+                adj_close=adj_close,
+                volume=100,
+            )
+        )
+
+    def test_zero_and_negative_adj_close_rows_are_excluded(self, session: Session) -> None:
+        session.add(Ticker(symbol="DEC", name="Decoy", asset_type="equity", is_active=False))
+        self._bar(session, "AAPL", 2, 10.0)
+        self._bar(session, "AAPL", 3, 11.0)
+        self._bar(session, "DEC", 2, 0.0)  # the real-world shape
+        self._bar(session, "DEC", 3, -1.0)
+        session.commit()
+
+        panel = persistence.read_adj_close_panel(
+            session, start=date(2024, 1, 1), end=date(2024, 1, 31)
+        )
+
+        assert "DEC" not in panel.columns, "an all-unusable symbol must not reach the panel"
+        assert list(panel["AAPL"]) == [10.0, 11.0]
+
+    def test_only_the_bad_bars_are_dropped_not_the_whole_symbol(self, session: Session) -> None:
+        session.add(Ticker(symbol="DEC", name="Decoy", asset_type="equity", is_active=False))
+        self._bar(session, "DEC", 2, 0.0)  # bad bar first -- the one that caused `inf`
+        self._bar(session, "DEC", 3, 5.0)  # genuine price afterwards
+        session.commit()
+
+        panel = persistence.read_adj_close_panel(
+            session, start=date(2024, 1, 1), end=date(2024, 1, 31)
+        )
+
+        assert panel["DEC"].dropna().tolist() == [5.0]
