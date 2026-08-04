@@ -28,11 +28,19 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice, search_symbols
-from quantpulse.analysis.investor_profiles import CATEGORIES, get_profile, profile_names
+from quantpulse.analysis import scoring
+from quantpulse.analysis.investor_profiles import (
+    CATEGORIES,
+    InvestorProfile,
+    get_profile,
+    profile_names,
+)
 
 st.set_page_config(page_title="QuantPulse — Screener", page_icon="🔎", layout="wide")
 
 SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
+# The pre-normalization inputs absolute mode re-scores from (see `rescore_absolute`).
+RAW_COLUMNS = {category: f"{category}_raw" for category in CATEGORIES}
 
 
 def reweight(rows: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
@@ -51,6 +59,48 @@ def reweight(rows: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
     available = present.mul(weight_series, axis=1).sum(axis=1)
     weighted = sub.fillna(0.0).mul(weight_series, axis=1).sum(axis=1)
     return weighted.where(available > 0).div(available.where(available > 0))
+
+
+def rescore_absolute(
+    rows: pd.DataFrame, weights: dict[str, float], profile_name: str
+) -> pd.DataFrame | None:
+    """Re-rate the filtered rows against a fixed bar, from the stored raw values.
+
+    Delegates to `scoring.build_composite(..., rating_mode="absolute")` rather
+    than reimplementing the mapping, so the page cannot drift from the engine --
+    the same discipline `reweight` follows for the relative path.
+
+    Returns `None` when the rows predate the raw columns, because an absolute
+    rating genuinely cannot be recovered from a percentile. Saying so is the
+    honest option; quietly showing relative ratings under an "absolute" label
+    would be the exact mislabelling this mode was fixed to stop.
+    """
+    raw_columns = [RAW_COLUMNS[category] for category in CATEGORIES]
+    if not set(raw_columns).issubset(rows.columns):
+        return None
+    raw = rows[raw_columns].copy()
+    raw.columns = list(CATEGORIES)
+    raw.index = rows["symbol"]
+    if raw.notna().to_numpy().sum() == 0:
+        return None
+
+    profile = get_profile(profile_name)
+    custom = InvestorProfile(
+        name=profile.name,
+        weights={c: w / sum(weights.values()) for c, w in weights.items()}
+        if sum(weights.values()) > 0
+        else profile.weights,
+        income_tilt=profile.income_tilt,
+        prefer_low_volatility=profile.prefer_low_volatility,
+    )
+    scored = scoring.build_composite(raw, profile=custom, rating_mode="absolute").scores
+    if scored.empty:
+        return None
+    scored = scored.set_index("symbol")
+    merged = rows.set_index("symbol").copy()
+    merged["custom_score"] = scored["composite_score"]
+    merged["rating"] = scored["rating"]
+    return merged.reset_index()
 
 
 def main() -> None:
@@ -99,6 +149,29 @@ def main() -> None:
             ),
         ).strip()
 
+        st.header("Rating scheme")
+        absolute_mode = (
+            st.radio(
+                "How should ratings be decided?",
+                ("relative", "absolute"),
+                format_func=lambda m: (
+                    "Relative — rank against today's peers"
+                    if m == "relative"
+                    else "Absolute — judge against a fixed bar"
+                ),
+                help=tip("Rating"),
+            )
+            == "absolute"
+        )
+        st.caption(
+            "**Relative** always names a top decile Strong Buy, however the whole "
+            "market looks — that is Section 22's warning, not a bug. **Absolute** "
+            "measures every category against a fixed bar instead, so a broadly "
+            "falling market genuinely produces fewer Strong Buys (and can produce "
+            "none). Needs the stored raw category values; rows written before those "
+            "existed fall back to relative."
+        )
+
         st.header("Re-weight categories")
         st.caption(
             "Recomputed instantly from stored sub-scores — no pipeline re-run "
@@ -131,7 +204,18 @@ def main() -> None:
             filtered = filtered.drop(columns="_rank")
 
     total_weight = sum(weights.values())
-    if total_weight > 0:
+    if absolute_mode:
+        filtered = rescore_absolute(filtered, weights, profile_name)
+        if filtered is None:
+            st.warning(
+                "These rows were scored before raw category values were stored, so an "
+                "absolute rating cannot be derived from them. Showing the relative "
+                "ranking — the next nightly run will populate them."
+            )
+            filtered = rows.copy().assign(custom_score=lambda f: f["composite_score"])
+        else:
+            filtered = filtered.sort_values("custom_score", ascending=False)
+    elif total_weight > 0:
         normalized = {k: v / total_weight for k, v in weights.items()}
         filtered = filtered.assign(custom_score=reweight(filtered, normalized))
         filtered = filtered.sort_values("custom_score", ascending=False)

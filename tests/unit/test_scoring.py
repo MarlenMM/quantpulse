@@ -314,13 +314,20 @@ class TestBuildComposite:
     def test_output_has_composite_scores_shape(self) -> None:
         raw = pd.DataFrame({"fundamental": [50.0, 60.0]}, index=["A", "B"])
         cols = set(scoring.build_composite(raw).scores.columns)
-        expected = {
-            "symbol",
-            "composite_score",
-            "percentile_rank",
-            "rating",
-            "data_confidence",
-        } | set(scoring.CATEGORY_SCORE_COLUMNS.values())
+        expected = (
+            {
+                "symbol",
+                "composite_score",
+                "percentile_rank",
+                "rating",
+                "data_confidence",
+            }
+            | set(scoring.CATEGORY_SCORE_COLUMNS.values())
+            # The pre-normalization inputs travel with the row so a stored
+            # score can be re-rated in absolute mode later; a percentile alone
+            # cannot be un-ranked back into an absolute reading.
+            | set(scoring.CATEGORY_RAW_COLUMNS.values())
+        )
         assert cols == expected
 
     def test_invalid_rating_mode_raises(self) -> None:
