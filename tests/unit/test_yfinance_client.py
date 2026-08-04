@@ -58,6 +58,59 @@ def test_fetch_price_history_normalizes_columns(tmp_path: Path) -> None:
     mock_ticker.history.assert_called_once_with(period="5d", auto_adjust=False)
 
 
+def test_fetch_price_history_returns_an_empty_frame_for_a_symbol_with_no_data(
+    tmp_path: Path,
+) -> None:
+    # yfinance signals "delisted / throttled / 404" with an EMPTY frame whose
+    # index is a plain Index, not a DatetimeIndex -- so `.tz_localize(None)`
+    # raised AttributeError. The cold-start backfill walks every symbol that was
+    # ever in the index, 756 of which are delisted, so "no history" has to be a
+    # clean empty answer rather than an exception per symbol.
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = pd.DataFrame()
+
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        df = yfinance_client.fetch_price_history("ZZZZ", period="max")
+
+    assert df.empty
+    # Shape-identical to a populated result, so every consumer behaves the same.
+    assert list(df.columns) == list(yfinance_client._PRICE_COLUMNS)
+
+
+def test_fetch_price_history_empty_frame_columns_match_the_populated_path(
+    tmp_path: Path,
+) -> None:
+    raw = pd.DataFrame(
+        {
+            "Open": [1.0],
+            "High": [2.0],
+            "Low": [0.5],
+            "Close": [1.5],
+            "Adj Close": [1.5],
+            "Volume": [1000],
+        },
+        index=pd.DatetimeIndex(["2026-07-20"], name="Date", tz="America/New_York"),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = raw
+    with (
+        patch(
+            "quantpulse.ingestion.yfinance_client.get_settings",
+            return_value=_fake_settings(tmp_path),
+        ),
+        patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=mock_ticker),
+    ):
+        populated = yfinance_client.fetch_price_history("AAPL", period="5d")
+
+    assert list(populated.columns) == list(yfinance_client._PRICE_COLUMNS)
+
+
 def test_fetch_fundamentals_maps_info_fields(tmp_path: Path) -> None:
     mock_ticker = MagicMock()
     mock_ticker.info = {

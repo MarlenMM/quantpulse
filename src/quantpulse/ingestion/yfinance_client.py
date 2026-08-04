@@ -35,13 +35,31 @@ def _cache_dir(subdir: str) -> Path:
     return Path(get_settings().ingestion_cache_dir) / "yfinance" / subdir
 
 
+# Exactly the columns, in the order, the populated path below emits, so an
+# empty result is shape-identical to a real one for every downstream consumer.
+_PRICE_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "adj_close", "volume")
+
+
 def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
-    """OHLCV + adjusted close for `symbol`, normalized to the `price_history` schema."""
+    """OHLCV + adjusted close for `symbol`, normalized to the `price_history` schema.
+
+    Returns an **empty, correctly-columned** frame when the symbol has no data
+    for `period` -- a delisted ticker, or a throttled/404 response. yfinance
+    signals that with an empty frame carrying a plain `Index` rather than a
+    `DatetimeIndex`, so the timezone normalization below used to raise
+    `AttributeError: 'Index' object has no attribute 'tz_localize'`. That
+    matters most exactly where it hurts: the cold-start backfill walks every
+    symbol that was EVER in the index, 756 of which are delisted, so the
+    fast path for "this name has no history" must be a clean empty answer,
+    not an exception traceback per symbol.
+    """
 
     def _fetch() -> pd.DataFrame:
         _rate_limiter.wait()
         with get_breaker(_SOURCE).guard():
             raw = yf.Ticker(symbol).history(period=period, auto_adjust=False)
+        if raw.empty or not isinstance(raw.index, pd.DatetimeIndex):
+            return pd.DataFrame({column: pd.Series(dtype="object") for column in _PRICE_COLUMNS})
         df = raw.rename(
             columns={
                 "Open": "open",
