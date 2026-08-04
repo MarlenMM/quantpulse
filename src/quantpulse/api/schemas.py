@@ -123,7 +123,10 @@ class ForecastRow(BaseModel):
     `historical_hit_rate` is part of the row rather than a separate endpoint on
     purpose: Section 7.6 requires a forecast to be shown next to its own
     accuracy, and a client that has to make a second call to get it is a client
-    that will ship without it.
+    that will ship without it. `hit_rate_windows` travels with it for the same
+    reason -- a rate measured over 40 distinct out-of-sample windows and one
+    measured over 3 are different claims, and a client that has to ask for the
+    sample size separately will render the percentage without it.
     """
 
     model_name: str
@@ -134,6 +137,7 @@ class ForecastRow(BaseModel):
     upper_price: float | None = None
     historical_hit_rate: float | None = None
     baseline_hit_rate: float | None = None
+    hit_rate_windows: int | None = None
     generated_date: date
 
 

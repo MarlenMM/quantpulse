@@ -417,6 +417,12 @@ def main() -> None:
         table["vs naive"] = table["baseline_hit_rate"].map(
             lambda v: "—" if pd.isna(v) else format_percent(v, digits=0)
         )
+        # The sample size behind those two percentages. A rate over 40 distinct
+        # out-of-sample windows and one over 3 are different claims, and without
+        # this column they looked identical.
+        table["Windows"] = table.get(
+            "hit_rate_windows", pd.Series(index=table.index, dtype="float")
+        ).map(lambda v: "—" if pd.isna(v) else f"{int(v)}")
         st.dataframe(
             table[
                 [
@@ -427,6 +433,7 @@ def main() -> None:
                     "upper_price",
                     "Hit rate",
                     "vs naive",
+                    "Windows",
                 ]
             ].rename(
                 columns={
@@ -446,11 +453,22 @@ def main() -> None:
                 "High": st.column_config.NumberColumn(
                     "High", help="Upper bound of the forecast range, not a target."
                 ),
+                "Windows": st.column_config.TextColumn(
+                    "Windows",
+                    help="How many distinct out-of-sample periods the two hit rates were "
+                    "measured over. More is better; a rate from a handful of windows is "
+                    "an anecdote, not a track record.",
+                ),
             },
         )
         st.caption(
             "**Hit rate** is this model's own out-of-sample directional accuracy at that "
-            "horizon (Section 7.6) — shown next to the forecast, not hidden on another page."
+            "horizon (Section 7.6) — shown next to the forecast, not hidden on another page. "
+            "**Windows** is how many separate historical periods it was measured over. A "
+            "dash means the model has not been graded over enough distinct windows for a "
+            "rate to mean anything, so none is shown rather than a flattering one: at the "
+            "one-year horizon in particular there simply are not many independent years to "
+            "test against."
         )
 
     render_monte_carlo(symbol, bars)

@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import Connection, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from quantpulse.config import get_settings
@@ -28,7 +28,7 @@ class SchemaOutOfDateError(RuntimeError):
     """The database is behind the migration head, so writes will fail mid-run."""
 
 
-def assert_schema_current() -> None:
+def assert_schema_current(bind: Connection | None = None) -> None:
     """Fail immediately if the database is not migrated up to the latest revision.
 
     Called at the top of the long-running jobs. Without it, a missed
@@ -39,6 +39,15 @@ def assert_schema_current() -> None:
     fetching 503 tickers before its composite-scoring step died on a missing
     `fundamental_raw`, leaving the ratings table empty while prices, options and
     the regime row all landed and the job reported "partial".
+
+    **Pass the connection the job will actually write through.** Defaulting to
+    this module's own engine looks equivalent, and is in production, but the
+    engine is bound at import time from `get_settings()` -- so a caller that
+    routes its writes elsewhere (a test against a temporary database, a script
+    that swaps the session factory) gets its schema verified against a database
+    it never touches. That guard can then fail on a perfectly good run, or worse
+    pass on a stale one. `bind=None` keeps the old behaviour for callers that
+    genuinely use the default engine.
 
     Cheap enough to run unconditionally (one query plus a directory scan), and
     the failure it replaces is expensive.
@@ -52,8 +61,11 @@ def assert_schema_current() -> None:
     script = ScriptDirectory.from_config(config)
     heads = set(script.get_heads())
 
-    with engine.connect() as connection:
-        current = MigrationContext.configure(connection).get_current_heads()
+    if bind is not None:
+        current = MigrationContext.configure(bind).get_current_heads()
+    else:
+        with engine.connect() as connection:
+            current = MigrationContext.configure(connection).get_current_heads()
 
     if set(current) != heads:
         raise SchemaOutOfDateError(

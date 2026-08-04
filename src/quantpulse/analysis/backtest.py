@@ -56,6 +56,7 @@ __all__ = [
     "payoff_ratio",
     "rmse",
     "AccuracyResult",
+    "MIN_GRADED_WINDOWS",
     "walk_forward_accuracy",
     "StrategyResult",
     "backtest_strategy",
@@ -78,6 +79,24 @@ _PERIODS_PER_YEAR = {"weekly": 52.0, "monthly": 12.0}
 # Per-model minimum history before a walk-forward fold is even attempted, so the
 # first evaluation isn't fit on a handful of bars.
 _MIN_ACCURACY_TRAIN = 60
+
+# Distinct evaluation windows a pooled hit rate needs before it is worth
+# publishing at all.
+#
+# A hit rate is a proportion, so its standard error is at most 0.5/sqrt(n): at
+# 20 windows that is 11 percentage points, meaning a 90% interval spans +/-18pp
+# and "50%" is indistinguishable from "68%". Thirty brings it to about +/-15pp,
+# which is the point at which the interval is narrower than the gap between "no
+# skill" and a rate a reader would find interesting.
+#
+# The number that matters is *windows*, not pooled pairs. Measured on real
+# history over the nightly's read window: the 5-day horizon grades 163 windows
+# per name and the 20-day horizon 40, but the 63-day horizon only 12 and the
+# 1-year horizon none at all. Pooling twenty symbols multiplies the pair count
+# twentyfold without adding a single new window -- the same three years of one
+# market, read twenty times -- so a "60% hit rate" at the 1-year horizon was
+# twenty correlated readings of a single year.
+MIN_GRADED_WINDOWS = 30
 
 # A return series whose standard deviation is this small *relative to its own
 # magnitude* is constant to within floating-point noise, so its Sharpe is
@@ -257,6 +276,13 @@ class AccuracyResult:
     per-fold forward returns (the model's), kept so the bootstrap sub-part can
     resample a confidence interval around the hit-rate without re-running the
     walk-forward.
+
+    `as_of` is the evaluation date behind each pair, and it is not decoration.
+    A hit rate pooled across many symbols has as many *pairs* as symbols x
+    folds, but only as many independent *observations* as there were distinct
+    evaluation windows -- twenty stocks graded over the same three one-year
+    windows is three pieces of evidence wearing a sample size of sixty. Carrying
+    the dates is what lets a caller count the former rather than the latter.
     """
 
     model_name: str
@@ -268,6 +294,7 @@ class AccuracyResult:
     baseline_rmse: float | None
     predicted: np.ndarray
     realized: np.ndarray
+    as_of: tuple[pd.Timestamp, ...] = ()
 
 
 def walk_forward_accuracy(
@@ -312,6 +339,7 @@ def walk_forward_accuracy(
     ordered = prices.loc[close.index]  # align caller's frame to the clean close index
     model_pred: list[float] = []
     model_real: list[float] = []
+    model_dates: list[pd.Timestamp] = []
     base_pred: list[float] = []
     base_real: list[float] = []
 
@@ -323,6 +351,7 @@ def walk_forward_accuracy(
         if model_fc is not None:
             model_pred.append(model_fc.point_return)
             model_real.append(realized)
+            model_dates.append(pd.Timestamp(close.index[i]))
         base_fc = baseline_fn(train, horizon_days)
         if base_fc is not None:
             base_pred.append(base_fc.point_return)
@@ -343,6 +372,7 @@ def walk_forward_accuracy(
         baseline_rmse=rmse(base_pred, base_real),
         predicted=predicted,
         realized=realized_arr,
+        as_of=tuple(model_dates),
     )
 
 

@@ -805,8 +805,8 @@ def _ohlcv_frames_by_symbol(ohlcv: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
-def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], float]:
-    """Each (model, horizon)'s out-of-sample directional hit-rate, pooled over a sample.
+def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], tuple[float, int]]:
+    """Each (model, horizon)'s out-of-sample hit-rate **and its window count**, pooled.
 
     Runs the look-ahead-free walk-forward (`backtest.walk_forward_accuracy`) for
     every runner and horizon over the `_ACCURACY_SAMPLE_SIZE` longest-history
@@ -815,9 +815,18 @@ def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], 
     next to every individual forecast (Section 7.6) -- computed on a bounded
     sample so it stays affordable, since the point estimate is a property of the
     model, not of any one stock.
+
+    **The returned count is distinct evaluation windows, not pooled pairs**, and
+    a rate measured over fewer than `backtest.MIN_GRADED_WINDOWS` of them is
+    dropped rather than published. Pooling twenty symbols multiplies the pair
+    count twentyfold without adding a single new window: the sampled names all
+    share one trading calendar, so they are twenty readings of the *same*
+    history. Measured on real data, that inflated the 1-year horizon's apparent
+    sample from 1-3 windows to 20-60 pairs, and the ML model's "60% hit rate vs
+    52% naive" there was twenty correlated readings of a single year.
     """
     sample = sorted(frames.values(), key=len, reverse=True)[:_ACCURACY_SAMPLE_SIZE]
-    pooled: dict[tuple[str, int], tuple[list[float], list[float]]] = {}
+    pooled: dict[tuple[str, int], tuple[list[float], list[float], set[pd.Timestamp]]] = {}
     for prices in sample:
         for model_fn, model_name in _FORECAST_RUNNERS.values():
             for horizon in _FORECAST_HORIZONS:
@@ -826,15 +835,27 @@ def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], 
                 )
                 if result is None:
                     continue
-                pred, real = pooled.setdefault((model_name, horizon), ([], []))
+                pred, real, windows = pooled.setdefault((model_name, horizon), ([], [], set()))
                 pred.extend(result.predicted.tolist())
                 real.extend(result.realized.tolist())
+                windows.update(result.as_of)
 
-    hit_rates: dict[tuple[str, int], float] = {}
-    for key, (pred, real) in pooled.items():
+    hit_rates: dict[tuple[str, int], tuple[float, int]] = {}
+    for key, (pred, real, windows) in pooled.items():
         rate = backtest.directional_hit_rate(pred, real)
-        if rate is not None:
-            hit_rates[key] = rate
+        if rate is None:
+            continue
+        if len(windows) < backtest.MIN_GRADED_WINDOWS:
+            logger.info(
+                "Not publishing the %s hit rate at h=%d: %d graded window(s), "
+                "below the %d needed for the figure to mean anything",
+                key[0],
+                key[1],
+                len(windows),
+                backtest.MIN_GRADED_WINDOWS,
+            )
+            continue
+        hit_rates[key] = (rate, len(windows))
     return hit_rates
 
 
@@ -862,6 +883,13 @@ def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> 
         if prices is None:
             continue
         for fc in forecasting.generate_forecasts(prices, horizons=_FORECAST_HORIZONS):
+            graded = hit_rates.get((fc.model_name, fc.horizon_days))
+            # The naive null's rate over the same horizon, so the UI can show
+            # "55% vs 53% naive" instead of a bare number that reads as skill.
+            # `baseline` is itself one of the runners, so this is the identical
+            # pooling over the identical sample -- not a second,
+            # differently-computed statistic.
+            baseline_graded = hit_rates.get(("baseline", fc.horizon_days))
             records.append(
                 {
                     "symbol": symbol,
@@ -872,13 +900,11 @@ def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> 
                     "point_price": fc.point_price,
                     "lower_price": fc.lower_price,
                     "upper_price": fc.upper_price,
-                    "historical_hit_rate": hit_rates.get((fc.model_name, fc.horizon_days)),
-                    # The naive null's rate over the same horizon, so the UI can
-                    # show "55% vs 53% naive" instead of a bare number that
-                    # reads as skill. `baseline` is itself one of the runners,
-                    # so this is the identical pooling over the identical
-                    # sample -- not a second, differently-computed statistic.
-                    "baseline_hit_rate": hit_rates.get(("baseline", fc.horizon_days)),
+                    "historical_hit_rate": graded[0] if graded else None,
+                    "baseline_hit_rate": baseline_graded[0] if baseline_graded else None,
+                    # How many distinct out-of-sample windows the rate above was
+                    # measured over -- null when there is no rate to qualify.
+                    "hit_rate_windows": graded[1] if graded else None,
                 }
             )
     return persistence.upsert_forecasts(session, records)
@@ -1183,8 +1209,12 @@ def run(job_name: str = "refresh_data") -> str:
     logger.info("%s starting (run_id=%s)", job_name, run_id)
     # Before anything expensive. A missed `alembic upgrade head` otherwise
     # surfaces as "table X has no column named Y" from whichever step writes
-    # that column first -- nine minutes and 503 tickers into the run.
-    assert_schema_current()
+    # that column first -- nine minutes and 503 tickers into the run. Checked
+    # through this job's OWN session, so it verifies the database the run will
+    # actually write to rather than whatever the module-level engine happens to
+    # point at.
+    with get_session() as session:
+        assert_schema_current(session.connection())
     started_at = datetime.now()
     # The trading day is decided in EXCHANGE time, not the runner's. GitHub's
     # runners are UTC, and the schedule fires in the US evening -- so a naive
