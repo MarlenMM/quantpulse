@@ -46,6 +46,29 @@ class TestScoreMomentum:
     def test_too_short_is_none(self) -> None:
         assert scoring.score_momentum(_ohlcv(list(np.linspace(100, 110, 10)))) is None
 
+    def test_abstains_below_a_quarter_of_history(self) -> None:
+        """A Sharpe-like ratio from ~1 month of bars is noise wearing a number.
+
+        The floor used to be 21 bars, and the deployed demo cleared it with 23:
+        every one of 503 names published a "6-month risk-adjusted momentum"
+        computed from 22 daily returns, which correlated 0.96 with the technical
+        score -- one short-term price signal counted twice, at full weight
+        toward `data_confidence`.
+        """
+        one_month = _ohlcv(list(np.linspace(100, 110, 25)))
+        assert scoring.score_momentum(one_month) is None
+        # Just under a quarter still abstains; comfortably over it reports.
+        assert scoring.score_momentum(_ohlcv(list(np.linspace(100, 110, 60)))) is None
+        assert scoring.score_momentum(_ohlcv(list(np.linspace(100, 130, 90)))) is not None
+
+    def test_abstention_drops_the_category_rather_than_scoring_zero(self) -> None:
+        # The honest consequence: a thin name loses momentum's weight from its
+        # data_confidence instead of being ranked on a number nobody can trust.
+        raw = pd.DataFrame({"technical": [60.0, 40.0], "momentum": [None, None]}, index=["A", "B"])
+        scores = scoring.build_composite(raw, profile="balanced").scores.set_index("symbol")
+        assert pd.isna(scores.loc["A", "momentum_score"])
+        assert scores.loc["A", "data_confidence"] == pytest.approx(20.0)  # technical only
+
     def test_flat_series_is_none(self) -> None:
         assert scoring.score_momentum(_ohlcv([100.0] * 200)) is None
 

@@ -93,7 +93,24 @@ _REGIME_NEUTRAL = 50.0
 
 # Trailing windows (trading days) for the derived technical/momentum scorers.
 _MOMENTUM_WINDOW = 126  # ~6 months of risk-adjusted trailing return
-_MIN_MOMENTUM_BARS = 21  # need at least ~1 month to say anything
+# Minimum trailing bars before a risk-adjusted momentum reading is reported at
+# all. Raised from 21 (~1 month) to ~3 months, because 21 was low enough to
+# produce a confident-looking number out of noise.
+#
+# This score is a Sharpe-like mean/std ratio, and the standard error of such an
+# estimate is roughly 1/sqrt(n): at 21 observations that is ~0.22 in daily
+# units, comparable to the entire cross-sectional spread of the signal itself.
+# Ranking 500 companies on it is then close to ranking them at random -- while
+# the category still counts at full weight toward `data_confidence`, so the
+# output looks no less certain than a fully-supported one.
+#
+# The real cost of the old floor was visible in production: the deployed demo
+# had 23 bars of history, cleared the 21-bar floor, and published a "6-month
+# risk-adjusted momentum" for all 503 names computed from 22 daily returns --
+# which correlated 0.96 with the technical score, i.e. one short-term price
+# signal counted twice. 63 bars still errs generous against a 126-bar window,
+# but it is past the point where the estimate is dominated by its own noise.
+_MIN_MOMENTUM_BARS = 63
 
 # Technical-signal saturation bands: a move of this size reads as a maxed-out
 # (+/-1) signal before averaging the component tilts.

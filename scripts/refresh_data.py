@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -73,6 +74,10 @@ from quantpulse.utils.log import configure_logging
 from quantpulse.utils.market_calendar import is_trading_day
 
 logger = logging.getLogger(__name__)
+
+# The exchange's own timezone. Every "what day is it" decision in this job is
+# made here rather than in the runner's clock -- see `run()`.
+_MARKET_TZ = ZoneInfo("America/New_York")
 
 _MAX_WORKERS = 8
 # Fundamentals/analyst consensus/macro don't change daily (Section 6.3) --
@@ -1156,7 +1161,14 @@ def run(job_name: str = "refresh_data") -> str:
     run_id = configure_logging(get_settings().log_level)
     logger.info("%s starting (run_id=%s)", job_name, run_id)
     started_at = datetime.now()
-    today = started_at.date()
+    # The trading day is decided in EXCHANGE time, not the runner's. GitHub's
+    # runners are UTC, and the schedule fires in the US evening -- so a naive
+    # `date.today()` reads one day ahead of the session whose closing prices are
+    # actually being fetched, stamping Monday's data as Tuesday and asking
+    # `is_trading_day` about the wrong date. It also makes the job's behaviour
+    # depend on how far GitHub's scheduler happens to slip, which is routinely
+    # hours.
+    today = datetime.now(_MARKET_TZ).date()
     status = "success"
     rows_updated = 0
 
