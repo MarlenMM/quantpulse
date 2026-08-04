@@ -461,6 +461,18 @@ class Forecast(Base):
     modest skill to a non-expert when it is a coin flip, and can hide a model
     doing materially worse than the null it is supposed to beat.
     `walk_forward_accuracy` always computed this; it simply had nowhere to live.
+
+    `hit_rate_windows` is how many distinct out-of-sample windows those two
+    rates were measured over, and it is the difference between a track record
+    and an anecdote. Both rates are pooled across a sample of symbols, so the
+    number of graded *pairs* is symbols x folds -- but twenty stocks graded over
+    the same three one-year windows is three pieces of evidence, not sixty. On
+    real history the 5-day horizon grades 163 windows and the 20-day horizon 40,
+    while the 1-year horizon grades none at all; a "60% hit rate" published
+    there was twenty correlated readings of a single year. Rates measured over
+    fewer than `backtest.MIN_GRADED_WINDOWS` windows are now stored as null
+    rather than published, and this column lets a reader judge the ones that
+    survive instead of taking every percentage at face value.
     """
 
     __tablename__ = "forecasts"
@@ -475,6 +487,7 @@ class Forecast(Base):
     upper_price: Mapped[float | None] = mapped_column(Float)
     historical_hit_rate: Mapped[float | None] = mapped_column(Float)
     baseline_hit_rate: Mapped[float | None] = mapped_column(Float)
+    hit_rate_windows: Mapped[int | None] = mapped_column(Integer)
 
 
 class BacktestResult(Base):

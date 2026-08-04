@@ -82,6 +82,10 @@ export interface ForecastRow {
   upper_price: number | null;
   historical_hit_rate: number | null;
   baseline_hit_rate: number | null;
+  // Distinct out-of-sample windows the two rates above were measured over. A
+  // rate from 40 windows and one from 3 are different claims; without this they
+  // rendered identically.
+  hit_rate_windows: number | null;
   generated_date: string;
 }
 

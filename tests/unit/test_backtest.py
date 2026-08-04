@@ -132,6 +132,41 @@ class TestWalkForwardAccuracy:
         result = bt.walk_forward_accuracy(prices, model_fn=anti, horizon_days=20, model_name="a")
         assert result is not None and result.hit_rate == pytest.approx(0.0)
 
+    def test_every_graded_pair_carries_its_evaluation_date(self) -> None:
+        # Pooling a hit rate across symbols multiplies the pair count without
+        # adding windows -- twenty stocks over the same three years is three
+        # pieces of evidence. Counting the distinct windows is only possible if
+        # the engine says which one each pair came from.
+        prices = _prices(100 * np.exp(np.cumsum(np.random.default_rng(5).normal(0, 0.02, 300))))
+        result = bt.walk_forward_accuracy(
+            prices, model_fn=lambda p, h: _fixed_forecast(0.01), horizon_days=20, model_name="c"
+        )
+        assert result is not None
+        assert len(result.as_of) == result.n == len(result.predicted)
+        # Dates are the as-of bar of each fold: strictly increasing, all real
+        # index values, and none inside the graded future.
+        assert list(result.as_of) == sorted(result.as_of)
+        assert len(set(result.as_of)) == len(result.as_of)
+        assert set(result.as_of).issubset(set(prices.index))
+        assert max(result.as_of) <= prices.index[-1 - 20]
+
+    def test_a_model_that_abstains_contributes_no_window(self) -> None:
+        # A model declining a fold (too little history for the horizon) must not
+        # leave a date behind it, or the window count over-reports the evidence.
+        prices = _prices(100 * np.exp(np.cumsum(np.random.default_rng(6).normal(0, 0.02, 300))))
+        calls = {"n": 0}
+
+        def sometimes(train: pd.DataFrame, h: int) -> Forecast | None:
+            calls["n"] += 1
+            return _fixed_forecast(0.01) if calls["n"] % 2 == 0 else None
+
+        result = bt.walk_forward_accuracy(
+            prices, model_fn=sometimes, horizon_days=20, model_name="half"
+        )
+        assert result is not None
+        assert len(result.as_of) == result.n
+        assert result.n * 2 <= calls["n"] + 1  # roughly half the folds produced nothing
+
     def test_reports_baseline_and_sample_size(self) -> None:
         prices = _prices(
             100 * np.exp(np.cumsum(np.random.default_rng(2).normal(0.0005, 0.02, 300)))
