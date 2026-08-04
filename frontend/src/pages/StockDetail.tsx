@@ -156,6 +156,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                   <th scope="col" className="num">Low</th>
                   <th scope="col" className="num">High</th>
                   <th scope="col" className="num">Hit rate</th>
+                  <th scope="col" className="num">vs naive</th>
                 </tr>
               </thead>
               <tbody>
@@ -167,6 +168,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                     <td className="num">{formatPrice(f.lower_price)}</td>
                     <td className="num">{formatPrice(f.upper_price)}</td>
                     <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
+                    <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -174,7 +176,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             <p className="muted small">
               <strong>Hit rate</strong> is this model's own out-of-sample directional
               accuracy at that horizon — shown next to the forecast, not hidden on
-              another page.
+              another page. <strong>vs naive</strong> is the same measure for a naive
+              random-walk forecast over the same periods. Read them together: a hit
+              rate only means something against that baseline, which on real history
+              is close to "how often the market simply went up". A model at or below
+              the naive column has not demonstrated any skill.
             </p>
           </>
         ) : (

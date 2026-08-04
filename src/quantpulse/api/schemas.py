@@ -133,6 +133,7 @@ class ForecastRow(BaseModel):
     lower_price: float | None = None
     upper_price: float | None = None
     historical_hit_rate: float | None = None
+    baseline_hit_rate: float | None = None
     generated_date: date
 
 
