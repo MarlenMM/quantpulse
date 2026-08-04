@@ -38,6 +38,28 @@ class TestValidation:
         with pytest.raises(ValueError, match="price must be > 0"):
             tx.build_lot_book([_buy("A", 10.0, 0.0, date(2024, 1, 1))])
 
+    def test_rejects_nan_and_infinite_shares(self) -> None:
+        # `NaN <= 0` is False, so a NaN slipped past the old `<= 0` guard. It
+        # then failed every later comparison too, so the holding vanished from
+        # the portfolio with no error -- an imported CSV could silently drop a
+        # position. Infinity passed the old guard outright and produced an
+        # infinite market value on the Portfolio page.
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="shares must be > 0"):
+                tx.build_lot_book([_buy("A", bad, 10.0, date(2024, 1, 1))])
+
+    def test_rejects_nan_and_infinite_price(self) -> None:
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="price must be > 0"):
+                tx.build_lot_book([_buy("A", 10.0, bad, date(2024, 1, 1))])
+
+    def test_rejects_nan_and_infinite_split_ratio(self) -> None:
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="ratio must be > 0"):
+                tx.build_lot_book(
+                    [], splits=[tx.StockSplit(symbol="A", date=date(2024, 1, 1), ratio=bad)]
+                )
+
     def test_rejects_bad_action(self) -> None:
         bad = tx.Transaction(
             symbol="A", action="short", shares=1.0, price=1.0, date=date(2024, 1, 1)
@@ -221,6 +243,16 @@ class TestPositions:
         assert tx.positions(book, current_prices={"A": float("nan")})["A"].is_stale is True
         assert tx.positions(book, current_prices={"A": 0.0})["A"].is_stale is True
         assert tx.positions(book, current_prices={"A": -5.0})["A"].is_stale is True
+
+    def test_infinite_quote_is_stale_not_an_infinite_portfolio_value(self) -> None:
+        # A NaN-only screen let infinity through, so a bad quote rendered as an
+        # infinite market value marked FRESH -- strictly worse than the stale
+        # path this guard exists to take.
+        book = tx.build_lot_book([_buy("A", 10.0, 100.0, date(2024, 1, 1))])
+        position = tx.positions(book, current_prices={"A": float("inf")})["A"]
+        assert position.is_stale is True
+        assert position.current_price is None
+        assert position.market_value is None
 
     def test_closed_position_does_not_appear(self) -> None:
         book = tx.build_lot_book(
