@@ -89,11 +89,20 @@ class ScreenerResponse(BaseModel):
     `rating_mode` travels with the rows so a client cannot present a relative
     ranking as an absolute judgment (Section 22) simply because it forgot to
     ask which scheme produced it.
+
+    `strong_buy_cutoff` is the percentile a name must reach to be a Strong Buy
+    *tonight* -- normally 90, lifted toward 95 by the Market Regime Index in a
+    risk-off market (Section 7.3 Tier 3). A client that re-weights the composite
+    locally has to re-rate as well, and re-deriving the dampener in its own
+    language would put a second implementation of a market-wide judgment call in
+    the codebase. Sending it means both front ends hand out the same count of
+    Strong Buys on the same night.
     """
 
     as_of: date | None
     profile: str
     rating_mode: str = "relative"
+    strong_buy_cutoff: float = 90.0
     count: int
     rows: list[ScreenerRow]
 

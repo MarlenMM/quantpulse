@@ -6,10 +6,11 @@ Two things here are doing real work rather than just displaying a table:
   asks for "custom score-weight sliders... recomputed client-side from stored
   sub-scores — no need to re-run the whole pipeline," which is possible only
   because the stored sub-scores are weight-INDEPENDENT by design (Section 7.5,
-  and why the nightly job stores just the `balanced` profile). The recomputation
-  here mirrors `scoring.build_composite`'s coverage rule exactly: renormalize
-  over the categories that actually have data rather than treating a missing
-  one as zero.
+  and why the nightly job stores just the `balanced` profile). Both re-scoring
+  paths delegate to `scoring.build_composite` rather than reimplementing the
+  weighting, so a slider cannot quietly disagree with the engine that produced
+  the stored ranking — and the **rating** moves with the score, ranked against
+  the whole scored universe rather than against whatever the filters left.
 * **Compare mode** (Section 12) puts 2–4 tickers' sub-scores side by side,
   which is the cheapest possible way to make the ranking legible: a single
   score of 78 means little until you see what a 62 looks like next to it.
@@ -43,32 +44,78 @@ SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
 RAW_COLUMNS = {category: f"{category}_raw" for category in CATEGORIES}
 
 
-def reweight(rows: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
-    """Recompute the composite from stored sub-scores under caller-supplied weights.
+def _custom_profile(weights: dict[str, float], profile_name: str) -> InvestorProfile:
+    """The slider weights as an `InvestorProfile`, renormalized to sum to 1."""
+    profile = get_profile(profile_name)
+    total = sum(weights.values())
+    return InvestorProfile(
+        name=profile.name,
+        weights={c: w / total for c, w in weights.items()} if total > 0 else profile.weights,
+        income_tilt=profile.income_tilt,
+        prefer_low_volatility=profile.prefer_low_volatility,
+    )
 
-    Deliberately identical in behavior to `scoring.build_composite`'s weighting
-    step: the weighted sum is divided by the weight that actually had data, so a
-    stock missing a category is neither penalized with a phantom zero nor
-    silently boosted. Getting this wrong here would make the sliders quietly
-    disagree with the stored ranking, which is worse than not having sliders.
+
+def _apply(rows: pd.DataFrame, scored: pd.DataFrame) -> pd.DataFrame:
+    """Attach a `build_composite` result's score and rating back onto `rows`."""
+    indexed = scored.set_index("symbol")
+    merged = rows.set_index("symbol").copy()
+    merged["custom_score"] = indexed["composite_score"]
+    merged["rating"] = indexed["rating"]
+    return merged.reset_index()
+
+
+def rescore_relative(
+    rows: pd.DataFrame,
+    weights: dict[str, float],
+    profile_name: str,
+    *,
+    regime_score: float | None = None,
+) -> pd.DataFrame:
+    """Re-score AND re-rate every row under the slider weights (Section 7.5 step 4).
+
+    Delegates to `scoring.build_composite` rather than reimplementing the
+    weighting, so the sliders cannot drift from the engine that produced the
+    stored ranking -- the same discipline `rescore_absolute` follows. Passing
+    the already-normalized sub-scores back in is safe and deliberate: they are
+    cross-sectional percentiles, and percentiling a percentile is monotonic, so
+    the ranking is untouched and only the weighting changes.
+
+    **The rating is recomputed too, and that is the fix.** Dragging a slider
+    used to change the Score column while the Rating column and the Rating-mix
+    chart kept showing the *stored* balanced-profile verdict -- so a name could
+    sit at the top of a re-weighted table labelled "Sell", and the rating
+    histogram never moved however hard the weights were pushed. Absolute mode
+    already re-rated, so the two modes also disagreed about whether a slider
+    means anything.
+
+    **Called on the whole scored universe, before any filtering.** A relative
+    rating is defined against the peer group the nightly ranks -- "top decile of
+    the market", not "top decile of what I happen to be looking at" -- so
+    filtering to one sector must not promote its best name to Strong Buy.
     """
-    weight_series = pd.Series(weights, dtype=float)
-    sub = rows[[SCORE_COLUMNS[c] for c in weight_series.index]].copy()
-    sub.columns = list(weight_series.index)
-    present = sub.notna()
-    available = present.mul(weight_series, axis=1).sum(axis=1)
-    weighted = sub.fillna(0.0).mul(weight_series, axis=1).sum(axis=1)
-    return weighted.where(available > 0).div(available.where(available > 0))
+    sub = rows[[SCORE_COLUMNS[category] for category in CATEGORIES]].copy()
+    sub.columns = list(CATEGORIES)
+    sub.index = rows["symbol"]
+    scored = scoring.build_composite(
+        sub,
+        profile=_custom_profile(weights, profile_name),
+        rating_mode="relative",
+        regime_score=regime_score,
+    ).scores
+    if scored.empty:
+        return rows.assign(custom_score=rows["composite_score"])
+    return _apply(rows, scored)
 
 
 def rescore_absolute(
     rows: pd.DataFrame, weights: dict[str, float], profile_name: str
 ) -> pd.DataFrame | None:
-    """Re-rate the filtered rows against a fixed bar, from the stored raw values.
+    """Re-rate every row against a fixed bar, from the stored raw values.
 
     Delegates to `scoring.build_composite(..., rating_mode="absolute")` rather
     than reimplementing the mapping, so the page cannot drift from the engine --
-    the same discipline `reweight` follows for the relative path.
+    the same discipline `rescore_relative` follows.
 
     Returns `None` when the rows predate the raw columns, because an absolute
     rating genuinely cannot be recovered from a percentile. Saying so is the
@@ -84,23 +131,26 @@ def rescore_absolute(
     if raw.notna().to_numpy().sum() == 0:
         return None
 
-    profile = get_profile(profile_name)
-    custom = InvestorProfile(
-        name=profile.name,
-        weights={c: w / sum(weights.values()) for c, w in weights.items()}
-        if sum(weights.values()) > 0
-        else profile.weights,
-        income_tilt=profile.income_tilt,
-        prefer_low_volatility=profile.prefer_low_volatility,
-    )
-    scored = scoring.build_composite(raw, profile=custom, rating_mode="absolute").scores
+    scored = scoring.build_composite(
+        raw, profile=_custom_profile(weights, profile_name), rating_mode="absolute"
+    ).scores
     if scored.empty:
         return None
-    scored = scored.set_index("symbol")
-    merged = rows.set_index("symbol").copy()
-    merged["custom_score"] = scored["composite_score"]
-    merged["rating"] = scored["rating"]
-    return merged.reset_index()
+    return _apply(rows, scored)
+
+
+def latest_regime_score() -> float | None:
+    """The most recent Market Regime Index reading, or None if none is stored.
+
+    Fed into the relative re-rating so the risk-off Strong-Buy dampener (Section
+    7.3 Tier 3) applies to a slider-driven rating exactly as it did to the
+    stored one.
+    """
+    regime = data.market_regime(limit=1)
+    if regime.empty:
+        return None
+    value = regime["regime_score"].iloc[-1]
+    return None if pd.isna(value) else float(value)
 
 
 def main() -> None:
@@ -174,8 +224,11 @@ def main() -> None:
 
         st.header("Re-weight categories")
         st.caption(
-            "Recomputed instantly from stored sub-scores — no pipeline re-run "
-            "(the stored sub-scores are weight-independent by design)."
+            "Score **and rating** are recomputed instantly from stored sub-scores — "
+            "no pipeline re-run, because the stored sub-scores are weight-independent "
+            "by design. Ratings are always ranked against the whole scored universe, "
+            'not against whatever the filters above left, so "top decile" keeps '
+            "meaning the same thing."
         )
         profile_name = st.selectbox(
             "Start from profile", profile_names(), format_func=humanize, index=0
@@ -186,7 +239,31 @@ def main() -> None:
             for category in CATEGORIES
         }
 
-    filtered = rows.copy()
+    # Re-score and re-rate the WHOLE universe first, then filter. Both orders
+    # give the same Score, but only this one gives a rating that still means
+    # "top decile of the market" rather than "top decile of this sector"; and
+    # filtering by Rating afterwards then filters on what the table shows.
+    total_weight = sum(weights.values())
+    if total_weight <= 0:
+        st.warning("All category weights are zero — showing the stored ranking instead.")
+        scored = rows.assign(custom_score=rows["composite_score"])
+    elif absolute_mode:
+        rescored = rescore_absolute(rows, weights, profile_name)
+        if rescored is None:
+            st.warning(
+                "These rows were scored before raw category values were stored, so an "
+                "absolute rating cannot be derived from them. Showing the relative "
+                "ranking — the next nightly run will populate them."
+            )
+            scored = rescore_relative(
+                rows, weights, profile_name, regime_score=latest_regime_score()
+            )
+        else:
+            scored = rescored
+    else:
+        scored = rescore_relative(rows, weights, profile_name, regime_score=latest_regime_score())
+
+    filtered = scored.copy()
     if chosen_sectors:
         filtered = filtered[filtered["sector"].isin(chosen_sectors)]
     if chosen_ratings:
@@ -203,30 +280,9 @@ def main() -> None:
             filtered = filtered.assign(_rank=filtered["symbol"].map(order)).sort_values("_rank")
             filtered = filtered.drop(columns="_rank")
 
-    total_weight = sum(weights.values())
-    if absolute_mode:
-        rescored = rescore_absolute(filtered, weights, profile_name)
-        if rescored is None:
-            st.warning(
-                "These rows were scored before raw category values were stored, so an "
-                "absolute rating cannot be derived from them. Showing the relative "
-                "ranking — the next nightly run will populate them."
-            )
-            # Fall back on the *filtered* rows, not the whole universe: the
-            # sector/rating/coverage/search choices in the sidebar are still the
-            # user's, and silently re-showing every symbol because the rating
-            # scheme couldn't be applied is a different answer to a different
-            # question.
-            filtered = filtered.assign(custom_score=filtered["composite_score"])
-        else:
-            filtered = rescored.sort_values("custom_score", ascending=False)
-    elif total_weight > 0:
-        normalized = {k: v / total_weight for k, v in weights.items()}
-        filtered = filtered.assign(custom_score=reweight(filtered, normalized))
+    if not search:
+        # A search already ordered the rows by relevance; leave that alone.
         filtered = filtered.sort_values("custom_score", ascending=False)
-    else:
-        st.warning("All category weights are zero — showing the stored ranking instead.")
-        filtered = filtered.assign(custom_score=filtered["composite_score"])
 
     if filtered.empty:
         st.warning("No symbols match these filters.")
@@ -252,7 +308,14 @@ def main() -> None:
         width="stretch",
         height=460,
         column_config={
-            "Rating": st.column_config.TextColumn("Rating", help=tip("Rating")),
+            "Rating": st.column_config.TextColumn(
+                "Rating",
+                help=tip(
+                    "Rating",
+                    "Recomputed live from the sliders, ranked against the whole scored "
+                    "universe rather than the filtered rows.",
+                ),
+            ),
             "Score": st.column_config.NumberColumn(
                 "Score",
                 help=tip(
