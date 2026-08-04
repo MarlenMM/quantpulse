@@ -181,7 +181,11 @@ def render_chat(symbol: str, context_blocks: list[str]) -> None:
         with st.chat_message(turn.role):
             st.markdown(turn.content)
 
-    question = st.chat_input(f"Ask about {symbol}…", key=f"chat_input_{symbol}")
+    question = st.chat_input(
+        f"Ask about {symbol}…",
+        key=f"chat_input_{symbol}",
+        max_chars=chatbot.MAX_QUESTION_CHARS,
+    )
     if question:
         with st.chat_message("user"):
             st.markdown(question)

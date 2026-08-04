@@ -56,6 +56,14 @@ __all__ = [
 # for "why is it rated Buy?" -> "what about its debt?" style follow-ups.
 MAX_HISTORY_TURNS = 6
 
+# A single question is capped for the same reason the history is: it is re-sent
+# with every subsequent turn, so one pasted wall of text inflates the cost of
+# the whole remaining conversation. The deployed demo shares one free-tier key
+# across every visitor, so an unbounded question box is also the cheapest way
+# for one user to exhaust the day's quota for everyone. Generous enough that no
+# real question is affected (the same order as `narrative`'s excerpt cap).
+MAX_QUESTION_CHARS = 2000
+
 # Section 19's disclaimer, exported so the UI can render it as standing text
 # next to the chat box. Displaying it once, always, is more reliable than
 # hoping the model appends it to each answer -- and doesn't burn output tokens.
@@ -154,9 +162,13 @@ def answer(
     which is what makes the answer auditable.
 
     Returns `None` for an empty question, so a stray Enter keypress in the UI
-    doesn't spend a free-tier request.
+    doesn't spend a free-tier request. A question longer than
+    `MAX_QUESTION_CHARS` is truncated rather than rejected -- the useful part of
+    an over-long paste is almost always at the front, and silently answering a
+    trimmed question beats refusing outright.
     """
-    if not question.strip():
+    trimmed = question.strip()[:MAX_QUESTION_CHARS]
+    if not trimmed:
         return None
-    prompt = f"{_CHAT_INSTRUCTION}\n\nUser question: {question.strip()}"
+    prompt = f"{_CHAT_INSTRUCTION}\n\nUser question: {trimmed}"
     return generate(prompt, build_chat_context(context_blocks, history), provider=provider)
