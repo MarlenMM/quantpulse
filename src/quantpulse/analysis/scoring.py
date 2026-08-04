@@ -75,16 +75,14 @@ _RELATIVE_CUTOFFS = ((90.0, "strong_buy"), (70.0, "buy"), (30.0, "hold"), (10.0,
 # Absolute-mode composite-score cutoffs -- an illustrative fixed bar for the
 # alternative to peer-ranking (Section 7.5 step 4), tunable like the weights.
 #
-# **Honest caveat: this is only semi-absolute.** Every category feeding the
-# composite is a cross-sectional percentile, so the composite is close to
-# uniform on 0-100 by construction no matter what the market is doing. Fixed
-# cutoffs applied to it still hand out Strong Buys in a universally overpriced
-# market -- shifting the *proportions* a little versus relative mode, but not
-# measuring anything against a market-independent bar. It narrows Section 22's
-# "treating a relative ranking as an absolute judgment" pitfall without escaping
-# it, and a test pins that so the mode is not mistaken for more than it is.
-# A genuinely absolute rating would need the raw metrics (a P/E of 12 is cheap
-# whoever else is listed), which is a different scoring design, not a mode flag.
+# These are applied to `_absolute_subscores`' fixed-bar composite, never to the
+# peer-ranked one. That distinction is the whole mode: run against percentiled
+# inputs -- as this originally was -- the composite is near-uniform on 0-100 by
+# construction, so "absolute" cutoffs handed out the same count of Strong Buys
+# in a boom and a crash, which is exactly Section 22's "treating a relative
+# ranking as an absolute judgment" wearing the opposite label. A test now
+# asserts that a universe of uniformly weak names earns no Strong Buys at all,
+# however its members rank against each other.
 _ABSOLUTE_CUTOFFS = ((75.0, "strong_buy"), (60.0, "buy"), (40.0, "hold"), (25.0, "sell"))
 
 # How far a fully risk-off regime lifts the Strong-Buy percentile cutoff (from
@@ -240,6 +238,65 @@ def percentile_normalize(raw: pd.Series) -> pd.Series:
     return raw.rank(pct=True) * 100.0
 
 
+# --------------------------------------------------------------------------- #
+# Absolute-mode scaling
+#
+# Categories whose raw score is ALREADY a fixed 0-100 reading -- each is built
+# from saturation bands or count ratios that mean the same thing regardless of
+# what else is in the universe (e.g. `score_technical`'s "20% above the 200-DMA
+# is a maxed-out signal", `smart_money`'s insider/institutional/options bands,
+# `analyst_consensus`'s rating mix). `fundamental` is included because a
+# within-sector standing of 80 always means "ahead of 80% of my sector peers",
+# which does not move with the overall market level -- the thing Section 22
+# actually warns about.
+_ABSOLUTE_ALREADY_SCALED = ("fundamental", "technical", "analyst", "smart_money")
+# Sentiment and the Tier-2 industry tilt are polarities in [-1, 1].
+_ABSOLUTE_POLARITY = ("sentiment", "industry_macro")
+# `score_momentum` returns mean daily return / daily volatility. Multiplied by
+# sqrt(252) that is an annualized Sharpe, so anchoring the band at an annualized
+# Sharpe of 2.0 gives an interpretable fixed bar ("exceptional") rather than an
+# invented constant. Applied through tanh, so it never saturates into ties.
+_MOMENTUM_ABSOLUTE_BAND = 2.0 / np.sqrt(252.0)
+
+
+def _absolute_subscores(category_raw: pd.DataFrame) -> pd.DataFrame:
+    """Per-category 0-100 sub-scores measured against a FIXED bar, not the peers.
+
+    This is what makes `rating_mode="absolute"` actually absolute. The relative
+    path percentile-ranks every category across the universe, which forces the
+    composite to be near-uniform on 0-100 no matter what the market is doing --
+    so fixed cutoffs applied to it still handed out the same count of Strong
+    Buys in a boom and a crash. That is precisely Section 22's "treating a
+    relative ranking as an absolute judgment", and it made the mode's name a
+    lie: a test now asserts that a universe whose every underlying value is far
+    worse genuinely receives worse absolute ratings.
+
+    Nothing is invented to achieve it. Four of the seven categories already
+    produce fixed 0-100 readings from saturation bands, so they are used
+    directly; two are polarities mapped linearly; momentum's raw ratio is mapped
+    through a band anchored at an annualized Sharpe of 2.0.
+
+    Caveat worth knowing: an `InvestorProfile` with `prefer_low_volatility`
+    makes `score_momentum` return *negative volatility* instead of a
+    risk-adjusted return. That is a rank-only tilt with no absolute
+    interpretation, so the momentum bar here does not describe it meaningfully;
+    the conservative profile is best read in relative mode.
+    """
+    absolute = pd.DataFrame(index=category_raw.index)
+    for category in CATEGORIES:
+        if category not in category_raw.columns:
+            absolute[category] = np.nan
+            continue
+        column = pd.to_numeric(category_raw[category], errors="coerce")
+        if category in _ABSOLUTE_ALREADY_SCALED:
+            absolute[category] = column.clip(0.0, 100.0)
+        elif category in _ABSOLUTE_POLARITY:
+            absolute[category] = 50.0 + 50.0 * column.clip(-1.0, 1.0)
+        else:  # momentum
+            absolute[category] = 50.0 + 50.0 * np.tanh(column / _MOMENTUM_ABSOLUTE_BAND)
+    return absolute
+
+
 def _normalized_subscores(category_raw: pd.DataFrame) -> pd.DataFrame:
     """Every category rank-percentiled to a comparable 0-100 scale.
 
@@ -341,7 +398,16 @@ def build_composite(
     if rating_mode not in ("relative", "absolute"):
         raise ValueError(f"rating_mode must be 'relative' or 'absolute', got {rating_mode!r}")
 
-    normalized = _normalized_subscores(category_raw)
+    # The two rating modes are genuinely different scorings, not one scoring
+    # with two sets of cutoffs. Absolute mode measures each category against a
+    # fixed bar (`_absolute_subscores`); relative mode ranks it against today's
+    # peers. Applying fixed cutoffs to peer-ranked inputs is what made the old
+    # "absolute" mode indistinguishable from the relative one.
+    normalized = (
+        _absolute_subscores(category_raw)
+        if rating_mode == "absolute"
+        else _normalized_subscores(category_raw)
+    )
     weights = pd.Series(resolved.weights)
 
     present = normalized.notna()
