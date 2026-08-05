@@ -22,6 +22,29 @@ _SOURCE = "edgar"
 # this signal's scope (Section 24: insider *transactions*).
 _FORM4_FORMS = frozenset({"4", "4/A"})
 
+# The narrative filings a reader might want summarized (Section 11 use 4).
+# Deliberately not 8-K: those are short, numerous, and mostly exhibits, so a
+# "latest filing" that is usually an 8-K would rarely be the document a reader
+# means by "the annual report".
+NARRATIVE_FORMS = frozenset({"10-K", "10-Q"})
+
+# Where a filing's genuinely readable prose starts. Taking the first N
+# characters of a 10-K yields the cover page, the exhibit index and a table of
+# contents -- true to the document and useless to summarize. Management's
+# Discussion and Analysis is the section written for a human reader, and its
+# heading is standardized by regulation, so it is findable by text. The *first*
+# occurrence is almost always the table-of-contents entry, so the search starts
+# from the second.
+_MDA_MARKERS = (
+    "management's discussion and analysis",
+    "management\u2019s discussion and analysis",
+    "managements discussion and analysis",
+)
+# How much filing text to keep. Sized against `narrative.MAX_FILING_EXCERPT_CHARS`
+# (6,000) with headroom, so the truncation the context builder discloses happens
+# there -- one place -- rather than silently here as well.
+_FILING_EXCERPT_CHARS = 8000
+
 # Section 5: "free, no key, generous fair-use rate". No documented number,
 # but SEC's own guidance is to stay well under ~10 req/sec -- min-interval,
 # not a burst-allowing token bucket, is the polite fit for a fair-use source.
@@ -113,6 +136,7 @@ def fetch_recent_filings(
             continue
         filings.append(
             {
+                "form": form,
                 "accession_number": recent["accessionNumber"][i],
                 "filing_date": filing_date,
                 "primary_document": recent["primaryDocument"][i],
@@ -280,3 +304,103 @@ def fetch_insider_transactions(
         df["transaction_date"] = pd.to_datetime(df["transaction_date"]).dt.date
         df["report_date"] = pd.to_datetime(df["report_date"]).dt.date
     return df
+
+
+def _filing_plain_text(html: str) -> str:
+    """Readable text from a filing document, with markup and script/style removed.
+
+    SEC filings are HTML with heavy inline styling and (for the newer inline-XBRL
+    ones) a large volume of hidden tagging elements. `lxml` is already a direct
+    dependency (pandas' `read_html` uses it for the Wikipedia constituent list),
+    so no new package is needed to get from that to something worth showing a
+    language model.
+    """
+    from lxml import html as lxml_html
+
+    try:
+        # Parsed as BYTES, not str. Modern inline-XBRL filings open with an
+        # `<?xml version='1.0' encoding='ASCII'?>` declaration, and lxml refuses
+        # a str carrying one ("Unicode strings with encoding declaration are not
+        # supported"). Caught by the fallback below, that failure is silent and
+        # its symptom is subtle: the "excerpt" handed to the model is the raw
+        # markup -- namespace declarations and Workiva comments -- rather than
+        # anything a person wrote.
+        tree = lxml_html.fromstring(html.encode("utf-8", errors="ignore"))
+    except Exception:  # noqa: BLE001 - malformed markup is a data problem, not a crash
+        return " ".join(html.split())
+    for element in tree.xpath("//script | //style | //head"):
+        element.getparent().remove(element)
+    return " ".join(tree.text_content().split())
+
+
+def _readable_excerpt(
+    text: str, *, max_chars: int = _FILING_EXCERPT_CHARS
+) -> tuple[str, str | None]:
+    """`(excerpt, section_label)` -- the MD&A where findable, else the opening text."""
+    lowered = text.lower()
+    for marker in _MDA_MARKERS:
+        first = lowered.find(marker)
+        if first == -1:
+            continue
+        # The first hit is nearly always the table-of-contents line; prefer the
+        # second, but fall back to the first if there is only one.
+        second = lowered.find(marker, first + len(marker))
+        start = second if second != -1 else first
+        return text[start : start + max_chars], "Management's Discussion and Analysis"
+    return text[:max_chars], None
+
+
+def fetch_filing_excerpt(
+    symbol: str,
+    *,
+    forms: frozenset[str] = NARRATIVE_FORMS,
+    lookback_days: int = 400,
+) -> dict[str, Any] | None:
+    """The most recent 10-K/10-Q's readable excerpt for `symbol` (Section 11 use 4).
+
+    Shaped to `llm.narrative.FilingExcerpt`: symbol, form_type, filed_date,
+    section, excerpt, source_url. `None` when the company has filed neither form
+    inside `lookback_days`, or the document cannot be fetched -- an absent
+    summary is honest, and the caller has nothing to summarize.
+
+    **Fetched on demand, not by the nightly job, and that is deliberate.** A
+    10-K document is several megabytes; pulling one for every name in the
+    universe every night would be the single heaviest thing in the pipeline in
+    service of a feature a reader opens for one company at a time. The response
+    cache (12 hours, shared with every other EDGAR call) means a second reader
+    asking about the same company pays nothing.
+    """
+    filings = fetch_recent_filings(symbol, forms=forms, lookback_days=lookback_days)
+    if not filings:
+        return None
+    latest = max(filings, key=lambda f: f["filing_date"])
+    url = _filing_document_url(
+        get_cik_for_ticker(symbol), latest["accession_number"], latest["primary_document"]
+    )
+
+    def _fetch() -> str:
+        _rate_limiter.wait()
+        with get_breaker(_SOURCE).guard():
+            return get_text(url, headers=_headers())
+
+    try:
+        raw = cached_json(
+            f"filing_{symbol}_{latest['accession_number']}",
+            _fetch,
+            _cache_dir("filings"),
+            ttl=timedelta(days=7),
+        )
+    except Exception:  # noqa: BLE001 - a missing document is not a crash
+        return None
+
+    excerpt, section = _readable_excerpt(_filing_plain_text(str(raw)))
+    if not excerpt.strip():
+        return None
+    return {
+        "symbol": symbol,
+        "form_type": latest["form"],
+        "filed_date": latest["filing_date"],
+        "section": section,
+        "excerpt": excerpt,
+        "source_url": url,
+    }

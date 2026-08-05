@@ -106,6 +106,29 @@ def options_signals(symbol: str) -> dict[str, Any] | None:
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def sentiment_history(symbol: str, limit: int = 2) -> list[tuple[date, float, int | None]]:
+    """One symbol's latest sentiment readings, newest first — the "what moved it" input."""
+    with get_session() as session:
+        return persistence.read_symbol_sentiment_history(session, symbol, limit=limit)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def filing_excerpt(symbol: str) -> dict[str, Any] | None:
+    """The latest 10-K/10-Q excerpt for `symbol`, fetched on demand from SEC EDGAR.
+
+    Not part of the nightly job on purpose: a 10-K document is several megabytes
+    and a reader opens one company at a time (see
+    `edgar_client.fetch_filing_excerpt`).
+    """
+    from quantpulse.ingestion import edgar_client
+
+    try:
+        return edgar_client.fetch_filing_excerpt(symbol)
+    except Exception:  # noqa: BLE001 - a filing fetch failing must not take the page down
+        return None
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
 def symbol_news(symbol: str, limit: int = 10) -> pd.DataFrame:
     with get_session() as session:
         return persistence.read_symbol_news(session, symbol, limit=limit)

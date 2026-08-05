@@ -981,6 +981,26 @@ def read_market_moving_news(
     )
 
 
+def read_symbol_sentiment_history(
+    session: Session, symbol: str, *, limit: int = 2
+) -> list[tuple[date, float, int | None]]:
+    """`(date, score, mention_volume)` for one symbol's latest sentiment readings, newest first.
+
+    Two rows is all the "what moved the score" narrative needs: the current
+    reading and the one before it. Point-in-time storage makes the comparison
+    free (Section 6.8) -- there is no separate change log to maintain.
+    """
+    stmt = (
+        select(SentimentScore.date, SentimentScore.sentiment_score, SentimentScore.mention_volume)
+        .where(SentimentScore.symbol == symbol, SentimentScore.sentiment_score.is_not(None))
+        .order_by(SentimentScore.date.desc())
+        .limit(limit)
+    )
+    return [
+        (row.date, float(row.sentiment_score), row.mention_volume) for row in session.execute(stmt)
+    ]
+
+
 def read_symbol_news(
     session: Session, symbol: str, *, limit: int = 10, lookback_days: int = 21
 ) -> pd.DataFrame:

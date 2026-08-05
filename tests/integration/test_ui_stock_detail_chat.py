@@ -208,3 +208,122 @@ class TestAskingAQuestion:
 
         assert not app.exception
         assert any("did not return an answer" in element.value for element in app.markdown)
+
+
+class TestNarrativeUsesTwoAndFourAreWired:
+    """Section 11's other two LLM uses had no page.
+
+    `explain_sentiment_move` and `summarize_filing_excerpt` were both fully
+    built, prompt-designed and unit-tested, and neither was imported by
+    anything under `app/`. Like the chat box, both must be entirely absent
+    without a provider and present with one.
+    """
+
+    @pytest.fixture
+    def with_news(self, seeded_engine: Engine) -> Engine:
+        from datetime import datetime
+
+        from quantpulse.storage.models import NewsEvent, SentimentScore
+
+        factory = sessionmaker(bind=seeded_engine)
+        with factory() as session:
+            for index, (title, polarity) in enumerate(
+                [("NVDA beats expectations", 0.8), ("Supply chain concerns", -0.4)]
+            ):
+                session.add(
+                    NewsEvent(
+                        article_id=f"a{index}",
+                        tier=1,
+                        title=title,
+                        published_at=datetime(2026, 7, 26),
+                        matched_symbols=["NVDA"],
+                        event_type="earnings",
+                        sentiment_score=polarity,
+                        source="rss",
+                        source_url=f"https://example.test/{index}",
+                    )
+                )
+            for offset, score in ((1, 0.55), (8, 0.10)):
+                session.add(
+                    SentimentScore(
+                        symbol="NVDA",
+                        date=AS_OF - timedelta(days=offset),
+                        source="tier1_aggregate",
+                        sentiment_score=score,
+                        mention_volume=4,
+                        total_weight=2.5,
+                    )
+                )
+            session.commit()
+        from lib import data as lib_data
+
+        lib_data.symbol_news.clear()
+        lib_data.sentiment_history.clear()
+        return seeded_engine
+
+    def test_sentiment_summary_is_absent_without_a_provider(
+        self, app: AppTest, with_news: Engine
+    ) -> None:
+        with patch("quantpulse.llm.providers.get_provider", return_value=None):
+            app.run()
+        assert not app.exception
+        assert "What's driving this" in [element.value for element in app.subheader]
+        assert not [i.value for i in app.info if "coverage" in str(i.value)]
+
+    def test_sentiment_summary_renders_and_is_grounded_in_the_headlines(
+        self, app: AppTest, with_news: Engine
+    ) -> None:
+        provider = _stub_provider("Earnings beat drove the move.")
+        with patch("quantpulse.llm.providers.get_provider", return_value=provider):
+            app.run()
+        assert not app.exception
+        assert "Earnings beat drove the move." in [str(i.value) for i in app.info]
+        # The context the model saw must contain the actual headlines and their
+        # already-assigned polarities -- not a re-scoring request.
+        contexts = " ".join(str(call.args[1]) for call in provider.generate.call_args_list)
+        assert "NVDA beats expectations" in contexts
+        assert "+0.80" in contexts
+        assert "+0.55" in contexts  # the current stored reading
+        assert "+0.10" in contexts  # ...and the previous one, so "move" means something
+
+    def test_filing_summary_section_is_absent_without_a_provider(self, app: AppTest) -> None:
+        with patch("quantpulse.llm.providers.get_provider", return_value=None):
+            app.run()
+        assert "Latest SEC filing" not in [element.value for element in app.subheader]
+
+    def test_filing_summary_does_not_fetch_until_asked(self, app: AppTest) -> None:
+        # A 10-K is several megabytes; rendering the page must not pull one.
+        with (
+            patch("quantpulse.llm.providers.get_provider", return_value=_stub_provider()),
+            patch("quantpulse.ingestion.edgar_client.fetch_filing_excerpt") as fetch,
+        ):
+            app.run()
+        assert "Latest SEC filing" in [element.value for element in app.subheader]
+        fetch.assert_not_called()
+
+    def test_filing_summary_renders_when_the_button_is_pressed(self, app: AppTest) -> None:
+        from lib import data as lib_data
+
+        lib_data.filing_excerpt.clear()
+        provider = _stub_provider("- Revenue rose.\n- Costs rose faster.")
+        excerpt = {
+            "symbol": "NVDA",
+            "form_type": "10-Q",
+            "filed_date": AS_OF,
+            "section": "Management's Discussion and Analysis",
+            "excerpt": "Revenue grew because we sold more widgets.",
+            "source_url": "https://example.test/filing.htm",
+        }
+        with (
+            patch("quantpulse.llm.providers.get_provider", return_value=provider),
+            patch("quantpulse.ingestion.edgar_client.fetch_filing_excerpt", return_value=excerpt),
+        ):
+            app.run()
+            next(b for b in app.button if "Summarize" in b.label).click().run()
+        assert not app.exception
+        assert any("- Revenue rose." in str(i.value) for i in app.info)
+        contexts = " ".join(str(call.args[1]) for call in provider.generate.call_args_list)
+        assert "Revenue grew because we sold more widgets." in contexts
+        # The excerpt is the only free-text payload in the LLM layer, so it must
+        # be framed as quoted source material rather than pasted in bare.
+        assert "quoted source material" in contexts

@@ -357,3 +357,58 @@ def test_fetch_recent_filings_lookback_boundary_is_real_timedelta(tmp_path: Path
             "AAPL", forms=edgar_client._FORM4_FORMS, lookback_days=3
         )
     assert filings == []
+
+
+# --- fetch_filing_excerpt -----------------------------------------------------
+
+_INLINE_XBRL_FILING = (
+    "<?xml version='1.0' encoding='ASCII'?>"
+    "<!--XBRL Document Created with the Workiva Platform-->"
+    '<html xmlns="http://www.w3.org/1999/xhtml">'
+    "<head><style>.x{color:red}</style><script>var a=1;</script></head>"
+    "<body>"
+    "<p>Table of contents</p>"
+    "<p>Item 7. Management's Discussion and Analysis of Financial Condition ..... 24</p>"
+    "<p>Cover page boilerplate that nobody wants summarized.</p>"
+    "<p>Management's Discussion and Analysis of Financial Condition and Results of "
+    "Operations</p>"
+    "<p>Revenue grew because we sold more widgets.</p>"
+    "</body></html>"
+)
+
+
+def test_filing_text_survives_an_xml_declaration(tmp_path: Path) -> None:
+    # Modern inline-XBRL filings open with an encoding declaration, and lxml
+    # refuses a *str* carrying one. The fallback path is silent, and its symptom
+    # is subtle: the "excerpt" handed to a language model would be raw markup --
+    # namespace declarations and vendor comments -- rather than English.
+    text = edgar_client._filing_plain_text(_INLINE_XBRL_FILING)
+    assert "Revenue grew because we sold more widgets." in text
+    assert "<html" not in text and "xmlns" not in text
+    assert "var a=1" not in text  # script/style stripped
+    assert "Workiva" not in text  # comments stripped
+
+
+def test_excerpt_starts_at_the_real_mda_not_the_table_of_contents() -> None:
+    text = edgar_client._filing_plain_text(_INLINE_XBRL_FILING)
+    excerpt, section = edgar_client._readable_excerpt(text)
+    assert section == "Management's Discussion and Analysis"
+    assert excerpt.startswith("Management's Discussion and Analysis of Financial Condition and")
+    assert "..... 24" not in excerpt  # the contents-page line was skipped
+    assert "Cover page boilerplate" not in excerpt
+
+
+def test_excerpt_falls_back_to_the_opening_text_without_an_mda_heading() -> None:
+    excerpt, section = edgar_client._readable_excerpt("A short filing with no such heading.")
+    assert section is None
+    assert excerpt.startswith("A short filing")
+
+
+def test_fetch_filing_excerpt_is_none_without_a_recent_filing(tmp_path: Path) -> None:
+    with (
+        patch(
+            "quantpulse.ingestion.edgar_client.get_settings", return_value=_fake_settings(tmp_path)
+        ),
+        patch("quantpulse.ingestion.edgar_client.fetch_recent_filings", return_value=[]),
+    ):
+        assert edgar_client.fetch_filing_excerpt("AAPL") is None
