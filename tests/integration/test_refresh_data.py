@@ -1027,3 +1027,75 @@ class TestPatternSignalsAreProduced:
         session.flush()
         universe = pd.DataFrame([{"symbol": "ZZZ", "name": "Zed", "sector": "Tech"}])
         assert refresh_data.refresh_pattern_signals(session, universe, date(2026, 7, 22)) == 0
+
+
+class TestTrackRecordSuppression:
+    """A run too short to bracket is not a track record.
+
+    `cagr` raises a period's growth to the power of the periods per year, so two
+    monthly periods over five weeks annualize into a headline. On the deployed
+    demo database that produced a benchmark "CAGR" of 26.6% from returns of
+    +1.6% and +2.4%, next to a strategy CAGR of 0.0% that came from a signal
+    with too little history to rank anything -- so it held cash and never
+    traded. The Track Record page said "the run was too short to bootstrap
+    honestly" directly beneath both numbers.
+    """
+
+    @staticmethod
+    def _seed(session: Session, *, days: int) -> None:
+        rng = np.random.default_rng(4)
+        for symbol in ("AAA", "BBB", "CCC"):
+            session.add(
+                Ticker(
+                    symbol=symbol, name=symbol, sector="Tech", asset_type="equity", is_active=True
+                )
+            )
+            session.add(
+                IndexMembershipHistory(
+                    index_name="S&P 500",
+                    symbol=symbol,
+                    added_date=date(2020, 1, 1),
+                    removed_date=None,
+                )
+            )
+            level = 100.0
+            for offset in range(days, 0, -1):
+                level *= float(np.exp(rng.normal(0.0004, 0.012)))
+                session.add(
+                    PriceHistory(
+                        symbol=symbol,
+                        date=date(2026, 7, 22) - timedelta(days=offset),
+                        open=level,
+                        high=level,
+                        low=level,
+                        close=level,
+                        adj_close=level,
+                        volume=1_000_000,
+                    )
+                )
+        session.flush()
+
+    def test_a_two_period_run_is_not_stored(self, session: Session) -> None:
+        self._seed(session, days=40)
+        assert refresh_data.refresh_backtest(session, date(2026, 7, 22)) == 0
+
+    def test_a_run_where_the_strategy_never_traded_is_not_stored(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Long enough history for plenty of periods, but a signal that ranks
+        # nothing -- so every period sits in cash. Storing that as a 0% track
+        # record reads as "the strategy lost to the market"; it never ran.
+        self._seed(session, days=900)
+        monkeypatch.setattr(refresh_data, "_momentum_signal", lambda as_of, panel: {})
+        assert refresh_data.refresh_backtest(session, date(2026, 7, 22)) == 0
+
+    def test_a_long_enough_run_that_traded_is_stored(self, session: Session) -> None:
+        from quantpulse.storage.models import BacktestResult
+
+        self._seed(session, days=900)
+        written = refresh_data.refresh_backtest(session, date(2026, 7, 22))
+        session.flush()
+        assert written == 1
+        stored = session.scalars(select(BacktestResult)).one()
+        assert stored.n_periods >= bt.MIN_TRACK_RECORD_PERIODS
+        assert stored.avg_turnover > 0
