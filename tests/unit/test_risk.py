@@ -463,7 +463,14 @@ class TestStockRiskProfile:
         assert profile.volatility.historical is None  # under the 20-bar floor
         assert profile.beta is None  # no market series supplied
         assert profile.value_at_risk is None  # nowhere near a populated 5% tail
-        assert profile.sharpe is not None  # ...but what *can* be computed still is
+        assert profile.sharpe is None  # under the one-year ratio floor
+        assert profile.sortino is None
+        # ...but what *can* honestly be computed still is. Max drawdown is a
+        # description of the window that actually happened, not an estimate of
+        # a population parameter, so a short window makes it narrow rather than
+        # unreliable.
+        assert profile.max_drawdown == pytest.approx(-0.02)
+        assert profile.n_observations == 3
 
     def test_no_silent_fallback_between_var_methods(self) -> None:
         returns = _series(np.random.default_rng(6).normal(0.0, 0.02, 60))
@@ -478,3 +485,60 @@ class TestSharedMetrics:
         # page can never drift apart on what "Sharpe" means.
         assert risk.sharpe_ratio is bt.sharpe_ratio
         assert risk.max_drawdown is bt.max_drawdown
+
+
+class TestRatioSampleFloor:
+    """Sharpe and Sortino abstain below a year of data.
+
+    Both divide a mean by a dispersion, which makes them far noisier than either
+    input; the standard error of the annualized ratio is roughly
+    `sqrt(periods_per_year / n)`. On the 25 daily returns the demo database
+    actually holds, 49% of 503 real S&P 500 names produced a Sortino above 3 and
+    8.5% above 10 -- arithmetically correct, and meaningless. Value-at-Risk and
+    the optimizers on the very same pages already refuse to answer on a sample
+    this short; these two were the inconsistency.
+    """
+
+    def test_floor_is_one_year_at_any_frequency(self) -> None:
+        assert risk.min_ratio_observations(252.0) == 252  # daily
+        assert risk.min_ratio_observations(52.0) == 52  # weekly
+        assert risk.min_ratio_observations(12.0) == 12  # monthly
+        assert risk.min_ratio_observations(1.0) == 2  # never below two points
+
+    def test_stock_profile_withholds_both_ratios_on_a_short_sample(self) -> None:
+        rng = np.random.default_rng(0)
+        short = _series(list(rng.normal(0.012, 0.03, 25)))  # the demo's shape
+        profile = risk.stock_risk_profile(short)
+
+        assert profile.sortino is None
+        assert profile.sharpe is None
+        # Descriptive statistics of the window itself still stand.
+        assert profile.n_observations == 25
+        assert profile.max_drawdown <= 0.0
+
+    def test_stock_profile_reports_both_once_there_is_a_year(self) -> None:
+        rng = np.random.default_rng(1)
+        year = _series(list(rng.normal(0.0004, 0.01, 252)))
+        profile = risk.stock_risk_profile(year)
+
+        assert profile.sharpe is not None
+        assert profile.sortino is not None
+        # And it lands in a believable range rather than the demo's 19.55.
+        assert abs(profile.sortino) < 5.0
+
+    def test_portfolio_risk_applies_the_same_floor(self) -> None:
+        rng = np.random.default_rng(2)
+        index = pd.date_range("2026-01-01", periods=25, freq="B")
+        panel = pd.DataFrame(
+            {"AAA": rng.normal(0.01, 0.02, 25), "BBB": rng.normal(0.01, 0.02, 25)}, index=index
+        )
+        summary = risk.portfolio_risk(panel, {"AAA": 0.5, "BBB": 0.5})
+
+        assert summary.sharpe is None
+        assert summary.sortino is None
+
+    def test_the_backtest_primitive_is_deliberately_not_gated(self) -> None:
+        # The track record pairs its Sharpe with a bootstrap confidence
+        # interval, which discloses a short sample directly. Gating the shared
+        # primitive would silently blank that page instead.
+        assert bt.sharpe_ratio(_series([0.01, -0.005, 0.02] * 3), periods_per_year=12.0) is not None
