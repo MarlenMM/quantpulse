@@ -145,13 +145,16 @@ def _seed(session: Session) -> None:
     session.commit()
 
 
-def _client(tmp_path, seed: bool = True) -> Iterator[TestClient]:
+def _client(tmp_path, seed: bool = True, extra=None) -> Iterator[TestClient]:
     engine: Engine = create_engine(f"sqlite:///{tmp_path / 'api.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     if seed:
         with factory() as s:
             _seed(s)
+    if extra is not None:
+        with factory() as s:
+            extra(s)
 
     def override() -> Iterator[Session]:
         with factory() as s:
@@ -170,6 +173,25 @@ def client(tmp_path) -> Iterator[TestClient]:
 @pytest.fixture
 def empty_client(tmp_path) -> Iterator[TestClient]:
     yield from _client(tmp_path, seed=False)
+
+
+@pytest.fixture
+def short_interest_client(tmp_path) -> Iterator[TestClient]:
+    """A seeded client that also has a short-interest reading for AAPL.
+
+    Kept separate from `client` so the "no reading stored" case stays a real
+    assertion instead of being seeded out of existence.
+    """
+    yield from _client(tmp_path, extra=_seed_short_interest)
+
+
+def _seed_short_interest(session: Session) -> None:
+    from quantpulse.storage.models import ShortInterest
+
+    session.add(
+        ShortInterest(symbol="AAPL", as_of_date=TODAY, pct_float_short=22.0, days_to_cover=7.5)
+    )
+    session.commit()
 
 
 class TestHealth:
@@ -348,3 +370,70 @@ class TestApiContract:
 
         assert "*" not in _DEV_ORIGINS
         assert all(origin.startswith("http://") for origin in _DEV_ORIGINS)
+
+
+class TestParityWithStreamlit:
+    """Sections that existed only in the Streamlit app until now.
+
+    The React client rendered 7 of the 12 sections its sibling did. Short
+    interest is the one that mattered most: Section 24 explicitly requires both
+    readings be surfaced and never collapsed into a single directional verdict,
+    so a front end that omits it entirely is a spec gap, not a styling choice.
+    Each of these is computed by the very same analysis function the Streamlit
+    page calls, so the two front ends cannot disagree about a number.
+    """
+
+    def test_short_interest_reports_both_readings_never_a_verdict(
+        self, short_interest_client: TestClient
+    ) -> None:
+        payload = short_interest_client.get("/api/stocks/AAPL").json()["short_interest"]
+        assert payload is not None
+        assert payload["pct_float_short"] == 22.0
+        assert payload["days_to_cover"] == 7.5
+        # A flag, deliberately not a direction: the same figure supports both a
+        # bearish reading and a squeeze setup (Section 24).
+        assert payload["elevated"] is True
+        assert "rating" not in payload and "signal" not in payload
+
+    def test_absent_short_interest_is_null_rather_than_zeroed(self, client: TestClient) -> None:
+        assert client.get("/api/stocks/AAPL").json()["short_interest"] is None
+
+    def test_risk_block_declines_per_estimator_on_thin_history(self, client: TestClient) -> None:
+        # The seed has six price bars, so every estimator with a data floor
+        # should abstain rather than emit a confident-looking number.
+        risk_block = client.get("/api/stocks/AAPL").json()["risk"]
+        assert risk_block is not None
+        assert risk_block["sharpe"] is None
+        assert risk_block["sortino"] is None
+        assert risk_block["value_at_risk"] is None
+        # ...and the client is told the threshold so it can explain the absence.
+        assert risk_block["ratio_min_observations"] > risk_block["n_observations"]
+
+    def test_monte_carlo_is_absent_without_enough_history(self, client: TestClient) -> None:
+        assert client.get("/api/stocks/AAPL").json()["monte_carlo"] is None
+
+    def test_macro_overlay_is_targeted_not_universal(self, client: TestClient) -> None:
+        # Section 28: a sector with no configured commodity sensitivity gets
+        # nothing at all, never a small meaningless nudge. AAPL is seeded as
+        # "Tech", which is not a configured sector name.
+        assert client.get("/api/stocks/AAPL").json()["macro_overlay"] is None
+
+    def test_sector_rotation_is_served(self, client: TestClient) -> None:
+        response = client.get("/api/sectors/rotation")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+    def test_sector_rotation_on_an_empty_database_is_empty_not_an_error(
+        self, empty_client: TestClient
+    ) -> None:
+        response = empty_client.get("/api/sectors/rotation")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_every_new_route_is_still_read_only(self, client: TestClient) -> None:
+        # The read-only guarantee is asserted over the whole OpenAPI schema
+        # elsewhere; this pins that the routes added for parity did not quietly
+        # introduce the first write path.
+        paths = client.get("/openapi.json").json()["paths"]
+        methods = {m.upper() for spec in paths.values() for m in spec}
+        assert methods == {"GET"}
