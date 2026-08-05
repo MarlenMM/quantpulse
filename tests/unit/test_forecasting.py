@@ -210,17 +210,33 @@ class TestSelectFeatures:
 # --------------------------------------------------------------------------- #
 
 
+def _constant_log_return(n: int, daily_log_return: float, start: float = 100.0) -> np.ndarray:
+    """A perfectly persistent trend, in the terms this model actually forecasts.
+
+    Deliberately exponential rather than `np.linspace`. A *linear* ramp does not
+    have a persistent forward *return*: the same absolute increment on a rising
+    base means the forward log-return shrinks monotonically, so a model trained
+    on the earlier fold necessarily over-predicts the later holdout. That makes
+    the residuals one-sided, which is exactly the systematic bias
+    `ml_forecast` now refuses to publish a band for -- so a linear ramp tests
+    the abstention path, not the trend-following one it was written for.
+    """
+    return start * np.exp(daily_log_return * np.arange(n))
+
+
 class TestML:
     def test_follows_a_persistent_uptrend(self) -> None:
-        # A deterministic ramp has consistently positive forward returns; the
-        # tree should forecast a positive move.
-        r = fc.ml_forecast(_prices(np.linspace(100, 300, 500)), 20)
+        # Constant forward log-return of 20 * 0.0022, so the tree has something
+        # stable to learn and should recover roughly that move.
+        r = fc.ml_forecast(_prices(_constant_log_return(500, 0.0022)), 20)
         assert r is not None and r.model_name == "gbr"
         assert r.point_return > 0
+        assert r.point_return == pytest.approx(np.expm1(20 * 0.0022), abs=0.01)
 
     def test_follows_a_persistent_downtrend(self) -> None:
-        r = fc.ml_forecast(_prices(np.linspace(300, 100, 500)), 20)
+        r = fc.ml_forecast(_prices(_constant_log_return(500, -0.0022)), 20)
         assert r is not None and r.point_return < 0
+        assert r.point_return == pytest.approx(np.expm1(20 * -0.0022), abs=0.01)
 
     def test_too_little_history_is_none(self) -> None:
         assert fc.ml_forecast(_prices(_random_walk(120)), 20) is None
@@ -643,3 +659,45 @@ class TestArimaDrift:
         result = fc.statistical_forecast(_prices(path), 63)
         assert result is not None
         assert np.log1p(result.point_return) == pytest.approx(per_bar * 63, rel=0.25)
+
+
+class TestBandMustContainThePoint:
+    """A prediction interval that excludes its own point estimate is not usable.
+
+    `ml_forecast`'s band is the point plus empirical residual quantiles, so it
+    can only exclude the point when every holdout residual fell on the same
+    side — the model was wrong in one direction on every out-of-sample window
+    it was graded on. On real three-year history that fired for 60% of one-year
+    ML forecasts, producing rows like a $6,867 target quoted beside a "90%
+    band" of [$27,921, $78,090].
+    """
+
+    def test_a_one_sided_residual_band_abstains(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        prices = _prices(_random_walk(400))
+
+        # Force every holdout residual positive — the systematic-bias case.
+        real_quantile = np.quantile
+
+        def _shifted(a, q, *args, **kwargs):  # type: ignore[no-untyped-def]
+            values = np.asarray(a, dtype=float)
+            if values.ndim == 1 and values.size > 2:
+                return real_quantile(np.abs(values) + 1.0, q, *args, **kwargs)
+            return real_quantile(a, q, *args, **kwargs)
+
+        monkeypatch.setattr(fc.np, "quantile", _shifted)
+        assert fc.ml_forecast(prices, 20) is None
+
+    def test_a_normal_band_still_brackets_the_point(self) -> None:
+        result = fc.ml_forecast(_prices(_random_walk(400)), 20)
+        if result is None:  # abstained for an unrelated data reason
+            pytest.skip("model abstained on this fixture for another reason")
+        assert result.lower_price <= result.point_price <= result.upper_price
+        assert result.lower_return <= result.point_return <= result.upper_return
+
+    def test_every_model_that_speaks_brackets_its_point(self) -> None:
+        # The invariant belongs to the published `Forecast`, not to one model.
+        prices = _prices(_random_walk(500))
+        for forecast in fc.forecast_horizon(prices, 20):
+            assert forecast.lower_price <= forecast.point_price <= forecast.upper_price, (
+                f"{forecast.model_name} published a band excluding its own point"
+            )
