@@ -88,6 +88,24 @@ def short_interest(symbol: str) -> dict[str, Any] | None:
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def options_signals(symbol: str) -> dict[str, Any] | None:
+    """One symbol's latest options snapshot (put/call ratio, ATM implied volatility).
+
+    The implied-volatility half of Section 7.7's "historical & implied where
+    available" risk block -- ingested nightly, and until now read by nothing but
+    the smart-money blend.
+    """
+    from datetime import date as _date
+
+    with get_session() as session:
+        frame = persistence.read_latest_options(session, as_of=_date.today())
+    if frame.empty:
+        return None
+    row = frame[frame["symbol"] == symbol]
+    return None if row.empty else dict(row.iloc[0])
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
 def symbol_news(symbol: str, limit: int = 10) -> pd.DataFrame:
     with get_session() as session:
         return persistence.read_symbol_news(session, symbol, limit=limit)
@@ -135,6 +153,40 @@ def latest_prices(symbols: tuple[str, ...]) -> dict[str, float]:
     # the cache key -- a list is unhashable and would raise at call time.
     with get_session() as session:
         return persistence.read_latest_prices(session, list(symbols))
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def macro_series(name: str, lookback_days: int = 60) -> list[float]:
+    """A cross-asset series (VIX, oil, gold, the dollar index), oldest first.
+
+    Feeds Section 28's targeted sector overlay, which had no consumer at all --
+    the series were ingested nightly and nothing ever computed the adjustment.
+    """
+    from datetime import date as _date
+
+    with get_session() as session:
+        return persistence.read_macro_series(
+            session, name, as_of=_date.today(), lookback_days=lookback_days
+        )
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def universe_panel(lookback_days: int = 150) -> pd.DataFrame:
+    """The whole active universe's adjusted-close panel, for market-wide views.
+
+    Used by the Dashboard's sector-rotation table. Deliberately a shorter window
+    than the portfolio panel: rotation is a one-month relative-strength read, so
+    years of history would be cost without benefit.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    end = _date.today()
+    with get_session() as session:
+        symbols = list(persistence.read_ticker_universe(session)["symbol"])
+        return persistence.read_adj_close_panel(
+            session, start=end - _timedelta(days=lookback_days), end=end, symbols=symbols
+        )
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)

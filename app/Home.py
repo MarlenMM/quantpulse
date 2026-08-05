@@ -17,6 +17,7 @@ from lib.format import (
     rating_label,
 )
 from lib.glossary import tip
+from quantpulse.analysis import risk, technical
 
 st.set_page_config(
     page_title="QuantPulse — Dashboard",
@@ -119,6 +120,58 @@ def render_regime(regime: "object") -> None:
     )
 
 
+def render_sector_rotation() -> None:
+    """Section 7.1's sector-rotation read -- which sectors money has moved into.
+
+    `technical.compute_sector_rotation` and the `compute_relative_strength` it
+    builds on were written, tested and called by nothing. This is the natural
+    home for a market-wide view, and it answers a question the top-ranked-names
+    table cannot: whether the leaders are concentrated in one corner of the
+    market.
+
+    Measured against an equal-weight proxy for the market, because no S&P 500
+    price series is ingested anywhere -- the same honest stand-in the beta
+    calculation and the backtest benchmark already use.
+    """
+    panel = data.universe_panel()
+    if panel.empty or panel.shape[1] < 2:
+        return
+    benchmark = risk.equal_weight_market_returns(panel)
+    if benchmark.empty:
+        return
+    # `compute_relative_strength` wants a price *level*, not returns.
+    benchmark_level = (1.0 + benchmark).cumprod()
+
+    universe = data.universe()
+    sectors = {
+        row.symbol: row.sector for row in universe.itertuples() if isinstance(row.sector, str)
+    }
+    rotation = technical.compute_sector_rotation(
+        {column: panel[column].dropna() for column in panel.columns},
+        sectors,
+        benchmark_level,
+    )
+    if rotation.empty:
+        return
+
+    st.subheader("Sector rotation", help=tip("Sector rotation"))
+    display = rotation.rename(
+        columns={"sector": "Sector", "relative_strength_change_pct": "vs market (1m)"}
+    )
+    st.dataframe(
+        display.style.format({"vs market (1m)": "{:+.1f}%"}),
+        hide_index=True,
+        width="stretch",
+        height=260,
+    )
+    st.caption(
+        "Change in each sector's strength *relative to the market* over the last month — "
+        "top row is where money has been rotating in. A sector can appear here with a "
+        "positive number while falling in absolute terms, if it simply fell less than "
+        "everything else. This describes what already happened; it is not a forecast."
+    )
+
+
 def main() -> None:
     st.title("📈 QuantPulse")
     st.caption(
@@ -202,6 +255,9 @@ def main() -> None:
 
     with right:
         render_regime(None)
+
+    st.divider()
+    render_sector_rotation()
 
     st.divider()
     st.subheader("Today's market-moving news")

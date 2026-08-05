@@ -44,7 +44,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice
-from quantpulse.analysis import forecasting, smart_money
+from quantpulse.analysis import forecasting, macro, risk, smart_money, technical
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import chatbot
 from quantpulse.llm import narrative as llm_narrative
@@ -175,6 +175,104 @@ def render_monte_carlo(symbol: str, bars: pd.DataFrame) -> None:
     st.caption(
         f"Calibrated on {fan.n_train:,} daily returns "
         f"(drift {fan.mu * 100:.3f}%/day, volatility {fan.sigma * 100:.2f}%/day)."
+    )
+
+
+def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
+    """Section 7.7's per-name risk block -- volatility, beta, Sortino, VaR.
+
+    `risk.stock_risk_profile` computes all of it in one call and had no caller:
+    the Portfolio page shows portfolio-level risk, so a single stock's risk
+    numbers existed and were displayed nowhere. Each estimator declines
+    independently when its own data floor isn't met, so a short-history name
+    yields a partly-filled block rather than fabricated numbers.
+    """
+    if bars.empty:
+        return
+    closes = bars.set_index(pd.DatetimeIndex(pd.to_datetime(bars["date"])))["close"]
+    returns = risk.to_returns(closes)
+    if returns.empty:
+        return
+
+    market = risk.equal_weight_market_returns(data.universe_panel())
+    stored_iv = data.options_signals(symbol)
+    profile = risk.stock_risk_profile(
+        returns,
+        market_returns=market if not market.empty else None,
+        implied_volatility=None if stored_iv is None else stored_iv.get("atm_implied_volatility"),
+    )
+
+    st.subheader("Risk profile", help=tip("Volatility"))
+    columns = st.columns(5)
+    columns[0].metric(
+        "Volatility (ann.)", format_percent(profile.volatility.historical), help=tip("Volatility")
+    )
+    columns[1].metric(
+        "Implied vol",
+        format_percent(profile.volatility.implied),
+        help=tip("Implied volatility"),
+    )
+    columns[2].metric(
+        "Beta",
+        format_ratio(profile.beta.beta) if profile.beta else "—",
+        help=tip("Beta"),
+    )
+    columns[3].metric("Sortino", format_ratio(profile.sortino), help=tip("Sortino ratio"))
+    columns[4].metric(
+        "Daily VaR 95%",
+        format_percent(profile.value_at_risk.var) if profile.value_at_risk else "—",
+        help=tip("Value at Risk"),
+    )
+    notes = [f"Measured on {profile.n_observations} daily returns."]
+    if profile.beta is not None and profile.beta.r_squared is not None:
+        notes.append(
+            f"Beta is against an equal-weight proxy for the market (no S&P 500 price series "
+            f"is ingested), R² = {profile.beta.r_squared:.2f}."
+        )
+    if profile.volatility.implied_premium is not None:
+        direction = "more" if profile.volatility.implied_premium > 0 else "less"
+        notes.append(
+            f"Options are pricing **{direction}** movement than this stock has recently "
+            f"delivered ({format_signed_percent(profile.volatility.implied_premium)} spread) — "
+            "a spread between two volatilities, not a direction."
+        )
+    st.caption(" ".join(notes))
+
+
+def render_macro_overlay(sector: str | None) -> None:
+    """Section 28's targeted commodity/currency overlay for this stock's sector.
+
+    Oil for Energy, gold for Materials, the dollar for the sectors dominated by
+    multinationals earning abroad -- and a flat zero for every other sector, on
+    purpose ("a small biotech doesn't care about oil prices"). The series were
+    ingested nightly from the start and `commodity_overlay_adjustment` was
+    called by nothing, so the overlay existed only as a function.
+    """
+    sensitivities = macro.SECTOR_COMMODITY_SENSITIVITY.get(sector or "")
+    if not sensitivities:
+        return
+
+    moves = {
+        series: change
+        for series in sensitivities
+        if (change := macro.pct_change(data.macro_series(series))) is not None
+    }
+    if not moves:
+        return
+    adjustment = macro.commodity_overlay_adjustment(sector, moves)
+
+    st.subheader("Macro overlay", help=tip("Sector macro overlay"))
+    tone = "tailwind" if adjustment > 0 else "headwind" if adjustment < 0 else "neutral"
+    st.markdown(
+        f"**{sector}** is exposed to "
+        + ", ".join(f"{humanize(series)} ({change:+.1f}%)" for series, change in moves.items())
+        + f" over the last ~3 months — a **{tone}** of {adjustment:+.2f} on a -1 to +1 scale."
+    )
+    st.caption(
+        "Applied only to the sectors these series genuinely move (Section 28): oil for "
+        "Energy, metals for Materials, the dollar for sectors dominated by multinationals "
+        "earning abroad. Every other sector gets exactly zero rather than a small "
+        "meaningless nudge. This is context, not part of the composite score."
     )
 
 
@@ -338,7 +436,22 @@ def main() -> None:
         overlays["SMA 50"] = bars["close"].rolling(50).mean()
     if not bars.empty and len(bars) >= 200:
         overlays["SMA 200"] = bars["close"].rolling(200).mean()
-    st.plotly_chart(charts.price_chart(bars, overlays=overlays), width="stretch")
+    # Section 8's "price chart with indicators": the support/resistance detector
+    # was built and drawn nowhere, so the chart carried two moving averages and
+    # nothing else. Only levels the market has actually turned at twice or more
+    # are returned, so this stays sparse rather than striping the chart.
+    levels = (
+        technical.find_support_resistance_levels(bars)
+        if not bars.empty and len(bars) >= 30
+        else None
+    )
+    st.plotly_chart(charts.price_chart(bars, overlays=overlays, levels=levels), width="stretch")
+    if levels is not None and not levels.empty:
+        st.caption(
+            f"Dotted lines are **support/resistance** — {len(levels)} price level(s) this "
+            "stock has repeatedly turned at, annotated with how many times. A level tested "
+            "once is a data point, not a level, so those are not drawn."
+        )
 
     left, right = st.columns(2)
     with left:
@@ -474,8 +587,12 @@ def main() -> None:
     render_monte_carlo(symbol, bars)
 
     st.divider()
+    render_risk_profile(symbol, bars)
+
+    st.divider()
     render_analyst_comparison(symbol, row)
     render_short_interest(symbol)
+    render_macro_overlay(row["sector"])
 
     st.divider()
     st.subheader("What's driving this", help=tip("Sentiment score"))

@@ -418,6 +418,29 @@ TERMS: dict[str, tuple[str, str]] = {
         "above their 200-day average. A rally carried by a handful of names is narrower "
         "than the index alone suggests.",
     ),
+    "Sector macro overlay": (
+        "News",
+        "A targeted read on whether recent commodity and currency moves are a tailwind "
+        "or a headwind for a particular sector: oil for Energy, metals for Materials, a "
+        "strong dollar for sectors whose profits are earned abroad. Deliberately applied "
+        "to those sectors only — a small biotech does not care about the oil price, and "
+        "nudging its score for one would be noise dressed up as insight. Shown as "
+        "context; it is not part of the composite score.",
+    ),
+    "Relative strength line": (
+        "Technicals",
+        "A stock's price divided by the market's, rebased to 100. A rising line means it "
+        "is outperforming, whether or not the stock itself is going up — which is the "
+        "point: in a falling market, losing less is outperformance. Not the same thing "
+        "as RSI, despite the similar name.",
+    ),
+    "Sector rotation": (
+        "Technicals",
+        "Which sectors money has been moving into and out of lately, measured as the "
+        "change in each sector's relative strength against the market over the past "
+        "month. Describes what has already happened; it is not a prediction of what "
+        "happens next.",
+    ),
 }
 
 # Display order for the Glossary page; every category in TERMS must appear here.

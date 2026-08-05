@@ -146,6 +146,13 @@ def _wired(engine: Engine) -> Iterator[None]:
         lib_data.patterns,
         lib_data.latest_prices,
         lib_data.adj_close_panel,
+        lib_data.universe_panel,
+        lib_data.macro_series,
+        lib_data.options_signals,
+        lib_data.market_regime,
+        lib_data.rating_changes,
+        lib_data.market_moving_news,
+        lib_data.data_freshness,
     ):
         reader.clear()
     with patch("lib.data.get_session", fake_get_session):
@@ -388,3 +395,82 @@ class TestTargetAllocationIsVisible:
         body = _text(at)
         assert "not forecasts" in body
         assert "Not an instruction to trade" in body
+
+
+class TestPerStockRiskAndMacroOverlayAreVisible:
+    """Two more built-and-unreachable pieces, now on the Stock Detail page.
+
+    `risk.stock_risk_profile` computed a name's volatility (realised and
+    implied), beta, Sortino and VaR in one call and had no caller -- the
+    Portfolio page shows portfolio-level risk, so a single stock's risk numbers
+    were displayed nowhere. `macro.commodity_overlay_adjustment` is Section 28's
+    targeted overlay; its inputs were ingested nightly from the start and
+    nothing ever computed the adjustment.
+    """
+
+    HOME_PAGE = str(APP_DIR / "Home.py")
+
+    @pytest.fixture
+    def macro_engine(self, seeded_engine: Engine) -> Engine:
+        """The standard fixture plus a second sector name and cross-asset history."""
+        from quantpulse.analysis import macro
+        from quantpulse.storage.models import MacroIndicator, OptionsSignal
+
+        with sessionmaker(bind=seeded_engine)() as session:
+            session.add(
+                Ticker(
+                    symbol="XOM",
+                    name="Exxon Mobil",
+                    sector="Energy",
+                    asset_type="equity",
+                    is_active=True,
+                )
+            )
+            _price_series(session, "XOM", seed=11)
+            # Oil down hard, dollar flat: Energy should read as a headwind.
+            for offset, (oil, dollar) in enumerate([(90.0, 100.0), (80.0, 99.0)]):
+                day = AS_OF - timedelta(days=30 - offset * 29)
+                session.add(MacroIndicator(date=day, indicator_name=macro.OIL_WTI, value=oil))
+                session.add(
+                    MacroIndicator(date=day, indicator_name=macro.DOLLAR_INDEX, value=dollar)
+                )
+            session.add(
+                OptionsSignal(
+                    symbol="NVDA",
+                    date=AS_OF,
+                    put_call_ratio=0.9,
+                    atm_implied_volatility=0.42,
+                )
+            )
+            session.commit()
+        return seeded_engine
+
+    def test_risk_profile_renders_for_a_single_stock(self, macro_engine: Engine) -> None:
+        at = _run(STOCK_DETAIL, macro_engine)
+        assert not at.exception
+        assert "Risk profile" in [element.value for element in at.subheader]
+        labels = [metric.label for metric in at.metric]
+        for expected in ("Volatility (ann.)", "Implied vol", "Beta", "Sortino", "Daily VaR 95%"):
+            assert expected in labels
+
+    def test_beta_is_shown_with_the_r_squared_that_qualifies_it(self, macro_engine: Engine) -> None:
+        # A beta of 1.4 with an R^2 of 0.05 is not the number a reader thinks it
+        # is, so the qualifier travels with it.
+        at = _run(STOCK_DETAIL, macro_engine)
+        assert "R²" in _text(at)
+
+    def test_macro_overlay_is_targeted_not_universal(self, macro_engine: Engine) -> None:
+        # NVDA is Information Technology, which is dollar-sensitive only; the
+        # section renders. The wording has to make the targeting explicit,
+        # because a universal overlay is exactly what Section 28 forbids.
+        at = _run(STOCK_DETAIL, macro_engine)
+        assert not at.exception
+        body = _text(at)
+        assert "Macro overlay" in [element.value for element in at.subheader]
+        assert "Every other sector gets exactly zero" in body
+
+    def test_sector_rotation_renders_on_the_dashboard(self, macro_engine: Engine) -> None:
+        at = _run(self.HOME_PAGE, macro_engine)
+        assert not at.exception
+        assert "Sector rotation" in [element.value for element in at.subheader]
+        assert "not a forecast" in _text(at)
