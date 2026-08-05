@@ -19,6 +19,7 @@ functions rather than left to each page's discretion:
 
 from __future__ import annotations
 
+import math
 from datetime import date
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "rating_label",
     "rating_color",
     "action_label",
+    "is_missing",
     "format_price",
     "format_money",
     "format_percent",
@@ -93,18 +95,52 @@ def action_label(action: str | None) -> str:
     return f"{icon} {text}"
 
 
+def is_missing(value: float | None) -> bool:
+    """True when a number should render as an em dash rather than a figure.
+
+    **`value is None` is not enough, and the difference is invisible in tests
+    that hand-build inputs.** These formatters are almost always handed a cell
+    out of a pandas frame built from a database read, and pandas decides how a
+    SQL NULL arrives based on the *whole column's* dtype: an all-NULL column
+    stays `object` and yields `None`, but a column with even one real value
+    becomes `float64` and yields `float("nan")`. So the same missing cell
+    renders as "—" or as "nan" depending on whether some *other* row happened
+    to have data -- which is why this shipped for months and only appeared on
+    the live demo's Home page, where `macro_news_tone` had three real readings
+    and one gap ("Macro tone: nan", next to a correctly-dashed "Breadth: —").
+
+    NaN also propagates through arithmetic, so `format_percent` turned it into
+    "nan%" and `format_price` into "$nan". Non-finite infinities get the same
+    treatment: there is no honest way to print one as a price or a percentage.
+    """
+    return value is None or not math.isfinite(value)
+
+
+def _usable(value: float | None) -> float | None:
+    """`value` if it can honestly be printed, else None.
+
+    Collapsing every missing shape (None, NaN, +/-inf) onto None up front means
+    each formatter below keeps a single plain `is None` check -- which reads
+    clearly *and* lets mypy narrow the value for the arithmetic that follows.
+    """
+    return None if is_missing(value) else value
+
+
 def format_price(value: float | None) -> str:
-    return "—" if value is None else f"${value:,.2f}"
+    usable = _usable(value)
+    return "—" if usable is None else f"${usable:,.2f}"
 
 
 def format_money(value: float | None) -> str:
     """Whole-dollar money, for totals where cents are noise."""
-    return "—" if value is None else f"${value:,.0f}"
+    usable = _usable(value)
+    return "—" if usable is None else f"${usable:,.0f}"
 
 
 def format_percent(value: float | None, *, digits: int = 1) -> str:
     """A fraction (0.153) as a percentage ("15.3%")."""
-    return "—" if value is None else f"{value * 100:.{digits}f}%"
+    usable = _usable(value)
+    return "—" if usable is None else f"{usable * 100:.{digits}f}%"
 
 
 def format_pct_already_scaled(value: float | None, *, digits: int = 1) -> str:
@@ -114,21 +150,25 @@ def format_pct_already_scaled(value: float | None, *, digits: int = 1) -> str:
     using that on an already-0-100 value (e.g. `market_regime.compute_breadth`'s
     "share, 0-100" return) silently inflates it 100x (62.0 -> "6200.0%").
     """
-    return "—" if value is None else f"{value:.{digits}f}%"
+    usable = _usable(value)
+    return "—" if usable is None else f"{usable:.{digits}f}%"
 
 
 def format_signed_percent(value: float | None, *, digits: int = 1) -> str:
     """A fraction as a signed percentage ("+15.3%" / "-4.0%") for changes."""
-    return "—" if value is None else f"{value * 100:+.{digits}f}%"
+    usable = _usable(value)
+    return "—" if usable is None else f"{usable * 100:+.{digits}f}%"
 
 
 def format_score(value: float | None, *, digits: int = 1) -> str:
     """A 0-100 score; an explicit em dash when the category had no data."""
-    return "—" if value is None else f"{value:.{digits}f}"
+    usable = _usable(value)
+    return "—" if usable is None else f"{usable:.{digits}f}"
 
 
 def format_ratio(value: float | None, *, digits: int = 2) -> str:
-    return "—" if value is None else f"{value:.{digits}f}"
+    usable = _usable(value)
+    return "—" if usable is None else f"{usable:.{digits}f}"
 
 
 def freshness_label(as_of: date | None, *, today: date | None = None) -> str:
@@ -157,10 +197,14 @@ def confidence_label(data_confidence: float | None) -> str:
     A thinly-covered micro-cap and a heavily-covered mega-cap must not be
     presented with the same implied confidence (Section 12, Section 22).
     """
-    if data_confidence is None:
+    # NaN compares False against every threshold below, so without this guard a
+    # missing coverage reading silently falls through to the *most alarming*
+    # branch and renders "thin coverage (nan%)".
+    usable = _usable(data_confidence)
+    if usable is None:
         return "coverage unknown"
-    if data_confidence >= 80:
-        return f"good coverage ({data_confidence:.0f}%)"
-    if data_confidence >= 50:
-        return f"partial coverage ({data_confidence:.0f}%)"
-    return f"thin coverage ({data_confidence:.0f}%)"
+    if usable >= 80:
+        return f"good coverage ({usable:.0f}%)"
+    if usable >= 50:
+        return f"partial coverage ({usable:.0f}%)"
+    return f"thin coverage ({usable:.0f}%)"
