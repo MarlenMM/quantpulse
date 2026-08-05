@@ -155,13 +155,32 @@ _COMPOSITE_PROFILES = ("balanced", "income", "conservative")
 # a documented, single-constant deviation, not a silent gap.
 _NEWS_REFRESH_ON_WEEKLY_ONLY = True
 
-# Hard ceiling on how many Tier-1 articles the local NLI/sentiment models are
-# asked to score in one run (see `_cap_articles`). Sized from measurement, not
-# taste: `bart-large-mnli` zero-shot with eight candidate labels costs ~0.16s
-# per headline on developer hardware and several times that on a 2-vCPU CI
-# runner, so 6,000 articles is roughly 15 minutes locally and comfortably
-# inside the step budget below even at runner speed.
-_MAX_CLASSIFIED_ARTICLES = 6_000
+# Two different ceilings, because the three news models do NOT cost the same.
+# Measured on real headlines (title + summary), warm, on developer hardware:
+#
+#     spaCy NER          19 ms/article
+#     FinBERT sentiment  14 ms/article
+#     BART zero-shot    347 ms/article   <- 91% of the total
+#
+# The asymmetry is structural: eight candidate labels means eight entailment
+# passes through a 400M-parameter model per article. So capping "articles" as
+# one number would either starve sentiment (which is what actually feeds the
+# composite score, and is nearly free) or blow the budget on event typing
+# (which only sets a decay half-life and a display label).
+#
+# `_MAX_SENTIMENT_ARTICLES` bounds the cheap pass over everything; the
+# per-symbol cap in `news_client` is what keeps coverage even across the
+# universe rather than letting a few heavily-covered mega-caps crowd out the
+# rest. `_MAX_CLASSIFIED_ARTICLES` bounds the expensive one; beyond it articles
+# fall to `EventType.OTHER`, the same state a low-confidence classification
+# already produces.
+#
+# Sizing, against a ~40 min target on a CI runner assumed ~3x slower than the
+# numbers above: ~7,000 articles x 33 ms = ~4 min of NER+sentiment, plus 1,500
+# x 347 ms = ~9 min of classification, so ~13 min locally and ~40 on the runner
+# -- comfortably inside the 90-minute step budget below.
+_MAX_SENTIMENT_ARTICLES = 7_000
+_MAX_CLASSIFIED_ARTICLES = 1_500
 
 # Per-step wall-clock budgets. `step()` enforces these so a stalled dependency
 # costs one step instead of the entire run.
@@ -1339,28 +1358,31 @@ def _persist_per_ticker_smart_money(
 
 
 def _cap_articles(articles: pd.DataFrame) -> pd.DataFrame:
-    """Bound the model batch to `_MAX_CLASSIFIED_ARTICLES`, newest first.
+    """Order newest-first and bound the batch to `_MAX_SENTIMENT_ARTICLES`.
 
     A second line of defence behind `news_client.MAX_ARTICLES_PER_SYMBOL`. The
     per-symbol cap bounds the *typical* run, but the universe size is not fixed
-    and a new Tier-1 source could be added, so this pins the one number that
-    actually decides whether the step finishes: how many articles the local NLI
-    and sentiment models are asked to score in one go.
+    and a new Tier-1 source could be added, so this pins the total.
+
+    Sorting always (not only when over the limit) is what makes the separate
+    classification cap downstream meaningful: `classify_articles` takes rows in
+    frame order, so newest-first here means the expensive model spends its
+    budget on the articles the recency-decay step weights most heavily.
 
     What was dropped is logged rather than silently discarded -- a cap nobody
-    can see reads as "we classified everything", which is exactly the kind of
+    can see reads as "we processed everything", which is exactly the kind of
     quiet truncation Section 22 warns about.
     """
-    if len(articles) <= _MAX_CLASSIFIED_ARTICLES:
-        return articles
     ordered = articles.sort_values("published_at", ascending=False, na_position="last")
-    kept = ordered.head(_MAX_CLASSIFIED_ARTICLES).reset_index(drop=True)
+    if len(ordered) <= _MAX_SENTIMENT_ARTICLES:
+        return ordered.reset_index(drop=True)
+    kept = ordered.head(_MAX_SENTIMENT_ARTICLES).reset_index(drop=True)
     logger.warning(
-        "Tier-1 news: capped %d articles to the newest %d for classification "
-        "(oldest kept: %s). Raise _MAX_CLASSIFIED_ARTICLES only with a measured "
-        "runtime -- this step is the whole weekly budget.",
+        "Tier-1 news: capped %d articles to the newest %d (oldest kept: %s). "
+        "Raise _MAX_SENTIMENT_ARTICLES only with a measured runtime -- this step "
+        "is the whole weekly budget.",
         len(articles),
-        _MAX_CLASSIFIED_ARTICLES,
+        _MAX_SENTIMENT_ARTICLES,
         kept["published_at"].min() if "published_at" in kept else "unknown",
     )
     return kept
@@ -1393,9 +1415,22 @@ def process_tier1_news(
     articles["matched_symbols"] = entity_extraction.tag_articles(articles, gazetteer)
     # Keep the EventType enum in-frame so the decay step reads each event's
     # half-life directly; stringify only when building the stored row.
-    articles["event_type"] = event_classifier.classify_articles(articles).apply(
-        lambda c: c.event_type
+    # Newest-first from `_cap_articles`, so the expensive classifier spends its
+    # budget where the recency-decay step gives the most weight. Everything past
+    # the limit is `EventType.OTHER` -- see `_MAX_CLASSIFIED_ARTICLES` above.
+    classifications = event_classifier.classify_articles(
+        articles, max_classified=_MAX_CLASSIFIED_ARTICLES
     )
+    if len(articles) > _MAX_CLASSIFIED_ARTICLES:
+        logger.info(
+            "Tier-1 news: event-typed the newest %d of %d articles; the rest are "
+            "recorded as '%s'. Sentiment, which is what feeds the composite score, "
+            "covers all of them.",
+            _MAX_CLASSIFIED_ARTICLES,
+            len(articles),
+            event_classifier.EventType.OTHER,
+        )
+    articles["event_type"] = classifications.apply(lambda c: c.event_type)
     articles["sentiment"] = sentiment.score_articles(articles)
 
     news_records: list[dict[str, Any]] = []

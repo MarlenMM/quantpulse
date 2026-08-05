@@ -204,3 +204,64 @@ def test_classify_articles_empty_dataframe() -> None:
         results = ec.classify_articles(df)
     assert results.tolist() == []
     mock_load.assert_not_called()
+
+
+class TestClassificationBudget:
+    """`max_classified` bounds the single most expensive call in the pipeline.
+
+    Measured on real headlines, warm: zero-shot classification costs ~347 ms per
+    article against ~19 ms for spaCy NER and ~14 ms for FinBERT sentiment — 91%
+    of the total. Eight candidate labels means eight entailment passes through a
+    400M-parameter model per article, so this is structural rather than
+    incidental, and it is why the nightly's weekly branch used to exhaust a
+    six-hour CI budget.
+    """
+
+    @staticmethod
+    def _frame(n: int) -> pd.DataFrame:
+        return pd.DataFrame({"title": [f"Company {i} reports earnings" for i in range(n)]})
+
+    def test_only_the_first_n_reach_the_model(self) -> None:
+        seen: list[list[str]] = []
+
+        def _fake(batch, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(list(batch))
+            return [
+                {"labels": ["corporate earnings or financial results"], "scores": [0.9]}
+                for _ in batch
+            ]
+
+        with patch.object(ec, "_load_classifier", return_value=_fake):
+            results = ec.classify_articles(self._frame(10), max_classified=3)
+
+        assert len(seen) == 1 and len(seen[0]) == 3
+        assert [r.event_type for r in results[:3]] == [ec.EventType.EARNINGS] * 3
+        # The remainder degrade into the SAME state a low-confidence
+        # classification already produces, not a new one.
+        assert all(r.event_type is ec.EventType.OTHER for r in results[3:])
+        assert all(r.confidence == 0.0 for r in results[3:])
+        assert all(
+            r.half_life_days == ec.EVENT_HALF_LIFE_DAYS[ec.EventType.OTHER] for r in results[3:]
+        )
+
+    def test_none_classifies_everything(self) -> None:
+        def _fake(batch, **kwargs):  # type: ignore[no-untyped-def]
+            return [
+                {"labels": ["corporate earnings or financial results"], "scores": [0.9]}
+                for _ in batch
+            ]
+
+        with patch.object(ec, "_load_classifier", return_value=_fake):
+            results = ec.classify_articles(self._frame(6))
+        assert all(r.event_type is ec.EventType.EARNINGS for r in results)
+
+    def test_a_limit_above_the_batch_is_a_no_op(self) -> None:
+        def _fake(batch, **kwargs):  # type: ignore[no-untyped-def]
+            return [
+                {"labels": ["corporate earnings or financial results"], "scores": [0.9]}
+                for _ in batch
+            ]
+
+        with patch.object(ec, "_load_classifier", return_value=_fake):
+            results = ec.classify_articles(self._frame(4), max_classified=99)
+        assert all(r.event_type is ec.EventType.EARNINGS for r in results)
