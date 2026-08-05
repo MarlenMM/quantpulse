@@ -10,7 +10,7 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full design doc (architecture, data sources, scoring methodology, roadmap) and [ARCHITECTURE.md](ARCHITECTURE.md) for a shorter, code-first tour of how it's actually laid out.
 
-**Status:** Phases 0–12 of the roadmap are complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, all six Streamlit pages plus the React + FastAPI stretch front end, the full unit/integration/property-based test suite, CI/CD, and this polish pass. Only the standalone final methodology review (Section 21) remains before calling the roadmap done. Nothing here makes trade or investment decisions.
+**Status:** Phases 0–12 of the roadmap are complete — data layer, technical/fundamental/analyst/news/smart-money signals, the market-regime index, composite scoring, forecasting + backtesting, portfolio risk/optimization/rebalancing tools, the optional LLM narration layer, all six Streamlit pages plus the React + FastAPI stretch front end, the full unit/integration/property-based test suite, CI/CD, and the polish pass — as is Section 21's standalone final methodology review. Nothing here makes trade or investment decisions.
 
 The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`), every number the app computes is still produced and displayed — you just don't get the plain-English paragraph next to it.
 
@@ -18,17 +18,17 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,177** (unit, integration, and property-based via Hypothesis), all passing |
-| Core engine code | **~14,800** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
+| Automated tests | **1,297** (unit, integration, and property-based via Hypothesis), all passing |
+| Core engine code | **~16,000** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
-| Database | **23 tables**, **8 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
-| Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** |
-| Chart pattern families detected | **4** — head-and-shoulders, double top/bottom, triangles/wedges/channels, cup-and-handle |
-| Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, Monte Carlo simulation — each graded out-of-sample against the naive baseline |
+| Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
+| Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** — four differ by category weights alone, and two (income, conservative) genuinely re-score a category, so the nightly stores their rankings separately |
+| Chart pattern families detected | **4** — head-and-shoulders, double top/bottom, triangles/wedges/channels, cup-and-handle — detected nightly across the universe and shown per stock with a confidence score |
+| Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, and a Monte Carlo fan chart. The first three are graded out-of-sample against the naive baseline; Monte Carlo deliberately is not, because it simulates the same random walk the baseline evaluates in closed form (grading it would be grading the baseline against itself) |
 | Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
-| Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, Black-Litterman |
+| Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, and Black-Litterman driven by the app's own composite scores, each with a concrete buy/sell trade list |
 | Front ends | **2** — a 6-page Streamlit app (full app, incl. Portfolio Manager) and a 5-page React + TypeScript SPA over an 11-endpoint read-only FastAPI |
-| Glossary terms | **63**, across 8 categories — one definition shared by every tooltip and both front ends |
+| Glossary terms | **71**, across 8 categories — one definition shared by every tooltip and both front ends |
 | Required budget | **$0** — every data source, model, and hosting option used is free-tier or open-source |
 
 ## Architecture
@@ -181,10 +181,10 @@ not grow when the panel expanded by 330 names.
 
 | Page | What it shows |
 |---|---|
-| **Dashboard** | Market Regime Index gauge, top-ranked names, what changed since the last refresh, market-moving Tier-2/3 news |
-| **Screener** | The ranked, filterable table, with sliders that re-weight the seven score categories client-side and a 2–4 ticker Compare mode |
-| **Stock Detail** | Price chart + patterns, sub-score radar, forecast fan chart with each model's own hit-rate, analyst-vs-algorithm, news feed, and an optional chat box grounded strictly in that stock's computed numbers |
-| **Portfolio & Watchlist** | FIFO tax-lot positions, risk dashboard (vol/Sharpe/Sortino/beta/VaR/correlations), Add-Trim-Hold-Sell guidance, concentration + sector-gap warnings |
+| **Dashboard** | Market Regime Index gauge, top-ranked names, what changed since the last refresh, sector rotation, market-moving Tier-2/3 news |
+| **Screener** | The ranked, filterable table, with sliders that re-weight the seven score categories *and re-rate against them* client-side, a relative/absolute rating-scheme switch, and a 2–4 ticker Compare mode |
+| **Stock Detail** | Price chart with support/resistance and detected patterns, sub-score radar, forecast fan chart with each model's own hit-rate *and the number of windows behind it*, Monte Carlo paths, per-stock risk block, short interest read both ways, sector macro overlay, news feed, optional plain-English summaries of the sentiment move and the latest SEC filing, and a chat box grounded strictly in that stock's computed numbers |
+| **Portfolio & Watchlist** | FIFO tax-lot positions, risk dashboard (vol/Sharpe/Sortino/beta/VaR/correlations + correlation clusters), a target allocation from any of the three optimizers with its concrete trade list, Add-Trim-Hold-Sell guidance, concentration + sector-gap warnings |
 | **Backtest / Track Record** | Sharpe and CAGR with bootstrap confidence intervals, benchmark comparison, stated cost assumptions |
 | **Settings / About** | Data freshness per dataset, pipeline health, configuration, methodology and limitations |
 
@@ -272,11 +272,10 @@ analysis engine stays UI-agnostic.
 ## Roadmap
 
 Full detail in [Section 15 of the plan](PROJECT_PLAN.md#15-development-roadmap--milestones).
-Phases 0–12 (data layer through this polish pass) are complete. What's left:
-a standalone final look-ahead-bias/normalization-bug review across the whole
-scoring → forecasting → backtest chain (Section 21's last row) before calling
-the roadmap done, and actually completing the two manual "Live Demo &
-Deployment" steps above.
+Phases 0–12 are complete, as is Section 21's final look-ahead-bias/
+normalization review across the scoring → forecasting → backtest chain. What's
+left is the two manual "Live Demo & Deployment" steps above, which need your
+own accounts and API keys and can't be scripted from the repo.
 
 ## Disclaimer
 
