@@ -26,6 +26,7 @@ from sqlalchemy.orm import sessionmaker
 from streamlit.testing.v1 import AppTest
 
 from quantpulse.analysis.investor_profiles import CATEGORIES
+from quantpulse.portfolio.transactions import Transaction
 from quantpulse.storage.models import (
     BacktestResult,
     Base,
@@ -143,6 +144,8 @@ def _wired(engine: Engine) -> Iterator[None]:
         lib_data.backtest_history,
         lib_data.universe,
         lib_data.patterns,
+        lib_data.latest_prices,
+        lib_data.adj_close_panel,
     ):
         reader.clear()
     with patch("lib.data.get_session", fake_get_session):
@@ -292,3 +295,96 @@ class TestDetectedPatternsAreVisible:
         # to remain reachable -- otherwise the test above proves nothing.
         at = _run(STOCK_DETAIL, seeded_engine)
         assert "No chart or candlestick patterns detected" in _text(at)
+
+
+class TestTargetAllocationIsVisible:
+    """Section 27's optimizers and trade list had no page at all.
+
+    `mean_variance_optimize`, `hierarchical_risk_parity` and
+    `black_litterman_optimize` -- plus `rebalancing.build_rebalance_plan` --
+    were fully built and tested, and the README advertised "3 optimization
+    methods" a user had no way to run. Only the Kelly helper was ever wired.
+    """
+
+    PORTFOLIO_PAGE = str(APP_DIR / "pages" / "3_Portfolio.py")
+
+    @pytest.fixture
+    def held_engine(self, tmp_path: Path) -> Engine:
+        """Six priced holdings with 400 bars each and a session-backed portfolio."""
+        engine = create_engine(f"sqlite:///{tmp_path / 'holdings.db'}")
+        Base.metadata.create_all(engine)
+        symbols = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+        with sessionmaker(bind=engine)() as session:
+            for seed, symbol in enumerate(symbols):
+                session.add(
+                    Ticker(
+                        symbol=symbol,
+                        name=f"{symbol} Inc",
+                        sector="Information Technology",
+                        asset_type="equity",
+                        is_active=True,
+                    )
+                )
+                _price_series(session, symbol, seed=seed)
+                session.add(
+                    CompositeScore(
+                        symbol=symbol,
+                        date=AS_OF,
+                        profile="balanced",
+                        composite_score=50.0 + seed * 5,
+                        percentile_rank=50.0 + seed * 5,
+                        rating="hold",
+                        data_confidence=80.0,
+                        **{f"{category}_score": 50.0 + seed * 5 for category in CATEGORIES},
+                    )
+                )
+            session.commit()
+        return engine
+
+    def _run_portfolio(self, engine: Engine, method_index: int = 0) -> AppTest:
+        from quantpulse.portfolio import holdings as holdings_lib
+
+        with _wired(engine):
+            at = AppTest.from_file(self.PORTFOLIO_PAGE, default_timeout=180)
+            at.session_state["quantpulse_portfolio"] = holdings_lib.PortfolioState(
+                transactions=[
+                    Transaction(
+                        symbol=symbol,
+                        action="buy",
+                        shares=10.0 * (index + 1),
+                        price=100.0,
+                        date=AS_OF - timedelta(days=200),
+                    )
+                    for index, symbol in enumerate(["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"])
+                ],
+                cash=1_000.0,
+            )
+            with patch("lib.data.portfolio_backend", return_value="session"):
+                at.run()
+                if method_index:
+                    next(r for r in at.radio if r.label == "Method").set_value(
+                        list(at.radio[0].options)[method_index]
+                    )
+                    at.run()
+        return at
+
+    def test_section_renders_with_a_trade_list(self, held_engine: Engine) -> None:
+        at = self._run_portfolio(held_engine)
+        assert not at.exception
+        assert "Target allocation & trades" in [element.value for element in at.subheader]
+        body = _text(at)
+        assert "Sells first, then buys" in body or "Already at target" in body
+
+    @pytest.mark.parametrize("method_index", [0, 1, 2])
+    def test_every_optimizer_choice_runs(self, held_engine: Engine, method_index: int) -> None:
+        # All three of the README's advertised methods have to be reachable, not
+        # just the default one.
+        at = self._run_portfolio(held_engine, method_index=method_index)
+        assert not at.exception
+        assert "Target allocation & trades" in [element.value for element in at.subheader]
+
+    def test_it_is_labelled_as_beliefs_not_a_forecast(self, held_engine: Engine) -> None:
+        at = self._run_portfolio(held_engine)
+        body = _text(at)
+        assert "not forecasts" in body
+        assert "Not an instruction to trade" in body

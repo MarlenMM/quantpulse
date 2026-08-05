@@ -38,7 +38,13 @@ from lib.glossary import tip
 from lib.search import format_choice, search_symbols
 from quantpulse.analysis import clustering, risk
 from quantpulse.portfolio import holdings as holdings_lib
+from quantpulse.portfolio import optimization
 from quantpulse.portfolio import recommendations as recs
+from quantpulse.portfolio.rebalancing import (
+    DEFAULT_TRANSACTION_COST,
+    RebalancePlan,
+    build_rebalance_plan,
+)
 from quantpulse.portfolio.transactions import Transaction, build_lot_book, holding_term, positions
 from quantpulse.storage.db import get_session
 
@@ -269,12 +275,19 @@ def render_summary(frame: pd.DataFrame, cash: float) -> None:
     )
 
 
-def render_risk(frame: pd.DataFrame, cash: float) -> None:
+def render_risk(frame: pd.DataFrame, cash: float) -> pd.DataFrame:
+    """Section 9's risk block; returns the price panel it read, for reuse below.
+
+    The target-allocation section needs exactly the same panel, and reading it
+    twice would both cost a second query and risk the two blocks describing
+    different windows if either lookback were ever changed.
+    """
     st.subheader("Risk & diversification", help=tip("Value at Risk"))
+    empty = pd.DataFrame()
     priced = frame[frame["Value"].notna() & (frame["Value"] > 0)]
     if priced.empty:
         st.caption("No priced holdings to analyze.")
-        return
+        return empty
 
     total = float(priced["Value"].sum()) + cash
     weights = {row.Symbol: float(row.Value) / total for row in priced.itertuples()}
@@ -284,13 +297,13 @@ def render_risk(frame: pd.DataFrame, cash: float) -> None:
 
     if panel.empty or panel.shape[1] < 1:
         st.caption("Not enough stored price history to compute portfolio risk yet.")
-        return
+        return empty
 
     returns = risk.returns_panel(panel)
     usable = {s: w for s, w in weights.items() if s in returns.columns}
     if not usable:
         st.caption("None of the holdings have usable return history yet.")
-        return
+        return panel
 
     market = risk.equal_weight_market_returns(panel)
     summary = risk.portfolio_risk(
@@ -360,6 +373,7 @@ def render_risk(frame: pd.DataFrame, cash: float) -> None:
             )
 
     render_correlation_clusters(summary.correlations)
+    return panel
 
 
 # At least this many holdings before clustering says anything a reader couldn't
@@ -421,7 +435,175 @@ def render_correlation_clusters(correlations: pd.DataFrame) -> None:
     )
 
 
-def render_recommendations(frame: pd.DataFrame, cash: float) -> None:
+# Section 27's three methods, in the order Section 27 itself argues for them:
+# HRP first because it needs no expected-return estimate, Black-Litterman next
+# because its views are anchored to an equilibrium, and plain mean-variance last
+# with its own caveat attached. The labels say what each one actually uses, so
+# the choice isn't between three opaque acronyms.
+_OPTIMIZER_METHODS = {
+    "Hierarchical Risk Parity — correlation structure only": "hrp",
+    "Black-Litterman — equilibrium + your composite scores": "black_litterman",
+    "Mean-variance (MPT) — minimum volatility": "min_volatility",
+}
+
+
+def _target_allocation(
+    method: str, panel: pd.DataFrame, scores: pd.DataFrame
+) -> tuple[object | None, float | None]:
+    """Run one optimizer over `panel`, returning `(result, relaxed_cap_or_None)`.
+
+    The default 15% cap ties to Section 9's concentration threshold, but it
+    cannot fill a portfolio of fewer than seven names -- `_validate_bounds`
+    rejects that outright rather than letting the solver report an infeasible
+    problem. A real personal portfolio is routinely smaller than seven names, so
+    the cap is relaxed to the smallest feasible value and the caller is told,
+    rather than the section simply refusing to appear.
+    """
+    n_assets = panel.shape[1]
+    cap: float | None = optimization.DEFAULT_MAX_WEIGHT
+    relaxed: float | None = None
+    if cap is not None and cap * n_assets < 1.0:
+        cap = relaxed = 1.0 / n_assets
+
+    if method == "hrp":
+        return optimization.hierarchical_risk_parity(panel), None
+    if method == "black_litterman":
+        held = [s for s in panel.columns if s in scores.index]
+        composite = scores.loc[held, "composite_score"].astype(float)
+        if len(composite) < panel.shape[1]:
+            return None, relaxed
+        return optimization.black_litterman_optimize(panel, composite, max_weight=cap), relaxed
+    return optimization.mean_variance_optimize(
+        panel, objective="min_volatility", max_weight=cap
+    ), relaxed
+
+
+def render_target_allocation(
+    frame: pd.DataFrame, cash: float, panel: pd.DataFrame
+) -> RebalancePlan | None:
+    """Section 27: a target allocation and the concrete trades that reach it.
+
+    The three optimizers and the trade-list generator were fully built, tested
+    and reachable from no page at all -- the README advertised "3 optimization
+    methods" that a user had no way to run. This is the seam Section 27
+    describes: the same composite scores that drive the Screener become
+    Black-Litterman's views, the optimizer proposes weights, and
+    `build_rebalance_plan` turns the gap between those and what you hold into
+    "sell 12 shares of X, buy 5 of Y" with its cost stated.
+
+    Returns the plan so the recommendation block below can point at it rather
+    than mentioning a rebalance in the abstract.
+    """
+    st.subheader("Target allocation & trades", help=tip("Efficient frontier"))
+    priced = frame[frame["Value"].notna() & (frame["Value"] > 0)]
+    if len(priced) < 2:
+        st.caption("At least two priced holdings are needed to optimize an allocation.")
+        return None
+    held_panel = panel[[s for s in panel.columns if s in set(priced["Symbol"])]]
+    # Every estimator needs a COMMON date window, so one recently-listed holding
+    # truncates the sample for everything else -- on real data, a single 22-bar
+    # name collapsed an eight-name 289-day panel to 22 usable rows and all three
+    # optimizers (correctly) abstained. Naming the culprits and optimizing over
+    # the rest beats an unexplained "no allocation could be computed".
+    usable, excluded = optimization.usable_common_window(held_panel)
+    if usable.shape[1] < 2:
+        st.caption(
+            "Not enough overlapping price history across your holdings to optimize yet — "
+            "every method needs the same date window for all of them."
+        )
+        return None
+    if excluded:
+        st.caption(
+            f"Excluded from the optimization for too little shared history: "
+            f"**{', '.join(excluded)}**. The target weights below cover the remaining "
+            f"{usable.shape[1]} holding(s); those names keep whatever you already hold."
+        )
+
+    label = st.radio("Method", list(_OPTIMIZER_METHODS), horizontal=False)
+    st.caption(
+        "**Hierarchical Risk Parity** never estimates expected returns — it clusters your "
+        "holdings by how they move together and splits risk down that tree, which is why "
+        "Section 27 prefers it. **Black-Litterman** starts from an equilibrium allocation "
+        "and tilts it with this app's own composite scores. **Minimum-volatility** "
+        "mean-variance uses only the covariance, avoiding the noisiest input of classic "
+        "MPT. All three are descriptions of a model's beliefs, not forecasts — the "
+        "Track Record page is where you find out whether any of it worked."
+    )
+
+    scores = data.screener_rows().set_index("symbol")
+    with st.spinner("Optimizing…"):
+        result, relaxed = _target_allocation(_OPTIMIZER_METHODS[label], usable, scores)
+    if result is None:
+        st.info(
+            "No allocation could be computed from this portfolio — usually too little "
+            "shared price history, or (for Black-Litterman) a holding the screener has "
+            "not scored yet. Nothing is shown rather than a fabricated target."
+        )
+        return None
+    if relaxed is not None:
+        st.caption(
+            f"Position cap relaxed to {relaxed:.0%} — the usual "
+            f"{optimization.DEFAULT_MAX_WEIGHT:.0%} limit cannot fill a "
+            f"{usable.shape[1]}-holding portfolio. A concentrated portfolio cannot be "
+            "made diversified by an optimizer."
+        )
+
+    prices = {row.Symbol: float(row.Price) for row in priced.itertuples() if pd.notna(row.Price)}
+    shares = {row.Symbol: float(row.Shares) for row in priced.itertuples()}
+    plan = build_rebalance_plan(shares, prices, result.weights, cash=cash)
+    if plan is None:
+        st.caption("No portfolio value to reallocate.")
+        return None
+
+    comparison = pd.DataFrame(
+        [
+            {
+                "Symbol": symbol,
+                "Now": plan.current_weights.get(symbol, 0.0),
+                "Target": plan.target_weights.get(symbol, 0.0),
+                "After trades": plan.achieved_weights.get(symbol, 0.0),
+            }
+            for symbol in sorted(set(plan.current_weights) | set(plan.target_weights))
+        ]
+    )
+    st.dataframe(
+        comparison.style.format({"Now": "{:.1%}", "Target": "{:.1%}", "After trades": "{:.1%}"}),
+        hide_index=True,
+        width="stretch",
+    )
+
+    if not plan.trades:
+        st.success("Already at target — no trades needed.")
+    else:
+        trades = pd.DataFrame(
+            [
+                {
+                    "Action": trade.action.title(),
+                    "Symbol": trade.symbol,
+                    "Shares": trade.shares,
+                    "Price": trade.price,
+                    "Value": trade.trade_value,
+                }
+                for trade in plan.trades
+            ]
+        )
+        st.dataframe(
+            trades.style.format({"Shares": "{:.4g}", "Price": "${:,.2f}", "Value": "${:,.0f}"}),
+            hide_index=True,
+            width="stretch",
+        )
+    st.caption(
+        f"Sells first, then buys. Turnover {format_percent(plan.turnover)} of portfolio value; "
+        f"estimated cost {format_money(plan.estimated_transaction_cost)} at "
+        f"{format_percent(DEFAULT_TRANSACTION_COST, digits=2)} per unit of turnover — the same "
+        "friction assumption the backtest charges itself. Cash "
+        f"{format_money(plan.cash_before)} → {format_money(plan.cash_after)}. "
+        "**Not an instruction to trade.**"
+    )
+    return plan
+
+
+def render_recommendations(frame: pd.DataFrame, cash: float, plan: RebalancePlan | None) -> None:
     st.subheader("Recommendations")
     scores = data.screener_rows().set_index("symbol")
     priced = frame[frame["Value"].notna() & (frame["Value"] > 0)]
@@ -457,7 +639,10 @@ def render_recommendations(frame: pd.DataFrame, cash: float) -> None:
                 group.sort_values("composite_score", ascending=False)["symbol"].head(5).tolist()
             )
 
-    result = recs.recommend(contexts, sector_candidates=candidates)
+    # The pointer passes through whatever plan the section above produced, so
+    # "rebalance worth considering" can link to actual trades rather than to an
+    # abstraction (`recommend` never computes one itself -- Section 27's split).
+    result = recs.recommend(contexts, sector_candidates=candidates, rebalance_plan=plan)
 
     table = pd.DataFrame(
         [
@@ -510,7 +695,13 @@ def render_recommendations(frame: pd.DataFrame, cash: float) -> None:
         st.info(gap.message)
 
     if result.rebalance.triggered:
-        st.caption("Rebalance worth considering — " + "; ".join(result.rebalance.reasons) + ".")
+        pointer = "Rebalance worth considering — " + "; ".join(result.rebalance.reasons) + "."
+        if result.rebalance.plan is not None:
+            pointer += (
+                f" The target allocation above proposes {len(result.rebalance.plan.trades)} "
+                "trade(s)."
+            )
+        st.caption(pointer)
 
 
 def render_watchlist(store: holdings_lib.PortfolioStore) -> None:
@@ -589,9 +780,11 @@ def main() -> None:
 
     render_summary(frame, state.cash)
     st.divider()
-    render_risk(frame, state.cash)
+    panel = render_risk(frame, state.cash)
     st.divider()
-    render_recommendations(frame, state.cash)
+    plan = render_target_allocation(frame, state.cash, panel) if not panel.empty else None
+    st.divider()
+    render_recommendations(frame, state.cash, plan)
     st.divider()
     render_watchlist(store)
 
