@@ -340,6 +340,97 @@ def render_narrative(context: llm_narrative.RatingNarrative) -> None:
         st.caption("The LLM layer is configured but did not return a summary this time.")
 
 
+def render_sentiment_narrative(symbol: str, row: pd.Series, news: pd.DataFrame) -> None:
+    """Section 11 use 2 -- plain English on what moved this stock's sentiment score.
+
+    `narrative.explain_sentiment_move` was built and called by nothing. It sits
+    directly under the headline feed it summarizes, so a reader can check the
+    summary against the same articles rather than taking it on trust, and it
+    reports the polarities FinBERT already assigned -- Section 11 forbids the
+    model re-scoring them, and the prompt says so as well as the grounding
+    instruction enforcing it.
+    """
+    if get_provider() is None or news.empty:
+        return
+    history = data.sentiment_history(symbol)
+    current = _none_if_nan(row.get("sentiment_raw"))
+    if current is None and history:
+        current = history[0][1]
+    if current is None:
+        return
+
+    context = llm_narrative.SentimentNarrative(
+        symbol=symbol,
+        current_score=float(current),
+        previous_score=history[1][1] if len(history) > 1 else None,
+        mention_volume=history[0][2] if history else int(len(news)),
+        as_of=history[0][0] if history else None,
+        drivers=tuple(
+            llm_narrative.SentimentDriver(
+                title=str(item.title or ""),
+                event_type=item.event_type,
+                sentiment_score=_none_if_nan(item.sentiment_score),
+                published_at=item.published_at,
+                source=item.source,
+            )
+            for item in news.itertuples()
+            if item.title
+        ),
+    )
+    with st.spinner("Summarizing the coverage…"):
+        text = llm_narrative.explain_sentiment_move(context)
+    if text:
+        st.info(text)
+        st.caption(
+            "Summarizes the headlines above and the polarity already assigned to each — "
+            "the model never scores them itself."
+        )
+
+
+def render_filing_summary(symbol: str) -> None:
+    """Section 11 use 4 -- a plain-English read of the latest 10-K/10-Q.
+
+    `narrative.summarize_filing_excerpt` existed with nothing to summarize: no
+    part of the pipeline stored filing prose. The document is fetched on demand
+    rather than nightly, because a 10-K is several megabytes and a reader opens
+    one company at a time.
+
+    The excerpt is the only free-text payload anywhere in the LLM layer, so it
+    is the only place source material could contain instruction-like text; the
+    context builder frames it as quoted material and the prompt tells the model
+    to ignore anything inside it that reads like an instruction.
+    """
+    if get_provider() is None:
+        return
+    st.subheader("Latest SEC filing", help=tip("10-K / 10-Q"))
+    if not st.button("Summarize the latest 10-K/10-Q", key=f"filing_{symbol}"):
+        st.caption(
+            "Fetches the most recent annual or quarterly report from SEC EDGAR and "
+            "summarizes its Management's Discussion section. Not fetched until asked — "
+            "these documents are several megabytes each."
+        )
+        return
+
+    with st.spinner("Fetching the filing…"):
+        excerpt = data.filing_excerpt(symbol)
+    if excerpt is None:
+        st.caption("No 10-K or 10-Q found for this symbol in the last year.")
+        return
+
+    with st.spinner("Summarizing…"):
+        text = llm_narrative.summarize_filing_excerpt(llm_narrative.FilingExcerpt(**excerpt))
+    if not text:
+        st.caption("The LLM layer is configured but did not return a summary this time.")
+        return
+    st.info(text)
+    section = excerpt["section"] or "the opening pages"
+    st.caption(
+        f"From {symbol}'s **{excerpt['form_type']}** filed {excerpt['filed_date']}, "
+        f"{section}. A summary of an excerpt, not of the whole filing — "
+        f"[read the original]({excerpt['source_url']})."
+    )
+
+
 def render_chat(symbol: str, context_blocks: list[str]) -> None:
     """Section 10's grounded chat box — absent entirely when no LLM is configured.
 
@@ -609,6 +700,10 @@ def main() -> None:
                 f"{event} · sentiment {format_score(item.sentiment_score, digits=2)} · "
                 f"{item.source or 'unknown source'}"
             )
+        render_sentiment_narrative(symbol, row, news)
+
+    st.divider()
+    render_filing_summary(symbol)
 
     st.divider()
     rating_context = rating_narrative(symbol, row)

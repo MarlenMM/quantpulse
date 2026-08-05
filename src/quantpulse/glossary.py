@@ -418,6 +418,13 @@ TERMS: dict[str, tuple[str, str]] = {
         "above their 200-day average. A rally carried by a handful of names is narrower "
         "than the index alone suggests.",
     ),
+    "10-K / 10-Q": (
+        "Fundamentals",
+        "A company's annual (10-K) and quarterly (10-Q) reports to the SEC. The section "
+        "worth reading is Management's Discussion and Analysis, where the company "
+        "explains its own results in prose rather than tables — which is why that is the "
+        "part QuantPulse summarizes.",
+    ),
     "Sector macro overlay": (
         "News",
         "A targeted read on whether recent commodity and currency moves are a tailwind "
