@@ -407,7 +407,21 @@ def main() -> None:
             category: compare.loc[symbol, SCORE_COLUMNS[category]] for category in CATEGORIES
         }
         cleaned = {k: (None if pd.isna(v) else float(v)) for k, v in sub_scores.items()}
-        column.plotly_chart(charts.subscore_radar(cleaned, name=symbol), width="stretch")
+        # The `key` is load-bearing, not tidiness. Streamlit derives an
+        # element's internal id from its type and contents, so two charts that
+        # happen to be identical collide and the whole page dies with
+        # `StreamlitDuplicateElementId` -- not a blank chart, a red traceback
+        # where the Screener should be. Two radars are identical exactly when
+        # neither can be drawn: `subscore_radar` returns the same "not enough
+        # scored categories" placeholder for every symbol, and it takes no
+        # `name`. That is not a hypothetical -- it is the deployed demo's normal
+        # state, where only the price-derived categories have data, so the live
+        # Screener page was down.
+        column.plotly_chart(
+            charts.subscore_radar(cleaned, name=symbol),
+            width="stretch",
+            key=f"compare_radar_{symbol}",
+        )
         column.caption(symbol)
 
 
