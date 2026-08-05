@@ -1140,6 +1140,28 @@ def refresh_backtest(session: Session, today: date) -> int:
     )
     if result is None:
         return 0
+    if result.n_periods < backtest.MIN_TRACK_RECORD_PERIODS:
+        # A CAGR raises a period's growth to the power of the periods per year,
+        # so a couple of monthly periods over five weeks annualize into a
+        # headline nobody earned -- and the interval that would have exposed
+        # that is exactly what a run this short cannot produce.
+        logger.info(
+            "refresh_backtest: %d period(s) is below the %d needed for a track record; "
+            "not storing a run whose headline cannot be bracketed",
+            result.n_periods,
+            backtest.MIN_TRACK_RECORD_PERIODS,
+        )
+        return 0
+    if result.avg_turnover <= 0:
+        # The strategy never took a position -- normally because the signal had
+        # too little history to rank anything, so every period sat in cash.
+        # Storing that as a 0% track record reads as "the strategy lost to the
+        # market" when the strategy never ran.
+        logger.info(
+            "refresh_backtest: the signal never produced a ranking, so the strategy held "
+            "cash throughout; not storing a run in which nothing was traded"
+        )
+        return 0
     # Bracket the headline metrics with block-bootstrap confidence intervals so
     # the stored track record reports whether the result is distinguishable from
     # luck, not just a flattering point estimate (Section 7.6). A run too short

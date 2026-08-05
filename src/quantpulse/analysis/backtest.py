@@ -57,6 +57,7 @@ __all__ = [
     "rmse",
     "AccuracyResult",
     "MIN_GRADED_WINDOWS",
+    "MIN_TRACK_RECORD_PERIODS",
     "walk_forward_accuracy",
     "StrategyResult",
     "backtest_strategy",
@@ -113,6 +114,24 @@ DEFAULT_N_RESAMPLES = 2000
 # Below this many observations a confidence interval is theatre, not evidence --
 # the bootstrap can only resample the information actually present.
 _MIN_BOOTSTRAP_OBS = 8
+
+# ...and below the same number of periods, the track record it would bracket is
+# not worth publishing either.
+#
+# `cagr` raises a period's growth to the power of the periods-per-year, so two
+# monthly periods spanning 35 calendar days annualize into a headline. Measured
+# on the deployed demo database, whose price history is five weeks old: the
+# benchmark's two period returns of +1.6% and +2.4% were published as a **26.6%
+# CAGR**, next to a strategy "CAGR" of 0.0% that came from a signal with too
+# little history to rank anything, so it held cash and never traded. Both
+# numbers were arithmetically correct and neither described anything.
+#
+# The bootstrap already declines below `_MIN_BOOTSTRAP_OBS`, and the Track
+# Record page duly said "the run was too short to bootstrap honestly" -- while
+# showing the unbootstrappable number in large type directly above that
+# sentence. If the headline cannot be bracketed, it is not a track record, so
+# `refresh_backtest` does not store it at all.
+MIN_TRACK_RECORD_PERIODS = _MIN_BOOTSTRAP_OBS
 # If fewer than this fraction of resamples yield a defined statistic (e.g. a
 # zero-variance resample makes Sharpe undefined), the CI isn't trustworthy.
 _MIN_DEFINED_RESAMPLE_FRACTION = 0.5
