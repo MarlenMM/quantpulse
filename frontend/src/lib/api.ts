@@ -16,6 +16,7 @@ import type {
   RatingChange,
   RegimePoint,
   ScreenerResponse,
+  SectorStrength,
   StockDetail,
   TickerSummary,
 } from "./types";
@@ -68,4 +69,6 @@ export const api = {
   regime: (limit = 90) => request<RegimePoint[]>("/regime", { limit }),
   news: (limit = 8) => request<NewsItem[]>("/news", { limit }),
   backtest: (limit = 20) => request<BacktestRun[]>("/backtest", { limit }),
+  sectorRotation: (lookbackDays = 21) =>
+    request<SectorStrength[]>("/sectors/rotation", { lookback_days: lookbackDays }),
 };

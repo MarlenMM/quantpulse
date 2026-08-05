@@ -202,6 +202,173 @@ export default function StockDetail({ symbol }: { symbol: string }) {
         )}
       </section>
 
+      {data.risk ? (
+        <section className="panel">
+          <h2>Risk profile</h2>
+          <div className="metrics">
+            <Metric
+              label="Volatility (ann.)"
+              value={formatPercent(data.risk.historical_volatility)}
+              title="How much this stock has actually moved, annualised."
+            />
+            <Metric
+              label="Implied vol"
+              value={formatPercent(data.risk.implied_volatility)}
+              title="How much movement the options market is pricing in."
+            />
+            <Metric
+              label="Beta"
+              value={formatScore(data.risk.beta, 2)}
+              title="Sensitivity to the market, against an equal-weight proxy."
+            />
+            <Metric
+              label="Sortino"
+              value={formatScore(data.risk.sortino, 2)}
+              title="Return per unit of downside risk."
+            />
+            <Metric
+              label={`Daily VaR ${data.risk.var_confidence ? `${(data.risk.var_confidence * 100).toFixed(0)}%` : ""}`}
+              value={formatPercent(data.risk.value_at_risk)}
+              title="On the worst days, this stock lost at least this much."
+            />
+          </div>
+          <p className="muted small">
+            Measured on {data.risk.n_observations} daily returns.{" "}
+            {data.risk.sortino === null &&
+            data.risk.n_observations < data.risk.ratio_min_observations
+              ? `Sharpe and Sortino need about a year of history (${data.risk.ratio_min_observations} daily
+                 returns) before they mean anything — a ratio of average return to risk is far
+                 noisier than either number alone, so they are left blank rather than shown as
+                 noise. `
+              : ""}
+            {data.risk.beta !== null && data.risk.beta_r_squared !== null
+              ? `Beta is against an equal-weight proxy for the market (no S&P 500 series is
+                 ingested), R² = ${data.risk.beta_r_squared.toFixed(2)}.`
+              : ""}
+          </p>
+        </section>
+      ) : null}
+
+      {data.short_interest ? (
+        <section className="panel">
+          <h2>Short interest</h2>
+          <div className="metrics">
+            <Metric
+              label="% of float short"
+              value={
+                data.short_interest.pct_float_short !== null
+                  ? formatPercent(data.short_interest.pct_float_short / 100)
+                  : "—"
+              }
+            />
+            <Metric
+              label="Days to cover"
+              value={formatScore(data.short_interest.days_to_cover, 2)}
+            />
+          </div>
+          {data.short_interest.elevated ? (
+            <p className="callout callout-warn small">
+              <strong>Elevated short interest — and that cuts both ways.</strong> It can mean
+              informed investors are betting against this company. It can equally set up a{" "}
+              <strong>short squeeze</strong>: a crowded short position that has to buy back
+              quickly if the story improves, which pushes the price <em>up</em>. QuantPulse does
+              not score this as bullish or bearish, because the same number genuinely supports
+              both readings.
+            </p>
+          ) : (
+            <p className="muted small">
+              Short interest is not elevated. Shown as context only — it is deliberately excluded
+              from the Smart Money score, since the same figure can be read as bearish conviction
+              or as squeeze potential.
+            </p>
+          )}
+        </section>
+      ) : null}
+
+      {data.monte_carlo ? (
+        <section className="panel">
+          <h2>Simulated price paths</h2>
+          <p className="muted small">
+            {data.monte_carlo.n_paths.toLocaleString()} random-walk paths over the next{" "}
+            {data.monte_carlo.horizon_days} trading days, calibrated to this stock's own drift and
+            volatility. The band is the middle 90% of simulated outcomes; it widens with time
+            because uncertainty compounds — that widening is the message. This is a range of
+            possibilities, not a prediction.
+          </p>
+          <Chart
+            ariaLabel={`Monte Carlo simulated price fan for ${data.symbol}`}
+            height={320}
+            data={[
+              {
+                x: data.monte_carlo.bands.map((b) => b.day),
+                y: data.monte_carlo.bands.map((b) => b.upper),
+                type: "scatter",
+                mode: "lines",
+                line: { width: 0 },
+                name: "95th percentile",
+                hoverinfo: "skip",
+              },
+              {
+                x: data.monte_carlo.bands.map((b) => b.day),
+                y: data.monte_carlo.bands.map((b) => b.lower),
+                type: "scatter",
+                mode: "lines",
+                fill: "tonexty",
+                fillcolor: "rgba(88,166,255,0.18)",
+                line: { width: 0 },
+                name: "5th percentile",
+                hoverinfo: "skip",
+              },
+              {
+                x: data.monte_carlo.bands.map((b) => b.day),
+                y: data.monte_carlo.bands.map((b) => b.median),
+                type: "scatter",
+                mode: "lines",
+                line: { width: 2 },
+                name: "Median path",
+              },
+            ]}
+            layout={{
+              xaxis: { title: { text: "Trading days ahead" } },
+              yaxis: { title: { text: "Simulated price" } },
+            }}
+          />
+          <p className="muted small">
+            Calibrated on {data.monte_carlo.n_train.toLocaleString()} daily returns (drift{" "}
+            {(data.monte_carlo.mu * 100).toFixed(3)}%/day, volatility{" "}
+            {(data.monte_carlo.sigma * 100).toFixed(2)}%/day).
+          </p>
+        </section>
+      ) : null}
+
+      {data.macro_overlay ? (
+        <section className="panel">
+          <h2>Macro overlay</h2>
+          <p>
+            <strong>{data.macro_overlay.sector}</strong> is exposed to{" "}
+            {data.macro_overlay.components
+              .filter((c) => c.move !== null)
+              .map((c) => `${humanize(c.driver)} (${formatSignedPercent((c.move ?? 0) / 100)})`)
+              .join(", ")}{" "}
+            over the last ~3 months — a{" "}
+            <strong>
+              {data.macro_overlay.adjustment > 0
+                ? "tailwind"
+                : data.macro_overlay.adjustment < 0
+                  ? "headwind"
+                  : "neutral"}
+            </strong>{" "}
+            of {data.macro_overlay.adjustment.toFixed(2)} on a −1 to +1 scale.
+          </p>
+          <p className="muted small">
+            Applied only to the sectors these series genuinely move: oil for Energy, metals for
+            Materials, the dollar for sectors dominated by multinationals earning abroad. Every
+            other sector gets exactly zero rather than a small meaningless nudge. This is context,
+            not part of the composite score.
+          </p>
+        </section>
+      ) : null}
+
       <section className="grid-2">
         <div className="panel">
           <h2>Algorithm vs Wall Street</h2>
