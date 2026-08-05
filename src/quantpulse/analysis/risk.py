@@ -76,6 +76,7 @@ __all__ = [
     "historical_volatility",
     "VolatilityProfile",
     "volatility_profile",
+    "min_ratio_observations",
     "sortino_ratio",
     "BetaResult",
     "beta",
@@ -118,6 +119,34 @@ _MIN_TAIL_OBS = 5
 # own constant here rather than importing a private, the same decoupling
 # `backtest._closes` uses).
 _DEGENERATE_STD_REL_TOL = 1e-12
+
+
+def min_ratio_observations(periods_per_year: float) -> int:
+    """Observations a risk-adjusted *ratio* needs before it is worth printing.
+
+    Sharpe and Sortino divide a mean by a dispersion, which makes them far
+    noisier than either input. For a series of `n` periods the standard error of
+    the annualized ratio is roughly `sqrt(periods_per_year / n)`, so one year of
+    observations is the point at which that error falls to about 1.0 -- still
+    large, and the reason both are shown as blunt figures rather than to three
+    decimals. Below a year the number is dominated by sampling noise.
+
+    This is not theoretical. Measured on the 25 daily returns the demo database
+    actually holds, 49% of 503 real S&P 500 names produced a Sortino above 3 and
+    8.5% above 10 (Microsoft: 22.3) -- values that in practice sit near 0-3. A
+    sample portfolio showed "Sharpe 7.63". Each was arithmetically correct and
+    told the reader nothing except how recently the market had gone up.
+
+    Expressed per-period rather than as a fixed count so it holds at any
+    frequency: 252 daily bars, 52 weekly, or 12 monthly all mean "one year".
+
+    Deliberately NOT applied to `backtest.sharpe_ratio` itself, which the strategy
+    track record uses: that surface publishes a bootstrap confidence interval
+    beside the point estimate, so a short sample is already disclosed to the
+    reader. The gate belongs where a bare number is shown with nothing arguing
+    with it, which is the two profile assemblers below.
+    """
+    return max(2, int(math.ceil(periods_per_year)))
 
 
 # --------------------------------------------------------------------------- #
@@ -676,6 +705,9 @@ def stock_risk_profile(
     tail without the reader ever being told the method changed.
     """
     clean = pd.to_numeric(returns, errors="coerce").dropna()
+    # See `min_ratio_observations`: below a year of data these two are noise
+    # wearing a number, so they abstain the same way VaR already does.
+    ratio_ok = clean.size >= min_ratio_observations(periods_per_year)
     return RiskProfile(
         volatility=volatility_profile(
             clean,
@@ -684,12 +716,14 @@ def stock_risk_profile(
             lookback=volatility_lookback,
         ),
         beta=beta(clean, market_returns) if market_returns is not None else None,
-        sharpe=sharpe_ratio(
-            clean, periods_per_year=periods_per_year, risk_free_rate=risk_free_rate
-        ),
+        sharpe=sharpe_ratio(clean, periods_per_year=periods_per_year, risk_free_rate=risk_free_rate)
+        if ratio_ok
+        else None,
         sortino=sortino_ratio(
             clean, periods_per_year=periods_per_year, risk_free_rate=risk_free_rate
-        ),
+        )
+        if ratio_ok
+        else None,
         max_drawdown=max_drawdown(clean),
         value_at_risk=value_at_risk(clean, confidence=var_confidence, method=var_method),
         n_observations=int(clean.size),
@@ -752,16 +786,22 @@ def portfolio_risk(
     held = [s for s in weights if s in returns.columns]
     correlations = correlation_matrix(returns[held], min_periods=correlation_min_periods)
 
+    # Same floor as `stock_risk_profile`; see `min_ratio_observations`.
+    ratio_ok = series.size >= min_ratio_observations(periods_per_year)
     return PortfolioRisk(
         returns=series,
         volatility=historical_volatility(series, periods_per_year=periods_per_year),
         beta=beta(series, market_returns) if market_returns is not None else None,
         sharpe=sharpe_ratio(
             series, periods_per_year=periods_per_year, risk_free_rate=risk_free_rate
-        ),
+        )
+        if ratio_ok
+        else None,
         sortino=sortino_ratio(
             series, periods_per_year=periods_per_year, risk_free_rate=risk_free_rate
-        ),
+        )
+        if ratio_ok
+        else None,
         max_drawdown=max_drawdown(series),
         value_at_risk=value_at_risk(series, confidence=var_confidence, method=var_method),
         correlations=correlations,

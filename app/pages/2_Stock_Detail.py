@@ -224,6 +224,15 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
         help=tip("Value at Risk"),
     )
     notes = [f"Measured on {profile.n_observations} daily returns."]
+    # An absent Sortino needs the same plain explanation VaR already gets, or a
+    # dash reads as a glitch rather than as "the sample cannot support this".
+    ratio_floor = risk.min_ratio_observations(risk.TRADING_DAYS_PER_YEAR)
+    if profile.sortino is None and profile.n_observations < ratio_floor:
+        notes.append(
+            f"Sortino needs about a year of history ({ratio_floor} daily returns) before it "
+            "means anything — a ratio of average return to downside risk is far noisier than "
+            "either number on its own, so it is left blank rather than shown as noise."
+        )
     if profile.beta is not None and profile.beta.r_squared is not None:
         notes.append(
             f"Beta is against an equal-weight proxy for the market (no S&P 500 price series "
