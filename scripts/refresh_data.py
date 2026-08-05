@@ -13,11 +13,16 @@ only add "database is locked" failures without buying any real parallelism.
 """
 
 import logging
+import signal
 import sys
-from collections.abc import Callable, Sequence
+import threading
+import time
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from types import FrameType
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -150,6 +155,35 @@ _COMPOSITE_PROFILES = ("balanced", "income", "conservative")
 # a documented, single-constant deviation, not a silent gap.
 _NEWS_REFRESH_ON_WEEKLY_ONLY = True
 
+# Hard ceiling on how many Tier-1 articles the local NLI/sentiment models are
+# asked to score in one run (see `_cap_articles`). Sized from measurement, not
+# taste: `bart-large-mnli` zero-shot with eight candidate labels costs ~0.16s
+# per headline on developer hardware and several times that on a 2-vCPU CI
+# runner, so 6,000 articles is roughly 15 minutes locally and comfortably
+# inside the step budget below even at runner speed.
+_MAX_CLASSIFIED_ARTICLES = 6_000
+
+# Per-step wall-clock budgets. `step()` enforces these so a stalled dependency
+# costs one step instead of the entire run.
+#
+# This exists because of a real outage, not as defensive decoration: the weekly
+# branch classified every article it could fetch (~75,000) in a single
+# unbounded batch, produced no log output for 5h38m, and was cancelled at
+# GitHub's 6-hour job limit -- which meant the "commit refreshed database" step
+# never ran, so a night that had *already successfully fetched* every price and
+# fundamental committed nothing at all. Capping the batch fixes the cause; this
+# makes any future stall survivable rather than total.
+_DEFAULT_STEP_TIMEOUT_SECONDS = 45 * 60
+_STEP_TIMEOUT_SECONDS: dict[str, int] = {
+    # The model-bound steps. Generous enough for a slow runner, far short of
+    # the job limit.
+    "tier1_news": 90 * 60,
+    "tier2_news": 30 * 60,
+    # Measured at ~42 min for 503 names on real history; the ceiling is a
+    # backstop against a pathological series, not a target.
+    "forecasts": 120 * 60,
+}
+
 # Phase 7 forecasting + backtest (Section 7.6). Both are among the heaviest steps
 # in the job -- generating four horizons x three models per name, and a
 # multi-year walk-forward -- so, like the news/13F workloads above, they ride the
@@ -218,6 +252,50 @@ _INSTITUTIONAL_COLUMNS = (
 _CRITICAL_STEPS = frozenset({"composite_scores", "market_regime"})
 
 _REIT_SECTOR = "Real Estate"
+
+
+class StepTimeout(Exception):
+    """A refresh step exceeded its wall-clock budget."""
+
+
+@contextmanager
+def _step_timeout(seconds: int, name: str) -> "Iterator[None]":
+    """Raise `StepTimeout` in the main thread if the body outlasts `seconds`.
+
+    Uses `SIGALRM`, which is what makes this useful rather than decorative: the
+    failure it exists for is a *stall*, not an exception, and a stalled step
+    cannot be caught by `step()`'s `except`. The signal interrupts the running
+    step and turns the stall into an ordinary step failure the surrounding
+    handler already knows how to degrade.
+
+    Two deliberate limits, stated because a timeout that silently does nothing
+    is worse than none at all:
+
+    * `SIGALRM` only exists on Unix and can only be armed from the main thread.
+      Both hold for this job (it runs as `__main__` on Linux runners and macOS
+      dev machines); anywhere else this degrades to a no-op rather than
+      refusing to run, since the job is still correct without it.
+    * The handler runs between bytecodes, so a single uninterruptible C call
+      cannot be cut short. In practice the model steps loop in Python between
+      batches, which is where the alarm lands.
+
+    Nested use would clobber the outer alarm, so this is used at exactly one
+    level -- inside `step()`, which is never re-entered.
+    """
+    if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _on_alarm(signum: int, frame: "FrameType | None") -> None:
+        raise StepTimeout(f"step {name} exceeded its {seconds}s budget")
+
+    previous = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 @dataclass
@@ -1241,6 +1319,34 @@ def _persist_per_ticker_smart_money(
     return rows
 
 
+def _cap_articles(articles: pd.DataFrame) -> pd.DataFrame:
+    """Bound the model batch to `_MAX_CLASSIFIED_ARTICLES`, newest first.
+
+    A second line of defence behind `news_client.MAX_ARTICLES_PER_SYMBOL`. The
+    per-symbol cap bounds the *typical* run, but the universe size is not fixed
+    and a new Tier-1 source could be added, so this pins the one number that
+    actually decides whether the step finishes: how many articles the local NLI
+    and sentiment models are asked to score in one go.
+
+    What was dropped is logged rather than silently discarded -- a cap nobody
+    can see reads as "we classified everything", which is exactly the kind of
+    quiet truncation Section 22 warns about.
+    """
+    if len(articles) <= _MAX_CLASSIFIED_ARTICLES:
+        return articles
+    ordered = articles.sort_values("published_at", ascending=False, na_position="last")
+    kept = ordered.head(_MAX_CLASSIFIED_ARTICLES).reset_index(drop=True)
+    logger.warning(
+        "Tier-1 news: capped %d articles to the newest %d for classification "
+        "(oldest kept: %s). Raise _MAX_CLASSIFIED_ARTICLES only with a measured "
+        "runtime -- this step is the whole weekly budget.",
+        len(articles),
+        _MAX_CLASSIFIED_ARTICLES,
+        kept["published_at"].min() if "published_at" in kept else "unknown",
+    )
+    return kept
+
+
 def process_tier1_news(
     results: list[TickerFetchResult], universe: pd.DataFrame, today: date
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1262,6 +1368,7 @@ def process_tier1_news(
 
     articles = pd.concat(frames, ignore_index=True)
     articles = articles.drop_duplicates(subset=["link"]).reset_index(drop=True)
+    articles = _cap_articles(articles)
 
     gazetteer = entity_extraction.build_gazetteer(universe)
     articles["matched_symbols"] = entity_extraction.tag_articles(articles, gazetteer)
@@ -1399,10 +1506,15 @@ def run(job_name: str = "refresh_data") -> str:
         leaving a reader to grep a nine-minute log.
         """
         nonlocal status
+        budget = _STEP_TIMEOUT_SECONDS.get(name, _DEFAULT_STEP_TIMEOUT_SECONDS)
+        started = time.monotonic()
         try:
-            return fn()
+            with _step_timeout(budget, name):
+                return fn()
         except Exception:
-            logger.exception("%s: step %s failed", job_name, name)
+            logger.exception(
+                "%s: step %s failed after %.0fs", job_name, name, time.monotonic() - started
+            )
             failed_steps.append(name)
             if name in _CRITICAL_STEPS:
                 status = "failed"
@@ -1502,12 +1614,6 @@ def run(job_name: str = "refresh_data") -> str:
                     lambda s: refresh_institutional_ownership(s, universe_df, today)
                 ),
             )
-            rows_updated += step(
-                "tier1_news", lambda: _persist_tier1_news(results, universe_df, today)
-            )
-            rows_updated += step(
-                "tier2_news", lambda: _in_session(lambda s: refresh_tier2_news(s, today))
-            )
 
         # Regime before composite: the composite reads the regime score back
         # for its risk-off rating dampener, so ordering matters.
@@ -1541,6 +1647,33 @@ def run(job_name: str = "refresh_data") -> str:
             )
             rows_updated += step(
                 "backtest", lambda: _in_session(lambda s: refresh_backtest(s, today))
+            )
+
+            # News-intelligence runs LAST, after everything a visitor actually
+            # looks at has been written.
+            #
+            # It is by far the most expensive step (three local ML models over
+            # the week's articles) and the only one that has ever exhausted the
+            # job's time budget. When it sat mid-run, its stall took the whole
+            # weekly branch with it -- market regime, patterns, composite
+            # scores, forecasts and the backtest all sat behind it and never
+            # ran, and because the job was killed rather than failing, the
+            # workflow's commit step never executed either. Ordering it last
+            # means the worst case for a news outage is stale sentiment, not a
+            # night with no ratings.
+            #
+            # The trade is explicit and small: `refresh_composite_scores` reads
+            # the latest *stored* sentiment point-in-time, so on the weekly run
+            # the sentiment category is one run old (the rest of the week
+            # already reads exactly these rows). Sentiment is a weekly signal to
+            # begin with, so this costs a single day of freshness in one of
+            # seven categories -- against a failure mode that has so far cost
+            # every category, every week.
+            rows_updated += step(
+                "tier1_news", lambda: _persist_tier1_news(results, universe_df, today)
+            )
+            rows_updated += step(
+                "tier2_news", lambda: _in_session(lambda s: refresh_tier2_news(s, today))
             )
 
     except Exception:
