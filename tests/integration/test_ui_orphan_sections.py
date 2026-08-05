@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import sessionmaker
 from streamlit.testing.v1 import AppTest
 
@@ -142,6 +142,7 @@ def _wired(engine: Engine) -> Iterator[None]:
         lib_data.short_interest,
         lib_data.backtest_history,
         lib_data.universe,
+        lib_data.patterns,
     ):
         reader.clear()
     with patch("lib.data.get_session", fake_get_session):
@@ -242,3 +243,52 @@ class TestKellySizingIsVisible:
         at = _run(BACKTEST_PAGE, engine)
         assert not at.exception
         assert "How much to bet" not in [element.value for element in at.subheader]
+
+
+class TestDetectedPatternsAreVisible:
+    """Section 8's "price chart with indicators and detected patterns".
+
+    The panel existed in both front ends the whole time; nothing ever wrote a
+    `pattern_signals` row, so it could only ever say "No chart or candlestick
+    patterns detected". This asserts the end a user sees: real detector output,
+    stored by the nightly, rendered on the page.
+    """
+
+    @pytest.fixture
+    def patterned_engine(self, seeded_engine: Engine) -> Engine:
+        """The standard fixture, plus whatever the real detectors find in its prices."""
+        import pandas as pd
+
+        import refresh_data
+
+        factory = sessionmaker(bind=seeded_engine)
+        with factory() as session:
+            universe = pd.DataFrame([{"symbol": "NVDA", "name": "NVIDIA", "sector": "Tech"}])
+            refresh_data.refresh_pattern_signals(session, universe, AS_OF)
+            session.commit()
+        return seeded_engine
+
+    def test_the_nightly_finds_patterns_in_the_seeded_prices(
+        self, patterned_engine: Engine
+    ) -> None:
+        from quantpulse.storage.models import PatternSignal
+
+        with sessionmaker(bind=patterned_engine)() as session:
+            stored = session.scalars(select(PatternSignal)).all()
+        assert stored, "the detectors found nothing in 400 bars of random-walk prices"
+
+    def test_the_panel_lists_them_instead_of_saying_none_were_found(
+        self, patterned_engine: Engine
+    ) -> None:
+        at = _run(STOCK_DETAIL, patterned_engine)
+        assert not at.exception
+        assert "Detected patterns" in [element.value for element in at.subheader]
+        assert "No chart or candlestick patterns detected" not in _text(at)
+
+    def test_the_panel_still_says_so_honestly_when_there_are_none(
+        self, seeded_engine: Engine
+    ) -> None:
+        # The unpatterned fixture writes no pattern rows, so the empty state has
+        # to remain reachable -- otherwise the test above proves nothing.
+        at = _run(STOCK_DETAIL, seeded_engine)
+        assert "No chart or candlestick patterns detected" in _text(at)
