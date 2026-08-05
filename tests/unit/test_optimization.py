@@ -373,3 +373,72 @@ class TestMethodComparison:
             assert _weights_sum_to_one(result)
             assert all(w >= 0 for w in result.weights.values())
             assert result.n_observations == 500
+
+
+class TestUsableCommonWindow:
+    """One short-history holding must not silently kill the whole optimization.
+
+    Every estimator needs a common date window, so a recently-listed name
+    truncates the sample for everything else. Measured on real data: an
+    eight-name panel over 289 trading days collapsed to 22 usable rows because
+    one symbol had 22 bars, and all three optimizers then correctly abstained --
+    leaving a user with "no allocation could be computed" and no way to guess
+    which holding caused it.
+    """
+
+    @staticmethod
+    def _panel(lengths: dict[str, int], total: int = 300) -> pd.DataFrame:
+        index = pd.DatetimeIndex(pd.bdate_range("2024-01-01", periods=total))
+        frame = pd.DataFrame(index=index)
+        for symbol, length in lengths.items():
+            series = pd.Series(np.nan, index=index)
+            series.iloc[total - length :] = np.linspace(100, 120, length)
+            frame[symbol] = series
+        return frame
+
+    def test_nothing_is_dropped_when_every_name_is_long_enough(self) -> None:
+        panel = self._panel({"A": 300, "B": 300, "C": 300})
+        usable, excluded = opt.usable_common_window(panel)
+        assert excluded == []
+        assert list(usable.columns) == ["A", "B", "C"]
+        assert len(usable) == 300
+
+    def test_the_late_starter_is_dropped_and_named(self) -> None:
+        panel = self._panel({"A": 300, "B": 300, "LATE": 22})
+        usable, excluded = opt.usable_common_window(panel)
+        assert excluded == ["LATE"]
+        assert list(usable.columns) == ["A", "B"]
+        assert len(usable) == 300  # the full window is recovered
+
+    def test_multiple_late_starters_are_all_reported(self) -> None:
+        panel = self._panel({"A": 300, "B": 300, "LATE": 30, "LATER": 10})
+        usable, excluded = opt.usable_common_window(panel)
+        assert excluded == ["LATE", "LATER"]
+        assert len(usable) >= opt._MIN_OBSERVATIONS
+
+    def test_an_optimizer_succeeds_on_the_recovered_window(self) -> None:
+        # The point of the helper: the same panel that made every optimizer
+        # abstain produces a real allocation once the culprit is identified.
+        rng = np.random.default_rng(3)
+        index = pd.DatetimeIndex(pd.bdate_range("2024-01-01", periods=300))
+        frame = pd.DataFrame(
+            {
+                name: 100 * np.exp(np.cumsum(rng.normal(0.0004, 0.012, 300)))
+                for name in ("A", "B", "C")
+            },
+            index=index,
+        )
+        frame["LATE"] = np.nan
+        frame.iloc[-22:, frame.columns.get_loc("LATE")] = np.linspace(50, 55, 22)
+
+        assert opt.hierarchical_risk_parity(frame) is None  # the original failure
+        usable, excluded = opt.usable_common_window(frame)
+        assert excluded == ["LATE"]
+        result = opt.hierarchical_risk_parity(usable)
+        assert result is not None
+        assert sum(result.weights.values()) == pytest.approx(1.0)
+
+    def test_a_panel_nothing_can_rescue_returns_empty_not_a_guess(self) -> None:
+        panel = self._panel({"A": 20, "B": 15})
+        usable, _excluded = opt.usable_common_window(panel)
+        assert usable.empty

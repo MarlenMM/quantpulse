@@ -116,6 +116,7 @@ __all__ = [
     "DEFAULT_KELLY_FRACTION",
     "TRADING_DAYS_PER_YEAR",
     "OptimizedPortfolio",
+    "usable_common_window",
     "annualized_covariance",
     "equal_weight_prior",
     "views_from_composite_scores",
@@ -207,6 +208,51 @@ def _clean_panel(prices: pd.DataFrame, *, min_observations: int) -> pd.DataFrame
     frame = frame.where(frame > 0).dropna(axis=1, how="all")
     frame = frame.dropna(axis=0, how="any")
     return frame
+
+
+def usable_common_window(
+    prices: pd.DataFrame, *, min_observations: int = _MIN_OBSERVATIONS
+) -> tuple[pd.DataFrame, list[str]]:
+    """The largest sub-panel meeting `min_observations`, plus the names dropped to get it.
+
+    `_clean_panel` requires a *common* date window so every covariance entry is
+    measured on the same sample -- necessary, but it means one recently-listed
+    holding truncates the window for everything else. Measured on real data: a
+    panel of eight names over 289 trading days collapsed to 22 usable rows
+    because a single symbol had only 22 bars, and all three optimizers then
+    (correctly) abstained. A user seeing "no allocation could be computed" for
+    an eight-holding portfolio has no way to guess that one name caused it.
+
+    So the short-history names are identified and returned rather than left
+    implicit: drop whichever holding starts latest, re-measure, repeat until the
+    common window is long enough or fewer than `_MIN_ASSETS` names remain. The
+    caller can then optimize over what's left *and say which holdings were
+    excluded and why*, which is a far more useful answer than silence.
+
+    Returns `(panel, excluded_symbols)`; `excluded_symbols` is sorted and empty
+    when nothing had to be dropped.
+    """
+    working = prices.sort_index().apply(pd.to_numeric, errors="coerce")
+    working = working.where(working > 0).dropna(axis=1, how="all")
+    excluded: list[str] = []
+
+    while working.shape[1] >= _MIN_ASSETS:
+        common = working.dropna(axis=0, how="any")
+        if len(common) >= min_observations:
+            return common, sorted(excluded)
+        starts = [
+            (start, column)
+            for column in working.columns
+            if (start := working[column].first_valid_index()) is not None
+        ]
+        if not starts:
+            break
+        # The name whose history starts latest is the one costing the most rows.
+        latest = max(starts)[1]
+        excluded.append(str(latest))
+        working = working.drop(columns=[latest])
+
+    return pd.DataFrame(), sorted(excluded)
 
 
 def annualized_covariance(
