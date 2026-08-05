@@ -1089,6 +1089,29 @@ class TestTrackRecordSuppression:
         monkeypatch.setattr(refresh_data, "_momentum_signal", lambda as_of, panel: {})
         assert refresh_data.refresh_backtest(session, date(2026, 7, 22)) == 0
 
+    def test_a_run_that_sat_in_cash_for_most_periods_is_not_stored(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half of this failure the "never traded" guard above misses.
+
+        Real shape, found on real data: three years of prices behind an index
+        membership history only days deep, so the point-in-time universe came
+        back empty for 38 of 39 monthly periods. The strategy held cash for all
+        of them, took one position at the end, and the stored run read Sharpe
+        0.555 / CAGR 0.99% against a 29.3% benchmark -- which reads as "we
+        underperformed the market" rather than "nothing was ever tested".
+        Average turnover was 1/39, so it sailed past `avg_turnover <= 0`.
+        """
+        self._seed(session, days=900)
+        real_signal = refresh_data._momentum_signal
+        cutoff = date(2026, 5, 1)
+        monkeypatch.setattr(
+            refresh_data,
+            "_momentum_signal",
+            lambda as_of, panel: real_signal(as_of, panel) if as_of >= cutoff else {},
+        )
+        assert refresh_data.refresh_backtest(session, date(2026, 7, 22)) == 0
+
     def test_a_long_enough_run_that_traded_is_stored(self, session: Session) -> None:
         from quantpulse.storage.models import BacktestResult
 
