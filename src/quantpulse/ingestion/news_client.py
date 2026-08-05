@@ -40,8 +40,11 @@ _COLUMNS = ["title", "link", "summary", "published_at", "source", "symbol", "tie
 # which across a 500-name universe is ~75,000 articles for the local NLI and
 # sentiment models to chew through in one batch. 40 keeps roughly a fortnight of
 # real coverage for a widely-covered mega-cap and essentially everything for the
-# rest, at about a quarter of the model cost. See `fetch_all_tier1_news`.
-MAX_ARTICLES_PER_SYMBOL = 40
+# rest, at a fraction of the model cost. 15 keeps the whole-universe batch near
+# the ~7,000 the refresh job budgets for (503 names, some overlap after
+# de-duplication), and the recency-decay step downstream weights the newest
+# handful most heavily anyway. See `fetch_all_tier1_news`.
+MAX_ARTICLES_PER_SYMBOL = 15
 
 # Section 5/19: none of the three publishes a per-minute limit -- the same
 # conservative min-interval treatment as SEC EDGAR, kept per-source so a slow

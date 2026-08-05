@@ -183,7 +183,10 @@ def classify(text: str) -> EventClassification:
 
 
 def classify_articles(
-    articles: pd.DataFrame, *, text_columns: tuple[str, ...] = ("title", "summary")
+    articles: pd.DataFrame,
+    *,
+    text_columns: tuple[str, ...] = ("title", "summary"),
+    max_classified: int | None = None,
 ) -> pd.Series:
     """Classify each row of `articles`, returning a Series of `EventClassification`.
 
@@ -192,6 +195,23 @@ def classify_articles(
     rows out of the model. Aligned to `articles.index`; mirrors
     `entity_extraction.tag_articles`' text-column handling so the same
     Tier 1/2/3 frames flow through both.
+
+    `max_classified` bounds how many rows reach the model, and exists because
+    **this call is 91% of the entire news pipeline's cost**: measured on real
+    headlines, zero-shot classification runs ~347 ms per article against ~19 ms
+    for spaCy NER and ~14 ms for FinBERT sentiment. That asymmetry is
+    structural, not incidental -- scoring eight candidate labels means eight
+    entailment passes through a 400M-parameter model per article.
+
+    Rows beyond the limit get `_empty_result()`, i.e. `EventType.OTHER` with
+    confidence 0.0 -- the same value an article the model *can* see but cannot
+    confidently place already receives, and which carries its own documented
+    half-life. So the degradation is into an existing, honest state rather than
+    a new one, and the sentiment score (which is what actually feeds the
+    composite) is unaffected because it is computed separately and cheaply.
+
+    Rows are taken in frame order, so a caller wanting "the newest N classified"
+    should sort before calling. `None` (the default) classifies everything.
     """
     present_columns = [c for c in text_columns if c in articles.columns]
 
@@ -206,6 +226,8 @@ def classify_articles(
     )
 
     nonempty_positions = [i for i, t in enumerate(texts) if t]
+    if max_classified is not None:
+        nonempty_positions = nonempty_positions[:max_classified]
     results: list[EventClassification] = [_empty_result()] * len(texts)
     if nonempty_positions:
         batch = [texts.iloc[i] for i in nonempty_positions]
