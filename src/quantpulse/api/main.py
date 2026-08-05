@@ -40,20 +40,27 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from quantpulse.analysis import scoring
+from quantpulse.analysis import forecasting, macro, risk, scoring, smart_money, technical
 from quantpulse.api.schemas import (
     AnalystConsensusModel,
     BacktestRun,
     ForecastRow,
     GlossaryTerm,
     HealthResponse,
+    MacroOverlay,
+    MacroOverlayComponent,
+    MonteCarloBand,
+    MonteCarloFan,
     NewsItem,
     PatternRow,
     PriceBar,
     RatingChange,
     RegimePoint,
+    RiskProfileModel,
     ScreenerResponse,
     ScreenerRow,
+    SectorStrength,
+    ShortInterestReading,
     StockDetail,
     TickerSummary,
 )
@@ -66,6 +73,15 @@ from quantpulse.storage.db import get_session
 # origin, so no cross-origin request happens. Kept to an explicit allow-list
 # rather than "*" so this never becomes a wide-open API by default.
 _DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+# Trailing window for the equal-weight market proxy that beta regresses against
+# (no S&P 500 series is ingested anywhere), and for the commodity/currency
+# series behind the Section 28 overlay's "last ~3 months" reading.
+_RISK_PANEL_DAYS = 420
+_MACRO_OVERLAY_DAYS = 120
+# Rotation is a one-month relative-strength read, so a short panel is the right
+# cost/benefit -- the same window `app/lib/data.universe_panel` uses.
+_ROTATION_PANEL_DAYS = 150
 
 app = FastAPI(
     title="QuantPulse API",
@@ -104,6 +120,16 @@ def _rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame.empty:
         return []
     return frame.replace({float("nan"): None}).where(pd.notna(frame), None).to_dict("records")
+
+
+def _none_if_nan(value: Any) -> float | None:
+    """A scalar read straight off a DataFrame row, with NaN mapped to None.
+
+    `_rows` handles whole frames; this is the single-cell equivalent for the
+    computed sections below, which read one value out of a matched row rather
+    than serializing the frame.
+    """
+    return None if value is None or pd.isna(value) else float(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -209,17 +235,13 @@ def stock_detail(
     scores = persistence.read_screener_rows(session)
     score_rows = _rows(scores[scores["symbol"] == ticker]) if not scores.empty else []
     consensus = persistence.read_latest_analyst_consensus(session, ticker)
+    bars = persistence.read_symbol_ohlcv(session, ticker, lookback_days=lookback_days)
 
     return StockDetail(
         symbol=ticker,
         summary=TickerSummary(**_rows(match)[0]),
         score=ScreenerRow(**score_rows[0]) if score_rows else None,
-        prices=[
-            PriceBar(**row)
-            for row in _rows(
-                persistence.read_symbol_ohlcv(session, ticker, lookback_days=lookback_days)
-            )
-        ],
+        prices=[PriceBar(**row) for row in _rows(bars)],
         forecasts=[
             ForecastRow(**row) for row in _rows(persistence.read_symbol_forecasts(session, ticker))
         ],
@@ -228,12 +250,188 @@ def stock_detail(
         ],
         analyst_consensus=AnalystConsensusModel(**consensus) if consensus else None,
         news=[NewsItem(**row) for row in _rows(persistence.read_symbol_news(session, ticker))],
+        short_interest=_short_interest(session, ticker),
+        risk=_risk_profile(session, ticker, bars),
+        monte_carlo=_monte_carlo(bars),
+        macro_overlay=_macro_overlay(session, str(match.iloc[0]["sector"] or "")),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Stock-detail sections that are computed rather than read straight from a table
+#
+# These four were reachable only from the Streamlit app, which meant the React
+# client showed 7 of the 12 sections its sibling did -- including short
+# interest, which Section 24 explicitly requires be surfaced (as two readings,
+# never one verdict). Each helper calls the same analysis function the Streamlit
+# page calls, so the two front ends cannot disagree about a number.
+# --------------------------------------------------------------------------- #
+
+# Matches `app/pages/2_Stock_Detail.py`.
+_MONTE_CARLO_HORIZON = 63
+_MIN_MONTE_CARLO_BARS = 60
+
+
+def _short_interest(session: Session, symbol: str) -> ShortInterestReading | None:
+    frame = persistence.read_latest_short_interest(session, as_of=date.today())
+    if frame.empty:
+        return None
+    match = frame[frame["symbol"] == symbol]
+    if match.empty:
+        return None
+    reading = smart_money.read_short_interest(_rows(match)[0])
+    if reading.pct_float_short is None and reading.days_to_cover is None:
+        return None
+    return ShortInterestReading(
+        pct_float_short=reading.pct_float_short,
+        days_to_cover=reading.days_to_cover,
+        elevated=reading.elevated,
+    )
+
+
+def _risk_profile(session: Session, symbol: str, bars: pd.DataFrame) -> RiskProfileModel | None:
+    if bars.empty:
+        return None
+    closes = bars.set_index(pd.DatetimeIndex(pd.to_datetime(bars["date"])))["close"]
+    returns = risk.to_returns(closes)
+    if returns.empty:
+        return None
+
+    panel = persistence.read_adj_close_panel(
+        session, start=date.today() - timedelta(days=_RISK_PANEL_DAYS), end=date.today()
+    )
+    market = risk.equal_weight_market_returns(panel) if not panel.empty else pd.Series(dtype=float)
+    options = persistence.read_latest_options(session, as_of=date.today())
+    implied = None
+    if not options.empty:
+        match = options[options["symbol"] == symbol]
+        if not match.empty:
+            implied = _none_if_nan(match.iloc[0].get("atm_implied_volatility"))
+
+    profile = risk.stock_risk_profile(
+        returns,
+        market_returns=market if not market.empty else None,
+        implied_volatility=implied,
+    )
+    var = profile.value_at_risk
+    return RiskProfileModel(
+        historical_volatility=profile.volatility.historical,
+        implied_volatility=profile.volatility.implied,
+        implied_premium=profile.volatility.implied_premium,
+        beta=profile.beta.beta if profile.beta else None,
+        beta_r_squared=profile.beta.r_squared if profile.beta else None,
+        sharpe=profile.sharpe,
+        sortino=profile.sortino,
+        max_drawdown=profile.max_drawdown,
+        value_at_risk=var.var if var else None,
+        expected_shortfall=var.expected_shortfall if var else None,
+        var_confidence=var.confidence if var else None,
+        n_observations=profile.n_observations,
+        # Sent so the client can say *why* the two ratios are absent rather than
+        # rendering an unexplained dash.
+        ratio_min_observations=risk.min_ratio_observations(risk.TRADING_DAYS_PER_YEAR),
+    )
+
+
+def _monte_carlo(bars: pd.DataFrame) -> MonteCarloFan | None:
+    if bars.empty or len(bars) < _MIN_MONTE_CARLO_BARS:
+        return None
+    fan = forecasting.monte_carlo_fan_chart(bars.rename(columns=str.lower), _MONTE_CARLO_HORIZON)
+    if fan is None:
+        return None
+    low, mid, high = (fan.percentiles[p] for p in (5.0, 50.0, 95.0))
+    return MonteCarloFan(
+        horizon_days=fan.horizon_days,
+        n_paths=fan.n_paths,
+        n_train=fan.n_train,
+        mu=fan.mu,
+        sigma=fan.sigma,
+        last_close=fan.last_close,
+        bands=[
+            MonteCarloBand(day=int(day), lower=float(lo), median=float(md), upper=float(hi))
+            for day, lo, md, hi in zip(fan.days, low, mid, high, strict=True)
+        ],
+    )
+
+
+def _macro_overlay(session: Session, sector: str) -> MacroOverlay | None:
+    sensitivities = macro.SECTOR_COMMODITY_SENSITIVITY.get(sector)
+    if not sensitivities:
+        return None
+    components = []
+    moves: dict[str, float] = {}
+    for series, sensitivity in sensitivities.items():
+        history = persistence.read_macro_series(
+            session, series, as_of=date.today(), lookback_days=_MACRO_OVERLAY_DAYS
+        )
+        change = macro.pct_change(history)
+        if change is not None:
+            moves[series] = change
+        components.append(
+            MacroOverlayComponent(driver=series, sensitivity=float(sensitivity), move=change)
+        )
+    if not moves:
+        return None
+    return MacroOverlay(
+        sector=sector,
+        adjustment=macro.commodity_overlay_adjustment(sector, moves),
+        components=components,
     )
 
 
 # --------------------------------------------------------------------------- #
 # Market-level data
 # --------------------------------------------------------------------------- #
+
+
+@app.get("/api/sectors/rotation", response_model=list[SectorStrength], tags=["market"])
+def sector_rotation(
+    lookback_days: int = Query(21, ge=5, le=252),
+    session: Session = Depends(db_session),
+) -> list[SectorStrength]:
+    """Which sectors money has rotated into over the lookback window (Section 7.1).
+
+    Measured against an equal-weight proxy for the market, because no S&P 500
+    price series is ingested anywhere -- the same honest stand-in the beta
+    calculation and the backtest benchmark already use. Sorted strongest first,
+    so the top row is where money has been going.
+    """
+    panel = persistence.read_adj_close_panel(
+        session,
+        start=date.today() - timedelta(days=_ROTATION_PANEL_DAYS),
+        end=date.today(),
+    )
+    if panel.empty or panel.shape[1] < 2:
+        return []
+    benchmark = risk.equal_weight_market_returns(panel)
+    if benchmark.empty:
+        return []
+
+    universe = persistence.read_ticker_universe(session)
+    sectors = {
+        row.symbol: row.sector for row in universe.itertuples() if isinstance(row.sector, str)
+    }
+    counts: dict[str, int] = {}
+    for symbol in panel.columns:
+        sector = sectors.get(symbol)
+        if sector:
+            counts[sector] = counts.get(sector, 0) + 1
+
+    rotation = technical.compute_sector_rotation(
+        {column: panel[column].dropna() for column in panel.columns},
+        sectors,
+        # `compute_relative_strength` wants a price *level*, not returns.
+        (1.0 + benchmark).cumprod(),
+        lookback_days=lookback_days,
+    )
+    return [
+        SectorStrength(
+            sector=str(row.sector),
+            relative_return=float(row.relative_strength_change_pct),
+            n_symbols=counts.get(str(row.sector), 0),
+        )
+        for row in rotation.itertuples()
+    ]
 
 
 @app.get("/api/regime", response_model=list[RegimePoint], tags=["market"])

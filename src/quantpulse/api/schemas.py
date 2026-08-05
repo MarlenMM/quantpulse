@@ -178,6 +178,92 @@ class NewsItem(BaseModel):
     source_url: str | None = None
 
 
+class ShortInterestReading(BaseModel):
+    """Section 24's two readings, deliberately never collapsed into one verdict.
+
+    Heavy shorting can mean informed money is betting against the company, or it
+    can set up a squeeze if sentiment turns. `smart_money.py` keeps it out of the
+    blended score entirely and returns both figures intact; the client is
+    expected to present them the same way, which is why `elevated` is a flag
+    rather than a direction.
+    """
+
+    pct_float_short: float | None = None
+    days_to_cover: float | None = None
+    elevated: bool = False
+
+
+class RiskProfileModel(BaseModel):
+    """Section 7.7's per-name risk block.
+
+    Every field is nullable because each estimator declines independently when
+    its own data floor isn't met -- a short-history name yields a partly filled
+    block rather than fabricated numbers. `ratio_min_observations` is sent so the
+    client can explain *why* Sharpe and Sortino are absent instead of rendering
+    two unexplained dashes.
+    """
+
+    historical_volatility: float | None = None
+    implied_volatility: float | None = None
+    implied_premium: float | None = None
+    beta: float | None = None
+    beta_r_squared: float | None = None
+    sharpe: float | None = None
+    sortino: float | None = None
+    max_drawdown: float | None = None
+    value_at_risk: float | None = None
+    expected_shortfall: float | None = None
+    var_confidence: float | None = None
+    n_observations: int = 0
+    ratio_min_observations: int = 0
+
+
+class MonteCarloBand(BaseModel):
+    """One day of the simulated fan: the percentile spread of simulated prices."""
+
+    day: int
+    lower: float
+    median: float
+    upper: float
+
+
+class MonteCarloFan(BaseModel):
+    """Section 7.6's simulated-path fan chart.
+
+    The same random-walk-with-drift model `baseline_forecast` uses, executed by
+    simulation instead of in closed form -- which is exactly why it is not a
+    fourth competing model in the forecast table. It answers a different kind of
+    question: not "what is the number" but "how wide does the range get".
+    """
+
+    horizon_days: int
+    n_paths: int
+    n_train: int
+    mu: float
+    sigma: float
+    last_close: float
+    bands: list[MonteCarloBand] = Field(default_factory=list)
+
+
+class MacroOverlayComponent(BaseModel):
+    driver: str
+    sensitivity: float
+    move: float | None = None
+
+
+class MacroOverlay(BaseModel):
+    """Section 28's targeted commodity/currency tilt for this stock's sector.
+
+    Deliberately sparse: oil for Energy, gold for Materials, the dollar for the
+    sectors dominated by multinationals earning abroad, and nothing at all for
+    every other sector ("a small biotech doesn't care about oil prices").
+    """
+
+    sector: str
+    adjustment: float
+    components: list[MacroOverlayComponent] = Field(default_factory=list)
+
+
 class StockDetail(BaseModel):
     """Everything the Stock Detail page needs, in one round trip.
 
@@ -194,6 +280,18 @@ class StockDetail(BaseModel):
     patterns: list[PatternRow] = Field(default_factory=list)
     analyst_consensus: AnalystConsensusModel | None = None
     news: list[NewsItem] = Field(default_factory=list)
+    short_interest: ShortInterestReading | None = None
+    risk: RiskProfileModel | None = None
+    monte_carlo: MonteCarloFan | None = None
+    macro_overlay: MacroOverlay | None = None
+
+
+class SectorStrength(BaseModel):
+    """One sector's strength relative to the market over the lookback window."""
+
+    sector: str
+    relative_return: float
+    n_symbols: int
 
 
 class RegimePoint(BaseModel):

@@ -131,6 +131,77 @@ export interface StockDetail {
   patterns: PatternRow[];
   analyst_consensus: AnalystConsensus | null;
   news: NewsItem[];
+  short_interest: ShortInterestReading | null;
+  risk: RiskProfile | null;
+  monte_carlo: MonteCarloFan | null;
+  macro_overlay: MacroOverlay | null;
+}
+
+/**
+ * Section 24's two readings, deliberately never collapsed into one verdict:
+ * heavy shorting can mean informed money is betting against the company, or it
+ * can set up a squeeze. `elevated` is a flag, not a direction.
+ */
+export interface ShortInterestReading {
+  pct_float_short: number | null;
+  days_to_cover: number | null;
+  elevated: boolean;
+}
+
+/**
+ * Every field is nullable because each estimator declines independently when
+ * its own data floor is unmet. `ratio_min_observations` lets the client explain
+ * *why* Sharpe/Sortino are absent instead of rendering two bare dashes.
+ */
+export interface RiskProfile {
+  historical_volatility: number | null;
+  implied_volatility: number | null;
+  implied_premium: number | null;
+  beta: number | null;
+  beta_r_squared: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  max_drawdown: number | null;
+  value_at_risk: number | null;
+  expected_shortfall: number | null;
+  var_confidence: number | null;
+  n_observations: number;
+  ratio_min_observations: number;
+}
+
+export interface MonteCarloBand {
+  day: number;
+  lower: number;
+  median: number;
+  upper: number;
+}
+
+export interface MonteCarloFan {
+  horizon_days: number;
+  n_paths: number;
+  n_train: number;
+  mu: number;
+  sigma: number;
+  last_close: number;
+  bands: MonteCarloBand[];
+}
+
+export interface MacroOverlayComponent {
+  driver: string;
+  sensitivity: number;
+  move: number | null;
+}
+
+export interface MacroOverlay {
+  sector: string;
+  adjustment: number;
+  components: MacroOverlayComponent[];
+}
+
+export interface SectorStrength {
+  sector: string;
+  relative_return: number;
+  n_symbols: number;
 }
 
 export interface RegimePoint {

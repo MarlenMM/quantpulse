@@ -2,7 +2,14 @@ import { Chart } from "../components/Chart";
 import { EmptyState, ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
-import { confidenceLabel, formatPctAlreadyScaled, formatScore, freshnessLabel, humanize } from "../lib/format";
+import {
+  confidenceLabel,
+  formatPctAlreadyScaled,
+  formatScore,
+  formatSignedPercent,
+  freshnessLabel,
+  humanize,
+} from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 export default function Dashboard() {
@@ -11,6 +18,7 @@ export default function Dashboard() {
   const regime = useApi(() => api.regime(90), []);
   const news = useApi(() => api.news(6), []);
   const changes = useApi(() => api.ratingChanges(8), []);
+  const rotation = useApi(() => api.sectorRotation(), []);
 
   if (health.loading) return <Loading what="the dashboard" />;
   if (health.error) return <ErrorBox error={health.error} />;
@@ -111,12 +119,47 @@ export default function Dashboard() {
                 <Metric label="VIX" value={formatScore(latestRegime.vix_level)} title="The market's expectation of near-term volatility." />
                 <Metric label="Breadth >200DMA" value={formatPctAlreadyScaled(latestRegime.breadth_pct_above_200dma)} title="Share of the universe trading above its 200-day average." />
                 <Metric label="10Y-2Y" value={formatScore(latestRegime.yield_curve_spread, 2)} title="Yield-curve spread; negative is an inversion." />
+                <Metric label="Macro tone" value={formatScore(latestRegime.macro_news_tone, 2)} title="Average tone of macro news coverage; negative is gloomier." />
               </div>
             </>
           ) : (
             <p className="muted">Market Regime Index hasn't been computed yet.</p>
           )}
         </div>
+      </section>
+
+      <section className="panel">
+        <h2>Sector rotation</h2>
+        <p className="muted small">
+          Change in each sector's strength <em>relative to the market</em> over the last month —
+          the top row is where money has been rotating in. A sector can appear here with a
+          positive number while falling in absolute terms, if it simply fell less than everything
+          else. This describes what already happened; it is not a forecast.
+        </p>
+        {rotation.data && rotation.data.length > 0 ? (
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Sector</th>
+                <th scope="col" className="num">vs market (1m)</th>
+                <th scope="col" className="num">Names</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rotation.data.map((row) => (
+                <tr key={row.sector}>
+                  <td>{row.sector}</td>
+                  <td className="num">{formatSignedPercent(row.relative_return / 100)}</td>
+                  <td className="num">{row.n_symbols}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted small">
+            Needs price history across several sectors before relative strength means anything.
+          </p>
+        )}
       </section>
 
       <section className="panel">
