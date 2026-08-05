@@ -16,9 +16,15 @@ repos:
         language: system
         types: [python]
 
+      # `app` is checked alongside `src`/`scripts` because it is not a thin
+      # view layer -- it is ~2,800 lines of the code a user actually looks at,
+      # and it was the one tree with no type gate at all. `tests` stays out on
+      # purpose (see CONTRIBUTING.md): test files compare Optional values
+      # directly without narrowing, which is a deliberate, readable pattern
+      # there and not worth silencing case by case.
       - id: mypy
         name: mypy
-        entry: uv run mypy src scripts
+        entry: uv run mypy src scripts app
         language: system
         types: [python]
         pass_filenames: false

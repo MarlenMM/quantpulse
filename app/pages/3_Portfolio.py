@@ -18,7 +18,9 @@ Per Section 9, the disclaimer banner lives on this page specifically — it is
 the one making the most direct per-holding suggestions.
 """
 
+from collections.abc import MutableMapping
 from datetime import date, timedelta
+from typing import Any, cast
 
 import pandas as pd
 import streamlit as st
@@ -69,7 +71,10 @@ def get_store() -> holdings_lib.PortfolioStore:
     """
     if data.portfolio_backend() == "sqlite":
         return holdings_lib.SqlitePortfolioStore(get_session)
-    return holdings_lib.SessionPortfolioStore(st.session_state)
+    # `SessionStateProxy` implements the MutableMapping protocol the store asks
+    # for but doesn't declare it, so the cast states what's already true rather
+    # than widening the store's own contract to accommodate Streamlit.
+    return holdings_lib.SessionPortfolioStore(cast("MutableMapping[str, Any]", st.session_state))
 
 
 def render_entry_form(store: holdings_lib.PortfolioStore) -> None:
@@ -449,7 +454,7 @@ _OPTIMIZER_METHODS = {
 
 def _target_allocation(
     method: str, panel: pd.DataFrame, scores: pd.DataFrame
-) -> tuple[object | None, float | None]:
+) -> tuple[optimization.OptimizedPortfolio | None, float | None]:
     """Run one optimizer over `panel`, returning `(result, relaxed_cap_or_None)`.
 
     The default 15% cap ties to Section 9's concentration threshold, but it
