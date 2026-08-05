@@ -166,6 +166,23 @@ class TestCharts:
         assert "candlestick" in kinds
         assert "scatter" in kinds
 
+    def test_price_chart_draws_support_resistance_levels(self) -> None:
+        # Section 8 asks for "price chart with indicators"; the chart drew two
+        # moving averages while the support/resistance detector sat unused.
+        levels = pd.DataFrame({"level": [95.0, 110.0], "touches": [3, 5]})
+        fig = charts.price_chart(self._ohlcv(), levels=levels)
+        drawn = [shape for shape in fig.layout.shapes if shape.type == "line"]
+        assert len(drawn) == 2
+        assert {round(shape.y0, 2) for shape in drawn} == {95.0, 110.0}
+        # The touch count is what separates a real level from a coincidence, so
+        # it has to be on screen rather than implied.
+        annotations = " ".join(a.text for a in fig.layout.annotations)
+        assert "3 touches" in annotations and "5 touches" in annotations
+
+    def test_price_chart_without_levels_draws_none(self) -> None:
+        fig = charts.price_chart(self._ohlcv())
+        assert not [shape for shape in fig.layout.shapes if shape.type == "line"]
+
     def test_price_chart_without_data_explains_itself(self) -> None:
         fig = charts.price_chart(pd.DataFrame())
         assert "No price history" in fig.layout.annotations[0].text

@@ -89,9 +89,22 @@ def empty_figure(message: str = "No data yet") -> go.Figure:
 
 
 def price_chart(
-    ohlcv: pd.DataFrame, *, overlays: dict[str, pd.Series] | None = None, title: str | None = None
+    ohlcv: pd.DataFrame,
+    *,
+    overlays: dict[str, pd.Series] | None = None,
+    levels: pd.DataFrame | None = None,
+    title: str | None = None,
 ) -> go.Figure:
-    """Candlestick price chart with optional moving-average overlays."""
+    """Candlestick price chart with optional moving-average overlays and price levels.
+
+    `levels` is `technical.find_support_resistance_levels`' output (`level`,
+    `touches`) -- prices the market has repeatedly turned at. Section 8 asks for
+    "price chart with indicators and detected patterns"; the chart drew two
+    moving averages and nothing else, while the support/resistance detector sat
+    unused. Drawn as dashed horizontal lines annotated with the touch count,
+    because a level tested five times and one tested twice are not the same
+    claim and the number is the only thing that distinguishes them.
+    """
     if ohlcv.empty:
         return empty_figure("No price history stored for this symbol yet")
 
@@ -111,6 +124,15 @@ def price_chart(
         fig.add_trace(
             go.Scatter(x=ohlcv["date"], y=series, name=label, mode="lines", line=dict(width=1.4))
         )
+    if levels is not None and not levels.empty:
+        for row in levels.itertuples(index=False):
+            fig.add_hline(
+                y=float(row.level),
+                line=dict(color=_MUTED, width=1, dash="dot"),
+                annotation_text=f"{int(row.touches)} touches",
+                annotation_position="right",
+                annotation_font=dict(size=10, color=_MUTED),
+            )
     fig.update_layout(xaxis_rangeslider_visible=False)
     return _base_layout(fig, height=420, title=title)
 
