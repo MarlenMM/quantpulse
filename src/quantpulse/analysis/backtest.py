@@ -132,6 +132,23 @@ _MIN_BOOTSTRAP_OBS = 8
 # sentence. If the headline cannot be bracketed, it is not a track record, so
 # `refresh_backtest` does not store it at all.
 MIN_TRACK_RECORD_PERIODS = _MIN_BOOTSTRAP_OBS
+
+# A run must also have been *in the market* for most of its periods before its
+# metrics describe a strategy rather than a data gap.
+#
+# Guarding only on "the strategy never traded at all" (`avg_turnover <= 0`) is
+# not enough, and the gap is not hypothetical: with three years of prices but
+# an index-membership history that only reached back a few days, `eligible()`
+# returned an empty universe for 38 of 39 monthly periods. The strategy sat in
+# cash for all of them, took one position at the very end, and the stored run
+# read Sharpe 0.555 with a CAGR of 0.99% against a 29.3% benchmark -- a
+# plausible-looking "we underperformed the market" when in fact nothing was
+# ever tested. Average turnover was 1/39, comfortably above zero.
+#
+# Cash periods are exact 0.0 returns, and zeros carry no variance, so a long
+# run of them *raises* Sharpe rather than lowering it. That is what makes this
+# failure flattering instead of obvious.
+MIN_INVESTED_FRACTION = 0.8
 # If fewer than this fraction of resamples yield a defined statistic (e.g. a
 # zero-variance resample makes Sharpe undefined), the CI isn't trustworthy.
 _MIN_DEFINED_RESAMPLE_FRACTION = 0.5
@@ -438,7 +455,28 @@ class StrategyResult:
     assumed_txn_cost: float
     avg_turnover: float
     n_periods: int
+    # How many of those periods the strategy actually held something. A period
+    # in which the signal ranked nothing -- or in which `eligible` returned an
+    # empty universe -- sits in cash and contributes an exact 0.0 return, which
+    # is indistinguishable in `period_returns` from a real flat period but means
+    # something completely different. See `invested_fraction`.
+    invested_periods: int
     periods_per_year: float
+
+    @property
+    def invested_fraction(self) -> float:
+        """Share of periods the strategy was actually in the market, 0-1.
+
+        The metrics above are only a track record of a *strategy* to the extent
+        this is close to 1. A run that sat in cash for most of its periods still
+        produces a perfectly respectable-looking Sharpe -- zeros have no
+        variance, so a single positive period among many zeros yields a high
+        mean-over-standard-deviation -- alongside a CAGR near zero that reads as
+        "the strategy underperformed" when the truth is "the strategy never
+        ran". Callers deciding whether to publish a run should check this, not
+        just `n_periods`.
+        """
+        return self.invested_periods / self.n_periods if self.n_periods else 0.0
 
 
 def rebalance_dates(index: pd.Index, cadence: str = "monthly") -> list[pd.Timestamp]:
@@ -541,6 +579,7 @@ def backtest_strategy(
     period_returns: list[float] = []
     period_index: list[pd.Timestamp] = []
     benchmark_returns: list[float] = []
+    invested_periods = 0
     turnovers: list[float] = []
 
     for start, end in zip(dates[:-1], dates[1:], strict=True):
@@ -571,6 +610,8 @@ def backtest_strategy(
         period_returns.append(gross - transaction_cost * traded)
         period_index.append(end)
         turnovers.append(traded)
+        if target:
+            invested_periods += 1
         current = target
 
         if benchmark is not None:
@@ -598,6 +639,7 @@ def backtest_strategy(
         assumed_txn_cost=transaction_cost,
         avg_turnover=float(np.mean(turnovers)) if turnovers else 0.0,
         n_periods=int(len(returns)),
+        invested_periods=invested_periods,
         periods_per_year=ppy,
     )
 
