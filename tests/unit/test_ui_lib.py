@@ -102,6 +102,50 @@ class TestNumberFormatting:
         assert humanize(None) == "—"
 
 
+class TestMissingNumbersFromDataFrames:
+    """A NaN out of a pandas frame must read as "—", exactly like a None.
+
+    These formatters are handed cells out of frames built from database reads,
+    and pandas decides how a SQL NULL arrives from the *whole column's* dtype:
+    an all-NULL column stays `object` and yields None, but one real value makes
+    it float64 and yields NaN. Every test above passes None directly, which is
+    why "Macro tone: nan" sat on the live demo's Home page next to a correctly
+    dashed "Breadth: —" -- the only difference between the two was that some
+    other row happened to have a macro reading.
+    """
+
+    def test_a_partly_filled_column_yields_nan_not_none(self) -> None:
+        # Pin the mechanism itself, so this stays a real scenario and not a
+        # hand-written NaN that no production path actually produces.
+        frame = pd.DataFrame({"all_null": [None, None], "partly_null": [0.5, None]})
+        assert frame["all_null"].iloc[-1] is None
+        assert pd.isna(frame["partly_null"].iloc[-1])
+        assert frame["partly_null"].iloc[-1] is not None
+
+    def test_every_formatter_renders_nan_as_an_em_dash(self) -> None:
+        missing = pd.DataFrame({"v": [1.0, None]})["v"].iloc[-1]
+        assert format_score(missing) == "—"
+        assert format_percent(missing) == "—"
+        assert format_pct_already_scaled(missing) == "—"
+        assert format_signed_percent(missing) == "—"
+        assert format_price(missing) == "—"
+        assert format_money(missing) == "—"
+        assert format_ratio(missing) == "—"
+
+    def test_infinities_are_missing_too(self) -> None:
+        # There is no honest way to print an infinite price or percentage.
+        for value in (float("inf"), float("-inf")):
+            assert format_price(value) == "—"
+            assert format_percent(value) == "—"
+            assert format_score(value) == "—"
+
+    def test_nan_confidence_is_unknown_not_thin(self) -> None:
+        # NaN compares False against every threshold, so an unguarded NaN falls
+        # through to the most alarming band and renders "thin coverage (nan%)".
+        missing = pd.DataFrame({"v": [90.0, None]})["v"].iloc[-1]
+        assert confidence_label(missing) == "coverage unknown"
+
+
 class TestFreshness:
     def test_never_run_is_distinct_from_stale(self) -> None:
         # Section 12: an empty pipeline and a day-old one must not look alike.
