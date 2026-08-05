@@ -345,6 +345,17 @@ def render_risk(frame: pd.DataFrame, cash: float) -> pd.DataFrame:
             "Not enough history for an honest Value-at-Risk estimate yet "
             "(a 95% historical VaR needs ~100 observations)."
         )
+    # Sharpe and Sortino abstain on a short sample for the same reason VaR does
+    # above; say so, rather than leaving two unexplained dashes side by side.
+    ratio_floor = risk.min_ratio_observations(risk.TRADING_DAYS_PER_YEAR)
+    if summary.sharpe is None and summary.n_observations < ratio_floor:
+        st.caption(
+            f"Sharpe and Sortino need about a year of shared history "
+            f"({ratio_floor} daily returns; this mix has {summary.n_observations}). "
+            "Both divide an average return by a measure of risk, which makes them much "
+            "noisier than either part — on a few weeks of data they mostly report how "
+            "recently the market went up, so they are left blank."
+        )
     if summary.beta is not None and summary.beta.r_squared is not None:
         st.caption(
             f"Beta is measured against an equal-weight proxy for the market "
