@@ -1099,3 +1099,131 @@ class TestTrackRecordSuppression:
         stored = session.scalars(select(BacktestResult)).one()
         assert stored.n_periods >= bt.MIN_TRACK_RECORD_PERIODS
         assert stored.avg_turnover > 0
+
+
+class TestStepBudget:
+    """A stalled step must cost that step, not the whole night.
+
+    The failure this guards against actually happened: the weekly news step
+    classified every article it could fetch through a local NLI model, emitted
+    no output for 5h38m, and was cancelled at GitHub's 6-hour job limit. Because
+    the job was *killed* rather than failing, the workflow's "commit the
+    refreshed database" step never ran either -- so a run that had already
+    fetched every price and fundamental successfully committed nothing at all.
+    A hang is not an exception, so `step()`'s `except` could never have caught
+    it; only a wall-clock budget can.
+    """
+
+    def test_a_stalled_step_times_out_and_the_run_continues(self) -> None:
+        ran_after = []
+
+        def _stall() -> int:
+            time.sleep(30)  # far beyond the 1s budget injected below
+            return 99
+
+        with (
+            patch.dict(refresh_data._STEP_TIMEOUT_SECONDS, {"slow": 1}, clear=False),
+            patch.object(refresh_data, "_DEFAULT_STEP_TIMEOUT_SECONDS", 1),
+        ):
+            started = time.monotonic()
+            status, rows, failed = _drive_steps(
+                [("slow", _stall), ("after", lambda: ran_after.append(True) or 7)]
+            )
+            elapsed = time.monotonic() - started
+
+        assert elapsed < 20, "the budget did not interrupt the stall"
+        assert failed == ["slow"]
+        assert status == "partial"
+        # The decisive assertion: work queued behind the stall still happened.
+        assert ran_after == [True]
+        assert rows == 7
+
+    def test_a_timeout_in_a_critical_step_fails_the_run(self) -> None:
+        # `_CRITICAL_STEPS` must keep meaning "the app is unusable without
+        # this", whether the step raised or simply never returned.
+        with (
+            patch.dict(refresh_data._STEP_TIMEOUT_SECONDS, {"composite_scores": 1}, clear=False),
+        ):
+            status, _, failed = _drive_steps([("composite_scores", lambda: time.sleep(30))])
+
+        assert failed == ["composite_scores"]
+        assert status == "failed"
+
+    def test_a_fast_step_is_unaffected(self) -> None:
+        status, rows, failed = _drive_steps([("quick", lambda: 5)])
+        assert (status, rows, failed) == ("success", 5, [])
+
+    def test_the_alarm_is_disarmed_afterwards(self) -> None:
+        import signal
+
+        _drive_steps([("quick", lambda: 1)])
+        # A leaked alarm would fire during some unrelated later step.
+        assert signal.alarm(0) == 0
+
+
+def _drive_steps(steps: list[tuple[str, object]]) -> tuple[str, int, list[str]]:
+    """Run `step()`'s real body over `steps`, returning (status, rows, failed).
+
+    `run()` itself needs a database, a universe and network mocks; this exercises
+    the isolation/budget logic alone, which is what the tests above are about.
+    Mirrors `run()`'s closure exactly.
+    """
+    status = "success"
+    rows_updated = 0
+    failed_steps: list[str] = []
+
+    def step(name: str, fn: object) -> int:
+        nonlocal status
+        budget = refresh_data._STEP_TIMEOUT_SECONDS.get(
+            name, refresh_data._DEFAULT_STEP_TIMEOUT_SECONDS
+        )
+        try:
+            with refresh_data._step_timeout(budget, name):
+                return fn() or 0  # type: ignore[operator]
+        except Exception:
+            failed_steps.append(name)
+            if name in refresh_data._CRITICAL_STEPS:
+                status = "failed"
+            elif status != "failed":
+                status = "partial"
+            return 0
+
+    for name, fn in steps:
+        rows_updated += step(name, fn)
+    return status, rows_updated, failed_steps
+
+
+def test_news_runs_after_the_steps_a_visitor_actually_looks_at() -> None:
+    """Ordering is load-bearing, so it is pinned rather than left to review.
+
+    News is the most expensive step and the only one that has ever exhausted
+    the job's budget. When it sat mid-run, everything behind it -- regime,
+    patterns, composite scores, forecasts, backtest -- never ran at all.
+    """
+    source = Path(refresh_data.__file__).read_text()
+    order = {
+        name: source.index(f'step(\n                "{name}"')
+        if f'step(\n                "{name}"' in source
+        else source.index(f'"{name}"')
+        for name in (
+            "market_regime",
+            "pattern_signals",
+            "composite_scores",
+            "forecasts",
+            "backtest",
+            "tier1_news",
+            "tier2_news",
+        )
+    }
+    for earlier in (
+        "market_regime",
+        "pattern_signals",
+        "composite_scores",
+        "forecasts",
+        "backtest",
+    ):
+        assert order[earlier] < order["tier1_news"], (
+            f"{earlier} must be dispatched before tier1_news -- a news stall "
+            "otherwise takes the whole weekly branch down with it"
+        )
+    assert order["tier1_news"] < order["tier2_news"]

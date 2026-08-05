@@ -35,6 +35,14 @@ _USER_AGENT = "quantpulse-news-ingestion/0.1 (contact via project README)"
 
 _COLUMNS = ["title", "link", "summary", "published_at", "source", "symbol", "tier"]
 
+# Newest-N headlines kept per symbol by `fetch_all_tier1_news`. The three feeds
+# return ~150 between them (Google News ~100, Seeking Alpha ~30, Yahoo ~20),
+# which across a 500-name universe is ~75,000 articles for the local NLI and
+# sentiment models to chew through in one batch. 40 keeps roughly a fortnight of
+# real coverage for a widely-covered mega-cap and essentially everything for the
+# rest, at about a quarter of the model cost. See `fetch_all_tier1_news`.
+MAX_ARTICLES_PER_SYMBOL = 40
+
 # Section 5/19: none of the three publishes a per-minute limit -- the same
 # conservative min-interval treatment as SEC EDGAR, kept per-source so a slow
 # Seeking Alpha response doesn't throttle unrelated Yahoo/Google calls.
@@ -129,12 +137,31 @@ def fetch_seeking_alpha_news(symbol: str) -> pd.DataFrame:
     )
 
 
-def fetch_all_tier1_news(symbol: str, company_name: str | None = None) -> pd.DataFrame:
-    """All three Tier-1 RSS sources for `symbol`, concatenated.
+def fetch_all_tier1_news(
+    symbol: str,
+    company_name: str | None = None,
+    *,
+    max_articles: int | None = MAX_ARTICLES_PER_SYMBOL,
+) -> pd.DataFrame:
+    """All three Tier-1 RSS sources for `symbol`, newest first, capped.
 
     One source failing (feed down, ticker not covered by that provider)
     doesn't take down the other two -- each fetch is isolated and logged
     rather than allowed to raise out of the whole batch.
+
+    **The cap is not a nicety.** The three feeds together return about 150
+    headlines per ticker, so an unbounded sweep of a 500-name universe hands
+    the downstream models ~75,000 articles in a single batch. Every one of
+    those is eight NLI forward passes through `bart-large-mnli` plus a FinBERT
+    pass, which on a 2-vCPU CI runner is many hours of work -- the nightly's
+    weekly branch ran 5h38m without emitting a line and was killed at GitHub's
+    6-hour job limit, so *nothing* from that run was ever committed. Sorted
+    newest-first before truncating, because the recency-decay step downstream
+    weights a three-week-old headline to near nothing anyway: the articles
+    dropped here are the ones that would have contributed least.
+
+    Pass `max_articles=None` for the genuinely unbounded feed (a backfill or an
+    ad-hoc query), never the nightly.
     """
     fetchers = (
         ("yahoo", lambda: fetch_yahoo_finance_news(symbol)),
@@ -149,4 +176,10 @@ def fetch_all_tier1_news(symbol: str, company_name: str | None = None) -> pd.Dat
             logger.warning("Tier-1 RSS source %s failed for %s", source_name, symbol, exc_info=True)
     if not frames:
         return pd.DataFrame(columns=_COLUMNS)
-    return pd.concat(frames, ignore_index=True)
+    combined = pd.concat(frames, ignore_index=True)
+    if max_articles is None or len(combined) <= max_articles:
+        return combined
+    # `na_position="last"` keeps undated entries as the first to be dropped --
+    # an article with no timestamp can't be recency-weighted meaningfully.
+    ordered = combined.sort_values("published_at", ascending=False, na_position="last")
+    return ordered.head(max_articles).reset_index(drop=True)
