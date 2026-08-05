@@ -33,6 +33,7 @@ from quantpulse.analysis import (
     forecasting,
     fundamental,
     macro,
+    patterns,
     scoring,
     smart_money,
 )
@@ -118,6 +119,11 @@ _VIX_PERCENTILE_LOOKBACK_DAYS = 365
 # Enough trailing price history to define the 200-DMA technical signal and the
 # ~6-month momentum window with room for weekends/holidays.
 _COMPOSITE_PRICE_LOOKBACK_DAYS = 420
+# Trailing window the geometric chart-pattern detectors scan (Section 7.1). The
+# same ~14 months as the composite read: long enough for a head-and-shoulders or
+# a cup-and-handle to complete, short enough that the Stock Detail panel (which
+# shows the last 120 days) is never scanning years of irrelevant history.
+_PATTERN_LOOKBACK_DAYS = 420
 # Which investor profiles get their own stored `composite_scores` rows nightly.
 #
 # Most profiles differ from `balanced` only in category WEIGHTS, and the stored
@@ -850,6 +856,61 @@ def _store_composite(
     return persistence.upsert_composite_scores(session, records)
 
 
+def refresh_pattern_signals(session: Session, universe: pd.DataFrame, today: date) -> int:
+    """Detect and persist geometric chart patterns for every active name (Section 7.1).
+
+    `analysis/patterns.py` -- head-and-shoulders, double top/bottom, triangles,
+    wedges, channels and cup-and-handle, each with a confidence score rather
+    than a yes/no verdict -- had no producer at all. `pattern_signals` had a
+    table, a migration, a reader and a "Detected patterns" panel in *both* front
+    ends; the one missing link was anything that ever wrote a row, so the panel
+    was permanently empty and the README's "4 pattern families detected" was a
+    claim about a library rather than about the app.
+
+    Runs daily rather than weekly: measured over the real 503-name universe on
+    ~288 bars each, the whole sweep takes about one second, so there is no cost
+    argument for staleness. Storage is deduped on the formation's own
+    (symbol, date, pattern_type), so re-detecting the same double top tomorrow
+    recognises it instead of logging it again.
+
+    Candlestick patterns are deliberately NOT stored alongside these. The same
+    sweep yields roughly two per bar -- 579 rows for one name over 400 days,
+    dominated by "longline"/"belthold"/"shortline" at a flat confidence of 100 --
+    which would bury the handful of geometric formations a reader can actually
+    act on. `technical.detect_candlestick_patterns` stays available for a caller
+    that wants them.
+    """
+    ohlcv = persistence.read_active_ohlcv(
+        session, as_of=today, lookback_days=_PATTERN_LOOKBACK_DAYS
+    )
+    if ohlcv.empty:
+        return 0
+    frames = _ohlcv_frames_by_symbol(ohlcv)
+
+    records: list[dict[str, Any]] = []
+    for symbol in universe["symbol"]:
+        prices = frames.get(symbol)
+        if prices is None or prices.empty:
+            continue
+        try:
+            found = patterns.detect_chart_patterns(prices, symbol=symbol)
+        except ValueError:
+            # A malformed frame for one ticker must not cost the other 502.
+            logger.exception("Pattern detection failed for %s; skipping it", symbol)
+            continue
+        records.extend(
+            {
+                "symbol": row.symbol,
+                "date": pd.Timestamp(row.date).date(),
+                "pattern_type": row.pattern_type,
+                "direction": row.direction,
+                "confidence": float(row.confidence),
+            }
+            for row in found.itertuples(index=False)
+        )
+    return persistence.upsert_pattern_signals(session, records)
+
+
 def _ohlcv_frames_by_symbol(ohlcv: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """`{symbol: OHLCV frame on a DatetimeIndex}` from the long point-in-time read.
 
@@ -1430,6 +1491,13 @@ def run(job_name: str = "refresh_data") -> str:
         # for its risk-off rating dampener, so ordering matters.
         rows_updated += step(
             "market_regime", lambda: _in_session(lambda s: refresh_market_regime(s, today))
+        )
+
+        # Chart patterns are a daily technical read off the same price window the
+        # composite uses, and the whole 503-name sweep costs about a second.
+        rows_updated += step(
+            "pattern_signals",
+            lambda: _in_session(lambda s: refresh_pattern_signals(s, universe_df, today)),
         )
 
         # Composite scoring runs before forecasting/backtesting -- it reads back
