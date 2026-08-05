@@ -18,8 +18,8 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,297** (unit, integration, and property-based via Hypothesis), all passing |
-| Core engine code | **~16,000** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
+| Automated tests | **1,345** (unit, integration, and property-based via Hypothesis), all passing |
+| Core engine code | **~16,400** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
 | Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** — four differ by category weights alone, and two (income, conservative) genuinely re-score a category, so the nightly stores their rankings separately |
@@ -27,7 +27,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 | Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, and a Monte Carlo fan chart. The first three are graded out-of-sample against the naive baseline; Monte Carlo deliberately is not, because it simulates the same random walk the baseline evaluates in closed form (grading it would be grading the baseline against itself) |
 | Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
 | Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, and Black-Litterman driven by the app's own composite scores, each with a concrete buy/sell trade list |
-| Front ends | **2** — a 6-page Streamlit app (full app, incl. Portfolio Manager) and a 5-page React + TypeScript SPA over an 11-endpoint read-only FastAPI |
+| Front ends | **2** — a 7-page Streamlit app (full app, incl. Portfolio Manager and the LLM narration layer) and a 5-page React + TypeScript SPA over a 12-endpoint read-only FastAPI. The two share every number: both read the same `storage.persistence` functions, and the React screener's client-side re-weighting was checked against Streamlit's across all 503 names. The SPA omits only the LLM narration and the Portfolio Manager, which need write access and an API key the read-only API deliberately does not have |
 | Glossary terms | **71**, across 8 categories — one definition shared by every tooltip and both front ends |
 | Required budget | **$0** — every data source, model, and hosting option used is free-tier or open-source |
 
@@ -234,6 +234,21 @@ scripted from outside your own accounts:
    sqlite split exists). Also add `FINNHUB_API_KEY` / `FRED_API_KEY` /
    `SEC_EDGAR_USER_AGENT` as **repo secrets** (Settings → Secrets and
    variables → Actions) so the nightly job itself can fetch fresh data.
+
+   **Without those secrets the nightly still runs, but four datasets stay
+   permanently empty**, and the app will show them as "never run" rather than
+   pretending otherwise. Worth knowing which cost what:
+
+   | Secret | What stays empty without it |
+   |---|---|
+   | `FINNHUB_API_KEY` | Short interest (Section 24's two readings) |
+   | `FRED_API_KEY` | Fed funds, CPI, unemployment, GDP, and the 10Y/2Y series — so the yield-curve spread drops out of the Market Regime Index |
+   | `SEC_EDGAR_USER_AGENT` | Insider (Form 4) and 13F institutional ownership. This one is **not an API key** — SEC only asks for a contact string like `"Your Name your@email.com"`, so it costs nothing but a repo secret |
+
+   Everything else — prices, options, news, fundamentals, analyst consensus,
+   the index constituent list — comes from sources that need no credential at
+   all, which is why the composite score still computes without any of the
+   above (at a lower `data_confidence`, which every page displays).
 
 2. **Connect the repo at [share.streamlit.io](https://share.streamlit.io)**:
    point it at this repo, branch `main`, main file `app/Home.py`, then set
