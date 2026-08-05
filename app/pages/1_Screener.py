@@ -234,10 +234,34 @@ def main() -> None:
             "Start from profile", profile_names(), format_func=humanize, index=0
         )
         base = get_profile(profile_name)
+        st.caption(base.description)
         weights = {
             category: st.slider(humanize(category), 0.0, 1.0, float(base.weights[category]), 0.05)
             for category in CATEGORIES
         }
+
+    # Two profiles don't just re-weight the seven categories, they re-SCORE two
+    # of them (Section 23): income ranks fundamentals against a dividend-leaning
+    # sector config, conservative scores momentum toward low volatility. Neither
+    # can be recovered by re-weighting a finished sub-score, so the nightly
+    # stores their own rows and this reads them instead of the balanced ones.
+    # Until that existed, picking either profile silently applied only its
+    # weights while the sidebar described a scoring change.
+    if base.income_tilt or base.prefer_low_volatility:
+        tilted_rows = data.screener_rows(profile=profile_name)
+        if tilted_rows.empty:
+            st.warning(
+                f"The **{humanize(profile_name)}** profile re-scores two categories rather "
+                "than just re-weighting them, and no ranking has been stored for it yet — "
+                "the next nightly run will write one. Showing the balanced sub-scores under "
+                f"{humanize(profile_name)}'s weights until then, which is not the same thing."
+            )
+        else:
+            rows = tilted_rows
+            st.caption(
+                f"Scored under the **{humanize(profile_name)}** profile — its sub-scores are "
+                "genuinely different, not the balanced ones re-weighted."
+            )
 
     # Re-score and re-rate the WHOLE universe first, then filter. Both orders
     # give the same Score, but only this one gives a rating that still means

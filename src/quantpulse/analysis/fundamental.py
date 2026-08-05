@@ -132,11 +132,61 @@ SECTOR_CONFIGS: dict[str, SectorFundamentalConfig] = {
 }
 
 
-def get_sector_config(sector: str | None) -> SectorFundamentalConfig:
-    """The `SectorFundamentalConfig` for `sector`, falling back to the generic default."""
-    if sector is None:
-        return SECTOR_CONFIGS[DEFAULT_SECTOR]
-    return SECTOR_CONFIGS.get(sector, SECTOR_CONFIGS[DEFAULT_SECTOR])
+# The share of a sector's fundamental weight that dividend yield carries under
+# the income profile's tilt (Section 23: "Fundamental reweighted toward
+# dividend/payout-ratio metrics"). Everything else in that sector's config is
+# scaled down proportionally to fill the rest, so the sector's own reasoning
+# about which *other* ratios matter survives -- a bank is still judged on ROE
+# rather than on price/sales, just with yield weighing much more.
+#
+# Yield is the only dividend metric available: no payout ratio is ingested (see
+# `fundamentals_snapshot`), so the tilt is expressed through `div_yield` alone
+# rather than pretending to a richer dividend model than the data supports.
+_INCOME_DIV_YIELD_WEIGHT = 0.30
+_DIVIDEND_METRIC = "div_yield"
+
+
+def get_sector_config(sector: str | None, *, income_tilt: bool = False) -> SectorFundamentalConfig:
+    """The `SectorFundamentalConfig` for `sector`, falling back to the generic default.
+
+    `income_tilt` returns the dividend-leaning variant the income investor
+    profile asks for (Section 23) -- see `income_tilted`.
+    """
+    base = (
+        SECTOR_CONFIGS[DEFAULT_SECTOR]
+        if sector is None
+        else SECTOR_CONFIGS.get(sector, SECTOR_CONFIGS[DEFAULT_SECTOR])
+    )
+    return income_tilted(base) if income_tilt else base
+
+
+def income_tilted(config: SectorFundamentalConfig) -> SectorFundamentalConfig:
+    """`config` with dividend yield weighted at `_INCOME_DIV_YIELD_WEIGHT`.
+
+    The remaining metrics keep their relative proportions and share what's left,
+    so the sector's own view of which ratios matter is preserved rather than
+    replaced. Already-income-heavy sectors barely move (Real Estate weights
+    yield at 0.30 anyway, so this is a no-op there); the generic default shifts
+    hard, from 0.05 to 0.30, which is the whole point of the profile.
+
+    A sector config that doesn't mention dividend yield at all gains it, because
+    an income screen that ignored yield for those names would rank them by
+    exactly the same numbers as the balanced profile while claiming otherwise.
+    """
+    others = {m: w for m, w in config.weights.items() if m != _DIVIDEND_METRIC}
+    remaining = 1.0 - _INCOME_DIV_YIELD_WEIGHT
+    total_others = sum(others.values())
+    scaled = (
+        {m: w / total_others * remaining for m, w in others.items()}
+        if total_others > 0
+        else dict.fromkeys(others, 0.0)
+    )
+    return SectorFundamentalConfig(
+        sector=config.sector,
+        weights={**scaled, _DIVIDEND_METRIC: _INCOME_DIV_YIELD_WEIGHT},
+        notes=f"{config.notes} Income tilt: dividend yield weighted at "
+        f"{_INCOME_DIV_YIELD_WEIGHT:.0%} (Section 23).",
+    )
 
 
 def compute_p_ffo(
@@ -201,8 +251,15 @@ def _score_sector_group(group: pd.DataFrame, config: SectorFundamentalConfig) ->
     )
 
 
-def score_fundamentals(fundamentals: pd.DataFrame) -> pd.DataFrame:
+def score_fundamentals(fundamentals: pd.DataFrame, *, income_tilt: bool = False) -> pd.DataFrame:
     """Sector-relative fundamental scores (Section 7.2), one row per symbol.
+
+    `income_tilt` (the income investor profile, Section 23) scores every sector
+    against its dividend-leaning config instead -- see `income_tilted`. It is a
+    genuinely different scoring of the same data, not a re-weighting of the
+    finished score, which is why it lives here rather than in the composite
+    step: an average of within-sector percentile ranks cannot be re-tilted after
+    the fact.
 
     `fundamentals` must have `symbol` and `sector` columns plus zero or more
     of the configured metric columns (pe, pb, ps, peg, revenue_growth,
@@ -224,7 +281,9 @@ def score_fundamentals(fundamentals: pd.DataFrame) -> pd.DataFrame:
 
     parts: list[pd.DataFrame] = []
     for sector, group in fundamentals.groupby("sector", dropna=False):
-        config = get_sector_config(sector if isinstance(sector, str) else None)
+        config = get_sector_config(
+            sector if isinstance(sector, str) else None, income_tilt=income_tilt
+        )
         parts.append(_score_sector_group(group, config))
 
     if not parts:
