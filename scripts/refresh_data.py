@@ -36,6 +36,7 @@ from quantpulse.analysis import (
     scoring,
     smart_money,
 )
+from quantpulse.analysis.investor_profiles import get_profile
 from quantpulse.config import get_settings
 from quantpulse.ingestion import (
     economic_calendar,
@@ -117,10 +118,23 @@ _VIX_PERCENTILE_LOOKBACK_DAYS = 365
 # Enough trailing price history to define the 200-DMA technical signal and the
 # ~6-month momentum window with room for weekends/holidays.
 _COMPOSITE_PRICE_LOOKBACK_DAYS = 420
-# The composite ranking is stored for this profile nightly (Section 7.5's
-# default table). The stored per-category sub-scores are weight-independent, so
-# the Screener re-weights to other profiles client-side (Section 8).
-_COMPOSITE_PROFILE = "balanced"
+# Which investor profiles get their own stored `composite_scores` rows nightly.
+#
+# Most profiles differ from `balanced` only in category WEIGHTS, and the stored
+# sub-scores are weight-independent by design (Section 7.5) -- so the Screener
+# re-weights to those client-side without a re-score (Section 8), and storing
+# them would be storing the same seven numbers again.
+#
+# `income` and `conservative` are the exceptions, because Section 23 gives them
+# a non-weight tilt that changes how a category is *scored*: income ranks
+# fundamentals against a dividend-leaning sector config, and conservative scores
+# the momentum category toward low volatility rather than high return. Neither
+# can be recovered by re-weighting a finished sub-score -- an average of
+# within-sector percentile ranks cannot be re-tilted afterwards, and negative
+# volatility is not a monotone function of risk-adjusted return. Until these
+# were stored, picking either profile in the Screener silently applied only the
+# weight half of what it advertised.
+_COMPOSITE_PROFILES = ("balanced", "income", "conservative")
 
 # Section 6.3 calls for daily news; running three local ML models over the
 # whole universe every night is the single heaviest workload here and needs the
@@ -675,13 +689,31 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
     freshly-written prices, sentiment, smart-money, and market-regime rows.
     Missing categories simply lower a symbol's `data_confidence` rather than
     dropping it -- only a symbol with *no* usable category is left unranked.
+
+    Writes one ranking per profile in `_COMPOSITE_PROFILES`. The expensive parts
+    -- indicators, smart money, the news joins -- are computed once and shared;
+    only the two categories a profile genuinely re-scores (fundamentals under
+    the income tilt, momentum under the low-volatility tilt) are recomputed.
     """
     fundamentals = persistence.read_latest_fundamentals(session, as_of=today)
-    if fundamentals.empty:
-        fundamental_by_symbol: dict[str, float] = {}
-    else:
-        scored = fundamental.score_fundamentals(fundamentals).set_index("symbol")
-        fundamental_by_symbol = scored["fundamental_score"].to_dict()
+    fundamental_cache: dict[bool, dict[str, float]] = {}
+
+    def _fundamental_scores(*, income_tilt: bool) -> dict[str, float]:
+        """Sector-relative fundamental scores, optionally dividend-tilted (Section 23).
+
+        Memoized on the tilt: two of the three stored profiles share the
+        untilted scoring, and ranking every sector twice for an identical
+        answer is pure waste in the job's last and heaviest step.
+        """
+        if income_tilt not in fundamental_cache:
+            if fundamentals.empty:
+                fundamental_cache[income_tilt] = {}
+            else:
+                scored = fundamental.score_fundamentals(
+                    fundamentals, income_tilt=income_tilt
+                ).set_index("symbol")
+                fundamental_cache[income_tilt] = dict(scored["fundamental_score"].to_dict())
+        return fundamental_cache[income_tilt]
 
     ohlcv = persistence.read_active_ohlcv(
         session, as_of=today, lookback_days=_COMPOSITE_PRICE_LOOKBACK_DAYS
@@ -743,6 +775,15 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
         raw_by_symbol[symbol] = {
             "technical": scoring.score_technical(prices) if prices is not None else None,
             "momentum": scoring.score_momentum(prices) if prices is not None else None,
+            # The conservative profile scores this category toward LOW volatility
+            # instead of raw momentum (Section 23), which is a different reading
+            # of the same prices, not a re-weighting -- so it has to be computed
+            # here rather than derived from the value above.
+            "momentum_low_vol": (
+                scoring.score_momentum(prices, prefer_low_volatility=True)
+                if prices is not None
+                else None
+            ),
             "analyst": analyst_raw,
             "sentiment": scoring.sentiment_to_raw(sentiment_by_symbol.get(symbol)),
             "industry_macro": scoring.tier2_thematic_tilt(symbol, tier2_news, theme_members),
@@ -751,12 +792,30 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
 
     if not raw_by_symbol:
         return 0
-    category_raw = pd.DataFrame.from_dict(raw_by_symbol, orient="index")
-    category_raw["fundamental"] = category_raw.index.map(fundamental_by_symbol)
+    shared = pd.DataFrame.from_dict(raw_by_symbol, orient="index")
 
-    result = scoring.build_composite(
-        category_raw, profile=_COMPOSITE_PROFILE, regime_score=regime_score
-    )
+    written = 0
+    for profile_name in _COMPOSITE_PROFILES:
+        profile = get_profile(profile_name)
+        category_raw = shared.drop(columns=["momentum_low_vol"]).copy()
+        if profile.prefer_low_volatility:
+            category_raw["momentum"] = shared["momentum_low_vol"]
+        category_raw["fundamental"] = category_raw.index.map(
+            _fundamental_scores(income_tilt=profile.income_tilt)
+        )
+        written += _store_composite(session, category_raw, profile_name, today, regime_score)
+    return written
+
+
+def _store_composite(
+    session: Session,
+    category_raw: pd.DataFrame,
+    profile_name: str,
+    today: date,
+    regime_score: float | None,
+) -> int:
+    """Score `category_raw` under one profile and append the `composite_scores` rows."""
+    result = scoring.build_composite(category_raw, profile=profile_name, regime_score=regime_score)
     if result.scores.empty:
         return 0
 

@@ -89,7 +89,7 @@ def _wired(engine: Engine) -> Iterator[None]:
 
     from lib import data as lib_data
 
-    for reader in (lib_data.screener_rows, lib_data.universe):
+    for reader in (lib_data.screener_rows, lib_data.universe, lib_data.market_regime):
         reader.clear()
     with patch("lib.data.get_session", fake_get_session):
         yield
@@ -130,3 +130,75 @@ class TestSectorFilterSurvivesTheRatingScheme:
         assert any("absolute rating cannot be derived" in w.value for w in at.warning)
         assert _offered_tickers(at) == ["CVX", "XOM"]
         assert "NVDA" not in _offered_tickers(at)
+
+
+class TestProfileTiltsReachTheScreener:
+    """Picking Income/Conservative must serve their own stored sub-scores.
+
+    Those two profiles re-SCORE two categories rather than re-weighting them
+    (Section 23), so the nightly stores separate rows for them. Until this
+    wiring existed the page always read the balanced ranking and applied the
+    profile's weights to it, which is a different -- and quietly wrong -- answer.
+    """
+
+    @pytest.fixture
+    def two_profile_engine(self, tmp_path: Path) -> Engine:
+        engine = create_engine(f"sqlite:///{tmp_path / 'profiles.db'}")
+        Base.metadata.create_all(engine)
+        with sessionmaker(bind=engine)() as session:
+            for symbol, sector, composite in _UNIVERSE:
+                session.add(
+                    Ticker(
+                        symbol=symbol,
+                        name=f"{symbol} Inc",
+                        sector=sector,
+                        asset_type="equity",
+                        is_active=True,
+                    )
+                )
+                for profile, offset in (("balanced", 0.0), ("conservative", 100.0)):
+                    # The conservative rows deliberately invert the ranking, so
+                    # "which profile's rows am I looking at" is unmistakable.
+                    score = composite if profile == "balanced" else offset - composite
+                    session.add(
+                        CompositeScore(
+                            symbol=symbol,
+                            date=AS_OF,
+                            profile=profile,
+                            composite_score=score,
+                            percentile_rank=score,
+                            rating="buy",
+                            data_confidence=80.0,
+                            **{f"{category}_score": score for category in CATEGORIES},
+                        )
+                    )
+            session.commit()
+        return engine
+
+    @staticmethod
+    def _run(engine: Engine, profile: str) -> AppTest:
+        with _wired(engine):
+            at = AppTest.from_file(SCREENER, default_timeout=120)
+            at.run()
+            next(s for s in at.selectbox if s.label == "Start from profile").set_value(profile)
+            at.run()
+        return at
+
+    @staticmethod
+    def _top_symbol(at: AppTest) -> str:
+        """The Compare picker defaults to the top two rows; take the first."""
+        compare = next(m for m in at.multiselect if m.label == "Tickers")
+        return str(compare.value[0]).split(" ")[0]
+
+    def test_balanced_and_conservative_rank_differently(self, two_profile_engine: Engine) -> None:
+        balanced = self._run(two_profile_engine, "balanced")
+        conservative = self._run(two_profile_engine, "conservative")
+        assert not balanced.exception and not conservative.exception
+        assert self._top_symbol(balanced) == "NVDA"  # highest balanced score
+        assert self._top_symbol(conservative) == "CVX"  # highest conservative score
+
+    def test_a_profile_with_no_stored_rows_says_so(self, legacy_engine: Engine) -> None:
+        # `legacy_engine` stores only the balanced profile.
+        at = self._run(legacy_engine, "conservative")
+        assert not at.exception
+        assert any("re-scores two categories" in w.value for w in at.warning)

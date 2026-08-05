@@ -81,6 +81,20 @@ def _seed_universe(session: Session) -> pd.DataFrame:
     )
 
 
+def _balanced(session: Session, symbol: str) -> CompositeScore:
+    """One symbol's stored row for the default profile.
+
+    Scoped explicitly: the nightly stores a ranking per profile in
+    `refresh_data._COMPOSITE_PROFILES`, so an unscoped query returns one row per
+    profile rather than the one these assertions mean.
+    """
+    return session.scalars(
+        select(CompositeScore).where(
+            CompositeScore.symbol == symbol, CompositeScore.profile == "balanced"
+        )
+    ).one()
+
+
 def test_composite_ranks_and_persists(session: Session) -> None:
     universe = _seed_universe(session)
     session.add(MarketRegime(date=AS_OF, regime_score=55.0, regime_label="neutral"))
@@ -90,9 +104,16 @@ def test_composite_ranks_and_persists(session: Session) -> None:
     session.flush()
 
     scores = {
-        c.symbol: c for c in session.scalars(select(CompositeScore).order_by(CompositeScore.symbol))
+        c.symbol: c
+        for c in session.scalars(
+            select(CompositeScore)
+            .where(CompositeScore.profile == "balanced")
+            .order_by(CompositeScore.symbol)
+        )
     }
-    assert written == 3
+    # Three symbols x the three stored profiles (balanced + the two Section-23
+    # profiles that genuinely re-score rather than merely re-weight).
+    assert written == 3 * len(refresh_data._COMPOSITE_PROFILES)
     assert set(scores) == {"AAA", "BBB", "CCC"}
     # AAA (uptrend + cheap fundamentals) outranks CCC (downtrend + expensive).
     assert scores["AAA"].composite_score > scores["BBB"].composite_score
@@ -143,11 +164,11 @@ def test_sentiment_and_analyst_flow_into_the_composite(session: Session) -> None
     refresh_data.refresh_composite_scores(session, universe, AS_OF)
     session.flush()
 
-    aaa = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "AAA")).one()
+    aaa = _balanced(session, "AAA")
     assert aaa.sentiment_score is not None  # sentiment category now contributes
     assert aaa.analyst_score is not None
     # AAA has more categories covered than its peers -> higher data_confidence.
-    bbb = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "BBB")).one()
+    bbb = _balanced(session, "BBB")
     assert aaa.data_confidence > bbb.data_confidence
 
 
@@ -169,8 +190,8 @@ def test_tier2_industry_news_flows_in_via_baskets(session: Session) -> None:
     refresh_data.refresh_composite_scores(session, universe, AS_OF)
     session.flush()
 
-    aaa = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "AAA")).one()
-    ccc = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "CCC")).one()
+    aaa = _balanced(session, "AAA")
+    ccc = _balanced(session, "CCC")
     assert aaa.industry_macro_score is not None  # AAA in the affected basket
     assert ccc.industry_macro_score is None  # CCC in no basket -> no industry signal
 
@@ -192,7 +213,7 @@ def test_scoring_is_point_in_time(session: Session) -> None:
     refresh_data.refresh_composite_scores(session, universe, AS_OF)
     session.flush()
 
-    aaa = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "AAA")).one()
+    aaa = _balanced(session, "AAA")
     assert aaa.sentiment_score is None  # the future sentiment was correctly excluded
 
 
@@ -201,13 +222,17 @@ def test_composite_write_is_append_only(session: Session) -> None:
     session.flush()
     refresh_data.refresh_composite_scores(session, universe, AS_OF)
     session.flush()
-    first = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "AAA")).one()
+    first = _balanced(session, "AAA")
     original = first.composite_score
 
     # A same-day re-run must not overwrite the first ranking (point-in-time).
     refresh_data.refresh_composite_scores(session, universe, AS_OF)
     session.flush()
-    rows = session.scalars(select(CompositeScore).where(CompositeScore.symbol == "AAA")).all()
+    rows = session.scalars(
+        select(CompositeScore).where(
+            CompositeScore.symbol == "AAA", CompositeScore.profile == "balanced"
+        )
+    ).all()
     assert len(rows) == 1
     assert rows[0].composite_score == original
 
@@ -220,3 +245,97 @@ def test_read_latest_fundamentals_is_point_in_time(session: Session) -> None:
     latest = persistence.read_latest_fundamentals(session, as_of=AS_OF)
     # As of the 22nd, the future 25th snapshot must not be the "latest".
     assert latest.set_index("symbol").loc["AAA", "pe"] == 10.0
+
+
+class TestSection23ProfileTiltsAreActuallyApplied:
+    """Income and Conservative must differ from Balanced by more than weights.
+
+    Section 23 gives these two a non-weight tilt -- income ranks fundamentals
+    against a dividend-leaning sector config, conservative scores the momentum
+    category toward low volatility rather than high return. Both flags existed
+    on `InvestorProfile` and were read by nothing, so picking either profile in
+    the Screener silently applied only the weight half of what it advertised.
+    These tests assert the tilts reach the stored rows.
+    """
+
+    @staticmethod
+    def _seed(session: Session) -> pd.DataFrame:
+        """Two names that the tilts should rank in OPPOSITE orders.
+
+        GROW: steep uptrend (high momentum, high volatility), no dividend.
+        SAFE: flat-ish drift (low momentum, low volatility), fat dividend.
+        """
+        rng = np.random.default_rng(0)
+        grow = list(100 * np.exp(np.cumsum(rng.normal(0.004, 0.030, 260))))
+        safe = list(100 * np.exp(np.cumsum(rng.normal(0.0002, 0.004, 260))))
+        specs = [
+            ("GROW", grow, {"pe": 40.0, "roe": 0.30, "div_yield": 0.0}),
+            ("SAFE", safe, {"pe": 18.0, "roe": 0.10, "div_yield": 0.06}),
+        ]
+        for symbol, closes, funda in specs:
+            session.add(
+                Ticker(
+                    symbol=symbol,
+                    name=f"{symbol} Inc.",
+                    sector="Information Technology",
+                    asset_type="equity",
+                    is_active=True,
+                )
+            )
+            _seed_prices(session, symbol, closes)
+            session.add(
+                FundamentalsSnapshot(symbol=symbol, as_of_date=AS_OF - timedelta(days=3), **funda)
+            )
+        session.flush()
+        return pd.DataFrame(
+            [{"symbol": s, "name": s, "sector": "Information Technology"} for s, _, _ in specs]
+        )
+
+    @staticmethod
+    def _stored(session: Session, profile: str) -> dict[str, CompositeScore]:
+        return {
+            row.symbol: row
+            for row in session.scalars(
+                select(CompositeScore).where(CompositeScore.profile == profile)
+            )
+        }
+
+    def test_all_three_profiles_are_stored(self, session: Session) -> None:
+        refresh_data.refresh_composite_scores(session, self._seed(session), AS_OF)
+        session.flush()
+        stored = set(session.scalars(select(CompositeScore.profile)))
+        assert stored == set(refresh_data._COMPOSITE_PROFILES)
+
+    def test_conservative_scores_momentum_toward_low_volatility(self, session: Session) -> None:
+        refresh_data.refresh_composite_scores(session, self._seed(session), AS_OF)
+        session.flush()
+        balanced = self._stored(session, "balanced")
+        conservative = self._stored(session, "conservative")
+        # The volatile riser wins the momentum category outright under the
+        # default reading, and loses it outright when the category is scored
+        # toward calm instead.
+        assert balanced["GROW"].momentum_score > balanced["SAFE"].momentum_score
+        assert conservative["GROW"].momentum_score < conservative["SAFE"].momentum_score
+        # ...and the stored raw value is the negated volatility, not the
+        # risk-adjusted return, so the tilt is visible in the inputs too.
+        assert conservative["GROW"].momentum_raw < 0
+        assert conservative["GROW"].momentum_raw != balanced["GROW"].momentum_raw
+
+    def test_income_scores_fundamentals_toward_dividend_yield(self, session: Session) -> None:
+        refresh_data.refresh_composite_scores(session, self._seed(session), AS_OF)
+        session.flush()
+        balanced = self._stored(session, "balanced")
+        income = self._stored(session, "income")
+        # SAFE yields 6% against nothing, but is worse on every other metric.
+        # Weighting yield at 30% of the fundamental score has to move it up.
+        assert income["SAFE"].fundamental_raw > balanced["SAFE"].fundamental_raw
+        assert income["GROW"].fundamental_raw < balanced["GROW"].fundamental_raw
+
+    def test_a_weights_only_profile_is_deliberately_not_stored(self, session: Session) -> None:
+        # `value`/`growth`/`momentum_active` differ from balanced only in
+        # weights, and the stored sub-scores are weight-independent -- so the
+        # Screener re-weights to them client-side and storing them would be
+        # storing the same seven numbers a second time.
+        refresh_data.refresh_composite_scores(session, self._seed(session), AS_OF)
+        session.flush()
+        assert self._stored(session, "growth") == {}
