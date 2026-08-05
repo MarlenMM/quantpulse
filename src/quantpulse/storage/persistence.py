@@ -169,6 +169,30 @@ def upsert_short_interest(session: Session, records: Sequence[dict[str, Any]]) -
     return _append_only(session, ShortInterest, records)
 
 
+def upsert_pattern_signals(session: Session, records: Sequence[dict[str, Any]]) -> int:
+    """Insert detected chart patterns, skipping ones already recorded (Section 7.1).
+
+    `pattern_signals` has an autoincrement id, so the primary key can never
+    collide and `_append_only`'s bare `ON CONFLICT DO NOTHING` would duplicate
+    every formation on every run. The dedupe key is the table's own uniqueness
+    constraint -- `(symbol, date, pattern_type)`, which is exactly what
+    `patterns.detect_chart_patterns` stamps each formation with -- so a nightly
+    that re-detects last week's double top recognises it rather than logging it
+    again. Targeting the columns rather than the constraint name matters:
+    databases created before the retroactive `naming_convention` change carry
+    the same constraint unnamed.
+    """
+    if not records:
+        return 0
+    stmt = (
+        sqlite_insert(PatternSignal)
+        .values(list(records))
+        .on_conflict_do_nothing(index_elements=["symbol", "date", "pattern_type"])
+    )
+    session.execute(stmt)
+    return len(records)
+
+
 # --------------------------------------------------------------------------- #
 # Readers (used now by IV-rank + the Market Regime Index; extended in Phase 6)
 # --------------------------------------------------------------------------- #

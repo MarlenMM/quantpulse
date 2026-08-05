@@ -22,6 +22,7 @@ from quantpulse.storage.models import (
     IndexMembershipHistory,
     MarketRegime,
     OptionsSignal,
+    PatternSignal,
     PriceHistory,
     RefreshLog,
     Ticker,
@@ -958,3 +959,71 @@ class TestPooledHitRateWindows:
         for (_model, _h), (rate, windows) in self._rates(frames, (5, 20, 63, 252)).items():
             assert 0.0 <= rate <= 1.0
             assert windows >= bt.MIN_GRADED_WINDOWS
+
+
+class TestPatternSignalsAreProduced:
+    """`pattern_signals` had a table, a reader and a panel in both front ends -- and no writer.
+
+    `analysis/patterns.py` (head-and-shoulders, double top/bottom, triangles/
+    wedges/channels, cup-and-handle) was never called by anything, so the
+    "Detected patterns" panel was permanently empty and the README's "4 pattern
+    families detected" described a library rather than the app.
+    """
+
+    @staticmethod
+    def _seed(session: Session, symbol: str = "AAA") -> pd.DataFrame:
+        session.add(
+            Ticker(symbol=symbol, name="Alpha", sector="Tech", asset_type="equity", is_active=True)
+        )
+        # A deliberate double top: rise, peak, dip, matching peak, break down.
+        shape = (
+            list(np.linspace(100, 140, 60))
+            + list(np.linspace(140, 118, 30))
+            + list(np.linspace(118, 139, 30))
+            + list(np.linspace(139, 105, 40))
+        )
+        for offset, close in enumerate(shape):
+            session.add(
+                PriceHistory(
+                    symbol=symbol,
+                    date=date(2026, 7, 22) - timedelta(days=len(shape) - offset),
+                    open=close,
+                    high=close * 1.005,
+                    low=close * 0.995,
+                    close=close,
+                    adj_close=close,
+                    volume=1_000_000,
+                )
+            )
+        session.flush()
+        return pd.DataFrame([{"symbol": symbol, "name": "Alpha", "sector": "Tech"}])
+
+    def test_detected_patterns_are_stored(self, session: Session) -> None:
+        universe = self._seed(session)
+        written = refresh_data.refresh_pattern_signals(session, universe, date(2026, 7, 22))
+        session.flush()
+        rows = session.scalars(select(PatternSignal)).all()
+        assert written > 0
+        assert rows
+        assert {r.direction for r in rows} <= {"bullish", "bearish", "neutral"}
+        assert all(0.0 <= r.confidence <= 100.0 for r in rows)
+
+    def test_a_rerun_does_not_duplicate_the_same_formation(self, session: Session) -> None:
+        # `pattern_signals` has an autoincrement id, so a bare ON CONFLICT DO
+        # NOTHING would happily insert every formation again every night.
+        universe = self._seed(session)
+        refresh_data.refresh_pattern_signals(session, universe, date(2026, 7, 22))
+        session.flush()
+        before = session.scalars(select(PatternSignal)).all()
+        refresh_data.refresh_pattern_signals(session, universe, date(2026, 7, 22))
+        session.flush()
+        after = session.scalars(select(PatternSignal)).all()
+        assert len(after) == len(before)
+
+    def test_no_price_history_writes_nothing_rather_than_raising(self, session: Session) -> None:
+        session.add(
+            Ticker(symbol="ZZZ", name="Zed", sector="Tech", asset_type="equity", is_active=True)
+        )
+        session.flush()
+        universe = pd.DataFrame([{"symbol": "ZZZ", "name": "Zed", "sector": "Tech"}])
+        assert refresh_data.refresh_pattern_signals(session, universe, date(2026, 7, 22)) == 0
