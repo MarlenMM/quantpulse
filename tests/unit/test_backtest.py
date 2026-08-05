@@ -598,3 +598,63 @@ class TestPayoffRatio:
         result = bt.backtest_strategy(panel, signal_fn=lambda as_of, hist: {"AAA": 1.0, "BBB": 0.5})
         assert result is not None
         assert result.payoff_ratio is None or result.payoff_ratio > 0
+
+
+class TestMostlyCashRuns:
+    """A run that sat in cash is not a track record, even if it traded once.
+
+    Found on real data: three years of prices with an index-membership history
+    only a few days deep made `eligible()` return an empty universe for 38 of 39
+    monthly periods. The strategy held cash throughout and took one position at
+    the very end -- and the run stored Sharpe 0.555 with a 0.99% CAGR against a
+    29.3% benchmark, which reads as "we underperformed" rather than "nothing was
+    tested". `avg_turnover` was 1/39, so the existing "never traded" guard
+    passed it.
+    """
+
+    @staticmethod
+    def _panel(n_days: int = 400) -> pd.DataFrame:
+        idx = pd.date_range("2024-01-01", periods=n_days, freq="B")
+        rng = np.random.default_rng(11)
+        data = {
+            sym: 100 * np.exp(np.cumsum(rng.normal(0.0006, 0.01, n_days)))
+            for sym in ("AAA", "BBB", "CCC", "DDD", "EEE")
+        }
+        return pd.DataFrame(data, index=idx)
+
+    def test_cash_periods_are_counted_separately_from_all_periods(self) -> None:
+        panel = self._panel()
+        schedule = bt.rebalance_dates(panel.index, "monthly")
+        # Eligible only in the final period -- exactly the shallow-membership shape.
+        last = schedule[-2].date()
+
+        result = bt.backtest_strategy(
+            panel,
+            signal_fn=lambda as_of, hist: dict.fromkeys(panel.columns, 1.0),
+            eligible=lambda as_of: set(panel.columns) if as_of >= last else set(),
+            schedule=schedule,
+        )
+        assert result is not None
+        assert result.n_periods > 10
+        assert result.invested_periods == 1
+        assert result.invested_fraction == pytest.approx(1 / result.n_periods)
+        # The trap itself: a long run of exact-zero cash periods has no variance,
+        # so Sharpe comes out looking perfectly respectable.
+        assert result.sharpe is not None
+        assert result.avg_turnover > 0  # the old "never traded" guard passes
+
+    def test_a_fully_invested_run_reports_every_period_invested(self) -> None:
+        panel = self._panel()
+        result = bt.backtest_strategy(
+            panel, signal_fn=lambda as_of, hist: dict.fromkeys(panel.columns, 1.0)
+        )
+        assert result is not None
+        assert result.invested_periods == result.n_periods
+        assert result.invested_fraction == 1.0
+
+    def test_invested_fraction_is_zero_when_nothing_was_ever_held(self) -> None:
+        panel = self._panel()
+        result = bt.backtest_strategy(panel, signal_fn=lambda as_of, hist: {})
+        assert result is not None
+        assert result.invested_periods == 0
+        assert result.invested_fraction == 0.0

@@ -1240,6 +1240,25 @@ def refresh_backtest(session: Session, today: date) -> int:
             "cash throughout; not storing a run in which nothing was traded"
         )
         return 0
+    if result.invested_fraction < backtest.MIN_INVESTED_FRACTION:
+        # "Never traded" is not the only way for a run to describe nothing. A
+        # run that was in cash for most of its periods -- typically because the
+        # membership history behind `eligible()` is shallower than the price
+        # panel, so the point-in-time universe comes back empty -- still reports
+        # a respectable Sharpe, because cash periods are exact zeros and zeros
+        # have no variance. Measured here: 38 of 39 periods in cash produced
+        # Sharpe 0.555 and a 0.99% CAGR against a 29.3% benchmark.
+        logger.warning(
+            "refresh_backtest: the strategy held a position in only %d of %d periods "
+            "(%.0f%%, below the %.0f%% needed). This usually means index membership "
+            "history is shallower than the backtest window, so the point-in-time "
+            "universe was empty; not storing a run that mostly describes cash",
+            result.invested_periods,
+            result.n_periods,
+            result.invested_fraction * 100,
+            backtest.MIN_INVESTED_FRACTION * 100,
+        )
+        return 0
     # Bracket the headline metrics with block-bootstrap confidence intervals so
     # the stored track record reports whether the result is distinguishable from
     # luck, not just a flattering point estimate (Section 7.6). A run too short
