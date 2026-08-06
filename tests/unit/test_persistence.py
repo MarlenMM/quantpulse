@@ -60,6 +60,34 @@ class TestAppendOnly:
         stored = session.scalars(select(SentimentScore)).one()
         assert stored.sentiment_score == 0.4  # point-in-time: first write preserved
 
+    def test_reports_rows_actually_inserted_not_rows_offered(self, session: Session) -> None:
+        """A re-run that stores nothing must report nothing.
+
+        `ON CONFLICT DO NOTHING` skips a row whose key already exists, so
+        recomputing an already-written date is a silent no-op. Returning
+        `len(records)` made that indistinguishable from a real write -- the
+        nightly's `refresh_log.rows_updated` would claim a full batch on a run
+        that changed not one value, which is exactly how a stalled derived step
+        hides. The partially-conflicting batch below is the case that matters:
+        two of the four dates are new, so the honest answer is 2, not 4.
+        """
+        base = {
+            "symbol": "AAPL",
+            "source": "tier1_aggregate",
+            "sentiment_score": 0.4,
+            "mention_volume": 3,
+            "total_weight": 2.1,
+        }
+        rows = [{**base, "date": date(2026, 7, day)} for day in (1, 2, 3, 4)]
+
+        assert persistence.upsert_sentiment_scores(session, rows[:2]) == 2
+        # Re-offering the same two writes nothing at all.
+        assert persistence.upsert_sentiment_scores(session, rows[:2]) == 0
+        # Two already stored, two genuinely new.
+        assert persistence.upsert_sentiment_scores(session, rows) == 2
+        session.flush()
+        assert len(session.scalars(select(SentimentScore)).all()) == 4
+
     def test_news_events_dedupe_on_article_id(self, session: Session) -> None:
         article = {
             "article_id": persistence.article_id_for("https://x.com/a", fallback="t"),

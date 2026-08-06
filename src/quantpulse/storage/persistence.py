@@ -24,10 +24,10 @@ import hashlib
 import logging
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -95,13 +95,38 @@ def article_id_for(source_url: str | None, *, fallback: str) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
+def _inserted(session: Session, stmt: Any, offered: int) -> int:
+    """Rows an INSERT actually wrote, falling back to `offered` if unreported.
+
+    `Session.execute` is typed as returning a plain `Result`, but a DML
+    statement always yields a `CursorResult`, which is what carries `rowcount`.
+    A driver that declines to report one returns -1.
+    """
+    result = cast(CursorResult[Any], session.execute(stmt))
+    return offered if result.rowcount < 0 else int(result.rowcount)
+
+
 def _append_only(session: Session, model: type[Any], records: Sequence[dict[str, Any]]) -> int:
-    """Insert `records`, skipping any whose primary key already exists (Section 6.8)."""
+    """Insert `records`, skipping any whose primary key already exists (Section 6.8).
+
+    Returns the number of rows **actually inserted**, not the number offered.
+    The distinction is the whole point of an append-only writer: `ON CONFLICT DO
+    NOTHING` silently skips a row whose key is already present, so recomputing a
+    date that has already been written is a complete no-op. Reporting
+    `len(records)` made that no-op indistinguishable from a successful write --
+    the nightly's `refresh_log.rows_updated` would claim 503 rows on a re-run
+    that stored nothing, and a script re-deriving a historical date would print
+    a confident row count while changing not one value.
+
+    `rowcount` after an `ON CONFLICT DO NOTHING` reports exactly the rows the
+    database accepted, including in a partially-conflicting batch. A driver that
+    declines to report one returns -1; falling back to `len(records)` there
+    keeps the old behaviour rather than reporting a bogus negative.
+    """
     if not records:
         return 0
     stmt = sqlite_insert(model).values(list(records)).on_conflict_do_nothing()
-    session.execute(stmt)
-    return len(records)
+    return _inserted(session, stmt, len(records))
 
 
 # --------------------------------------------------------------------------- #
@@ -181,6 +206,9 @@ def upsert_pattern_signals(session: Session, records: Sequence[dict[str, Any]]) 
     again. Targeting the columns rather than the constraint name matters:
     databases created before the retroactive `naming_convention` change carry
     the same constraint unnamed.
+
+    Like `_append_only`, this reports the rows actually inserted -- a nightly
+    that re-detects last week's double top adds nothing and must say so.
     """
     if not records:
         return 0
@@ -189,8 +217,7 @@ def upsert_pattern_signals(session: Session, records: Sequence[dict[str, Any]]) 
         .values(list(records))
         .on_conflict_do_nothing(index_elements=["symbol", "date", "pattern_type"])
     )
-    session.execute(stmt)
-    return len(records)
+    return _inserted(session, stmt, len(records))
 
 
 # --------------------------------------------------------------------------- #
