@@ -385,14 +385,21 @@ def main() -> None:
         return
 
     compare = filtered[filtered["symbol"].isin(picks)].set_index("symbol")
+    # Every cell goes through `format_score`, including the numeric sub-scores.
+    # Each column here holds scores *and* the Rating/Coverage strings, so the
+    # column dtype is object and neither a Styler format nor a NumberColumn
+    # applies -- pandas falls back to repr, which printed a sub-score as
+    # "98.80715705765407" (fourteen decimals of precision the score does not
+    # have) and a missing category as "<NA>" instead of the em dash used
+    # everywhere else in both front ends.
     table = pd.DataFrame(
         {
             symbol: {
-                humanize(category): compare.loc[symbol, SCORE_COLUMNS[category]]
+                humanize(category): format_score(compare.loc[symbol, SCORE_COLUMNS[category]])
                 for category in CATEGORIES
             }
             | {
-                "Composite": compare.loc[symbol, "custom_score"],
+                "Composite": format_score(compare.loc[symbol, "custom_score"]),
                 "Rating": rating_label(compare.loc[symbol, "rating"]),
                 "Coverage": format_score(compare.loc[symbol, "data_confidence"], digits=0),
             }
