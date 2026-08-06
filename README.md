@@ -18,8 +18,8 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,345** (unit, integration, and property-based via Hypothesis), all passing |
-| Core engine code | **~16,400** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
+| Automated tests | **1,357** (unit, integration, and property-based via Hypothesis), all passing |
+| Core engine code | **~16,500** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
 | Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** — four differ by category weights alone, and two (income, conservative) genuinely re-score a category, so the nightly stores their rankings separately |
@@ -27,7 +27,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 | Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, and a Monte Carlo fan chart. The first three are graded out-of-sample against the naive baseline; Monte Carlo deliberately is not, because it simulates the same random walk the baseline evaluates in closed form (grading it would be grading the baseline against itself) |
 | Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
 | Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, and Black-Litterman driven by the app's own composite scores, each with a concrete buy/sell trade list |
-| Front ends | **2** — a 7-page Streamlit app (full app, incl. Portfolio Manager and the LLM narration layer) and a 5-page React + TypeScript SPA over a 12-endpoint read-only FastAPI. The two share every number: both read the same `storage.persistence` functions, and the React screener's client-side re-weighting was checked against Streamlit's across all 503 names. The SPA omits only the LLM narration and the Portfolio Manager, which need write access and an API key the read-only API deliberately does not have |
+| Front ends | **2** — a 7-page Streamlit app (full app, incl. Portfolio Manager and the LLM narration layer) and a 5-page React + TypeScript SPA over a 12-endpoint read-only FastAPI. The two share every number: both read the same `storage.persistence` functions, and the React screener's client-side re-weighting was checked against Streamlit's across all 503 names. The SPA omits the LLM narration and the Portfolio Manager, which need write access and an API key the read-only API deliberately does not have; it also does not yet expose the Screener's investor-profile presets and rating-scheme toggle, or the Track Record's Kelly position sizing, all of which are Streamlit-only today |
 | Glossary terms | **71**, across 8 categories — one definition shared by every tooltip and both front ends |
 | Required budget | **$0** — every data source, model, and hosting option used is free-tier or open-source |
 
