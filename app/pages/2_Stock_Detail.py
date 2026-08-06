@@ -648,13 +648,24 @@ def main() -> None:
                     "vs naive",
                     "Windows",
                 ]
-            ].rename(
+            ]
+            .rename(
                 columns={
                     "horizon_days": "Horizon (days)",
                     "point_price": "Target",
                     "lower_price": "Low",
                     "upper_price": "High",
                 }
+            )
+            # These three are dollar prices and must be printed like every other
+            # price in either front end -- `format_price` here, `formatPrice` in
+            # React. Without this they render as raw float64 (282.7719 beside
+            # 287.08, since Streamlit drops trailing zeros), which is four
+            # decimals of precision a forecast does not have, ragged column
+            # alignment, no currency marker, and a visible disagreement with the
+            # React page showing "$282.77" for the very same stored row.
+            .style.format(
+                {"Target": "${:,.2f}", "Low": "${:,.2f}", "High": "${:,.2f}"}, na_rep="—"
             ),
             hide_index=True,
             width="stretch",
