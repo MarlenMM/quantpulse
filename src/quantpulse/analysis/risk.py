@@ -68,6 +68,7 @@ from quantpulse.analysis.backtest import TRADING_DAYS_PER_YEAR, max_drawdown, sh
 __all__ = [
     "TRADING_DAYS_PER_YEAR",
     "DEFAULT_VAR_CONFIDENCE",
+    "MARKET_PANEL_DAYS",
     "sharpe_ratio",
     "max_drawdown",
     "to_returns",
@@ -97,6 +98,18 @@ __all__ = [
 # (99% is a regulatory-capital convention and needs ~5x the history to estimate
 # empirically -- see `_min_historical_var_obs`).
 DEFAULT_VAR_CONFIDENCE = 0.95
+
+# Calendar days of price history to load when building the equal-weight market
+# proxy a beta is regressed against (~420 days is a little over one trading
+# year, which leaves room for holidays and gaps).
+#
+# One constant, read by every surface that measures a beta, because three
+# independent copies is exactly how they drifted: the Streamlit Stock Detail
+# page borrowed the Dashboard's 150-day sector-rotation window and reported
+# AIZ's beta as 0.46 over 103 shared bars, while the React page read the API's
+# 420-day window and reported 0.57 over 288 -- the same stock, the same
+# database, the same day, two different published numbers.
+MARKET_PANEL_DAYS = 420
 
 # Minimum observations before an estimator will speak at all. A month of bars is
 # the floor for a volatility/Sortino estimate; a beta regressed on fewer than a

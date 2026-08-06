@@ -194,7 +194,15 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
     if returns.empty:
         return
 
-    market = risk.equal_weight_market_returns(data.universe_panel())
+    # `universe_panel()`'s 150-day default exists for the Dashboard's
+    # one-month sector-rotation read (its own docstring says so) and was never
+    # meant to size a beta regression. Borrowing it here meant this page
+    # regressed AIZ over 103 shared bars and reported beta 0.46 (R² 0.06),
+    # while the React page -- reading the same database through the API's
+    # 420-day window -- reported 0.57 (R² 0.07) for the same stock on the same
+    # day. Two front ends must not publish different betas, so both now use the
+    # longer window, which is also the one the Portfolio page already used.
+    market = risk.equal_weight_market_returns(data.universe_panel(risk.MARKET_PANEL_DAYS))
     stored_iv = data.options_signals(symbol)
     profile = risk.stock_risk_profile(
         returns,

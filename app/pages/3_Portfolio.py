@@ -310,7 +310,16 @@ def render_risk(frame: pd.DataFrame, cash: float) -> pd.DataFrame:
         st.caption("None of the holdings have usable return history yet.")
         return panel
 
-    market = risk.equal_weight_market_returns(panel)
+    # The market proxy must come from the WHOLE universe, not from `panel` --
+    # `panel` holds only this portfolio's own symbols, so building the proxy
+    # from it regressed the portfolio against an equal-weight version of
+    # itself. For an equal-weight portfolio that is beta 1.0000 with R^2
+    # 1.0000 *exactly*, and an R^2 of exactly 1 against "the market" is not a
+    # number any real regression produces. Measured on five real names from the
+    # demo database: 1.0000 (R^2 1.0000) the old way, 0.448 (R^2 0.238) against
+    # the actual universe. Every other statistic here is correctly derived from
+    # the holdings' own returns; only the proxy was wrong.
+    market = risk.equal_weight_market_returns(data.universe_panel(risk.MARKET_PANEL_DAYS))
     summary = risk.portfolio_risk(
         returns,
         usable,
