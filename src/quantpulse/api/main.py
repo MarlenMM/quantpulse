@@ -77,7 +77,12 @@ _DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 # Trailing window for the equal-weight market proxy that beta regresses against
 # (no S&P 500 series is ingested anywhere), and for the commodity/currency
 # series behind the Section 28 overlay's "last ~3 months" reading.
-_RISK_PANEL_DAYS = 420
+#
+# Read from `risk` rather than redeclared: this page and the Streamlit Stock
+# Detail page must regress against the same window or they publish different
+# betas for the same stock, which is exactly what happened while there were
+# three independent copies of the number.
+_RISK_PANEL_DAYS = risk.MARKET_PANEL_DAYS
 _MACRO_OVERLAY_DAYS = 120
 # Rotation is a one-month relative-strength read, so a short panel is the right
 # cost/benefit -- the same window `app/lib/data.universe_panel` uses.
