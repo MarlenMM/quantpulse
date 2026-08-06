@@ -30,3 +30,37 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  # The React SPA is ~1,900 lines of user-facing TypeScript and had no gate at
+  # all: CI ran only the Python steps above, so a type error or a broken build
+  # in `frontend/` reached main unnoticed, and a Dependabot bump to a frontend
+  # dependency was "checked" by a job that never installed it. This is the same
+  # gap that left `app/` un-type-checked until it was added to mypy -- a whole
+  # tree of shipped code outside every gate.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` rather than `npm install`, so the committed lockfile is what
+      # gets built -- the same discipline `uv sync --locked` enforces above.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit
+        run: npm audit --audit-level=high
