@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Playwright output — reports and traces are per-run artifacts, not source.
+test-results/
+playwright-report/
