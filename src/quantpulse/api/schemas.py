@@ -107,6 +107,49 @@ class ScreenerResponse(BaseModel):
     rows: list[ScreenerRow]
 
 
+class InvestorProfileModel(BaseModel):
+    """One of Section 23's presets, with everything a client needs to offer it.
+
+    `rescores` is the load-bearing field. Four of the six presets differ from
+    balanced by category *weights* alone, so a client holding the stored
+    weight-independent sub-scores can apply them locally and instantly. The
+    other two genuinely re-score a category -- income ranks fundamentals against
+    a dividend-leaning sector config, conservative scores momentum toward low
+    volatility -- and neither can be recovered by re-weighting a finished
+    sub-score, so the nightly stores their rankings separately and a client must
+    *fetch* them rather than compute them. A client that treated all six alike
+    would silently show balanced sub-scores under an income label.
+    """
+
+    name: str
+    description: str
+    weights: dict[str, float]
+    rescores: bool
+
+
+class AbsoluteRating(BaseModel):
+    """One symbol's absolute-mode score and rating (see `/api/screener/absolute`)."""
+
+    symbol: str
+    composite_score: float
+    rating: str
+
+
+class AbsoluteRatingResponse(BaseModel):
+    """Absolute-mode ratings for the scored universe, or an honest refusal.
+
+    `available` is false when the stored rows predate the raw category columns:
+    an absolute rating genuinely cannot be recovered from a percentile, and
+    saying so is the honest option -- quietly returning relative ratings under
+    an "absolute" label would be the exact mislabelling the mode exists to stop.
+    """
+
+    available: bool
+    profile: str
+    rating_mode: str = "absolute"
+    rows: list[AbsoluteRating] = []
+
+
 class RatingChange(BaseModel):
     symbol: str
     previous_rating: str
@@ -330,3 +373,13 @@ class BacktestRun(BaseModel):
     benchmark_sharpe: float | None = None
     avg_turnover: float | None = None
     assumed_txn_cost: float
+    # Section 27's fractional-Kelly sizing. `payoff_ratio` is the stored mean
+    # win / mean loss; `kelly_fraction` is computed server-side by
+    # `optimization.kelly_position_fraction` rather than in the client, so the
+    # two front ends cannot arrive at different position sizes from the same
+    # track record -- the same one-implementation rule that keeps the
+    # Strong-Buy cutoff out of TypeScript. `None` when the run has no losing
+    # period (an undefined payoff ratio would feed Kelly a bet it thinks
+    # cannot lose) or when there is no positive edge to size.
+    payoff_ratio: float | None = None
+    kelly_fraction: float | None = None

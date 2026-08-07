@@ -202,3 +202,26 @@ def test_streamlit_and_api_report_the_same_beta(engine: Engine) -> None:
     assert page_r2 == pytest.approx(round(api_r2, 2), abs=0.005), (
         f"Stock Detail shows R² {page_r2} but the API reports {api_r2:.4f} for {symbol}"
     )
+
+
+def test_stock_detail_shows_sharpe_beside_sortino(engine: Engine) -> None:
+    """Sharpe was computed, typed, served over the API -- and rendered nowhere.
+
+    `stock_risk_profile` produces both ratios under one shared floor, the
+    Portfolio and Track Record pages both show a Sharpe, `RiskProfileModel`
+    carries it, and the React page's own caption told the reader it was being
+    withheld for sample-size reasons. Only the metric itself was missing, on
+    both front ends.
+    """
+    with _streamlit_wired(engine):
+        at = AppTest.from_file(STOCK_DETAIL, default_timeout=180)
+        at.run()
+    assert not at.exception
+
+    labels = [m.label for m in at.metric]
+    assert "Sharpe" in labels, f"no Sharpe metric on Stock Detail; showed {labels}"
+    assert "Sortino" in labels, "Sortino disappeared"
+
+    # Both share one floor, so with a year of history neither may be a dash.
+    values = {m.label: str(m.value) for m in at.metric}
+    assert values["Sharpe"] != "—", "Sharpe rendered as a dash despite ample history"

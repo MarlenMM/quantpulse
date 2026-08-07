@@ -48,6 +48,11 @@ def _seed(session: Session) -> None:
                 rating=rating,
                 percentile_rank=score,
                 data_confidence=90.0,
+                # Absolute mode re-scores from the stored *raw* category values;
+                # without them it correctly declines, so they have to be seeded
+                # for that path to be exercised at all.
+                technical_raw=0.8,
+                fundamental_raw=0.6,
             )
         )
         session.add(
@@ -57,6 +62,8 @@ def _seed(session: Session) -> None:
                 profile="balanced",
                 composite_score=40.0,
                 technical_score=30.0,
+                technical_raw=0.3,
+                fundamental_raw=0.2,
                 rating="sell",
                 percentile_rank=20.0,
                 data_confidence=55.0,
@@ -140,6 +147,8 @@ def _seed(session: Session) -> None:
             sharpe_ci_high=1.3,
             ci_confidence_level=0.9,
             assumed_txn_cost=0.001,
+            win_rate=0.6,
+            payoff_ratio=1.5,
         )
     )
     session.commit()
@@ -437,3 +446,91 @@ class TestParityWithStreamlit:
         paths = client.get("/openapi.json").json()["paths"]
         methods = {m.upper() for spec in paths.values() for m in spec}
         assert methods == {"GET"}
+
+
+class TestParitySurface:
+    """Endpoints added so the React client can reach what Streamlit already could.
+
+    Each of these existed as a capability with no route: the investor-profile
+    presets (the API accepted a `profile` but never told a client which ones
+    exist), absolute-mode ratings, and the Kelly position size -- whose
+    `payoff_ratio` was a stored column the API simply never sent.
+    """
+
+    def test_profiles_lists_every_preset_with_its_weights(self, client: TestClient) -> None:
+        profiles = client.get("/api/profiles").json()
+        names = [p["name"] for p in profiles]
+        assert names[0] == "balanced", "balanced is the onboarding default and must lead"
+        assert set(names) == {
+            "balanced",
+            "value",
+            "growth",
+            "income",
+            "momentum_active",
+            "conservative",
+        }
+        for profile in profiles:
+            assert profile["weights"], f"{profile['name']} carries no weights"
+            assert abs(sum(profile["weights"].values()) - 1.0) < 1e-9
+
+    def test_only_the_two_rescoring_profiles_are_flagged(self, client: TestClient) -> None:
+        """The flag a client needs to know whether it may re-weight locally.
+
+        Income and conservative genuinely re-score a category, so their rankings
+        must be *fetched*; the other four differ by weights alone and can be
+        applied to rows already in memory. A client that treated all six alike
+        would show balanced sub-scores under an income label.
+        """
+        flags = {p["name"]: p["rescores"] for p in client.get("/api/profiles").json()}
+        assert flags == {
+            "balanced": False,
+            "value": False,
+            "growth": False,
+            "income": True,
+            "momentum_active": False,
+            "conservative": True,
+        }
+
+    def test_absolute_ratings_are_keyed_by_real_symbols(self, client: TestClient) -> None:
+        """`build_composite` returns a positional index, so the symbol is a column.
+
+        Reading it from `iterrows()`'s index instead yielded "0", "1", "2" --
+        which type-checks, serializes cleanly, and is wrong. Only looking at the
+        response against real data caught it.
+        """
+        payload = client.get("/api/screener/absolute").json()
+        assert payload["available"] is True
+        assert payload["rating_mode"] == "absolute"
+        symbols = {row["symbol"] for row in payload["rows"]}
+        assert symbols == {"AAPL", "XOM"}
+
+    def test_absolute_mode_declines_when_raw_values_are_absent(
+        self, empty_client: TestClient
+    ) -> None:
+        """An absolute rating cannot be recovered from a percentile.
+
+        Saying so is the honest answer; returning relative ratings under an
+        "absolute" label would be the exact mislabelling the mode exists to stop.
+        """
+        payload = empty_client.get("/api/screener/absolute").json()
+        assert payload["available"] is False
+        assert payload["rows"] == []
+
+    def test_backtest_carries_payoff_ratio_and_a_server_computed_kelly(
+        self, client: TestClient
+    ) -> None:
+        """Kelly is derived server-side so both front ends size the bet identically.
+
+        `payoff_ratio` was stored on every run and exposed by no route, which is
+        why the React Track Record had no position-sizing section at all.
+        """
+        run = client.get("/api/backtest").json()[0]
+        assert run["payoff_ratio"] == pytest.approx(1.5)
+        # Quarter-Kelly on p=0.6, b=1.5: (1.5*0.6 - 0.4) / 1.5 = 1/3, quartered.
+        assert run["kelly_fraction"] == pytest.approx(0.25 * (1.0 / 3.0))
+
+    def test_every_new_route_is_still_a_GET(self, client: TestClient) -> None:
+        """The read-only guarantee has to survive each addition, not just the first."""
+        paths = client.get("/openapi.json").json()["paths"]
+        for path, methods in paths.items():
+            assert set(methods) <= {"get"}, f"{path} exposes a non-GET method"
