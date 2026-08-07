@@ -9,6 +9,8 @@
  */
 
 import type {
+  AbsoluteRatingResponse,
+  InvestorProfile,
   BacktestRun,
   GlossaryTerm,
   Health,
@@ -64,6 +66,12 @@ export const api = {
   glossary: () => request<GlossaryTerm[]>("/glossary"),
   universe: () => request<TickerSummary[]>("/universe"),
   screener: (profile = "balanced") => request<ScreenerResponse>("/screener", { profile }),
+  profiles: () => request<InvestorProfile[]>("/profiles"),
+  // Absolute ratings are computed server-side: they need
+  // `build_composite(rating_mode="absolute")` over the stored raw category
+  // values, and a second copy of that mapping in TypeScript would drift.
+  screenerAbsolute: (profile = "balanced") =>
+    request<AbsoluteRatingResponse>("/screener/absolute", { profile }),
   ratingChanges: (limit = 10) => request<RatingChange[]>("/screener/changes", { limit }),
   stock: (symbol: string) => request<StockDetail>(`/stocks/${encodeURIComponent(symbol)}`),
   regime: (limit = 90) => request<RegimePoint[]>("/regime", { limit }),

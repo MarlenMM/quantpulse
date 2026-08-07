@@ -211,7 +211,13 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
     )
 
     st.subheader("Risk profile", help=tip("Volatility"))
-    columns = st.columns(5)
+    # Sharpe sits beside Sortino here for the same reason it does on the
+    # Portfolio page: `stock_risk_profile` computes both, gated by the identical
+    # one-year floor, and showing only one of a matched pair left the more
+    # widely recognised ratio computed, served over the API, and displayed
+    # nowhere -- while the React page's own caption told the reader it was being
+    # withheld for sample-size reasons.
+    columns = st.columns(6)
     columns[0].metric(
         "Volatility (ann.)", format_percent(profile.volatility.historical), help=tip("Volatility")
     )
@@ -225,21 +231,23 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
         format_ratio(profile.beta.beta) if profile.beta else "—",
         help=tip("Beta"),
     )
-    columns[3].metric("Sortino", format_ratio(profile.sortino), help=tip("Sortino ratio"))
-    columns[4].metric(
+    columns[3].metric("Sharpe", format_ratio(profile.sharpe), help=tip("Sharpe ratio"))
+    columns[4].metric("Sortino", format_ratio(profile.sortino), help=tip("Sortino ratio"))
+    columns[5].metric(
         "Daily VaR 95%",
         format_percent(profile.value_at_risk.var) if profile.value_at_risk else "—",
         help=tip("Value at Risk"),
     )
     notes = [f"Measured on {profile.n_observations} daily returns."]
-    # An absent Sortino needs the same plain explanation VaR already gets, or a
-    # dash reads as a glitch rather than as "the sample cannot support this".
+    # Two absent ratios need the same plain explanation VaR already gets, or a
+    # pair of dashes reads as a glitch rather than as "the sample cannot support
+    # this". They share one floor, so they appear and vanish together.
     ratio_floor = risk.min_ratio_observations(risk.TRADING_DAYS_PER_YEAR)
     if profile.sortino is None and profile.n_observations < ratio_floor:
         notes.append(
-            f"Sortino needs about a year of history ({ratio_floor} daily returns) before it "
-            "means anything — a ratio of average return to downside risk is far noisier than "
-            "either number on its own, so it is left blank rather than shown as noise."
+            f"Sharpe and Sortino need about a year of history ({ratio_floor} daily returns) "
+            "before they mean anything — a ratio of average return to risk is far noisier "
+            "than either number on its own, so they are left blank rather than shown as noise."
         )
     if profile.beta is not None and profile.beta.r_squared is not None:
         notes.append(

@@ -59,6 +59,37 @@ export interface ScreenerResponse {
   rows: ScreenerRow[];
 }
 
+/**
+ * One of Section 23's six presets.
+ *
+ * `rescores` decides how the client may apply it. Four presets differ from
+ * balanced by category weights alone, so they can be applied instantly to rows
+ * already in memory. `income` and `conservative` genuinely re-score a category
+ * — income ranks fundamentals against a dividend-leaning sector config,
+ * conservative scores momentum toward low volatility — and neither is
+ * recoverable by re-weighting a finished sub-score, so those must be *fetched*.
+ * Treating all six alike would show balanced sub-scores under an income label.
+ */
+export interface InvestorProfile {
+  name: string;
+  description: string;
+  weights: Record<string, number>;
+  rescores: boolean;
+}
+
+export interface AbsoluteRating {
+  symbol: string;
+  composite_score: number;
+  rating: string;
+}
+
+export interface AbsoluteRatingResponse {
+  available: boolean;
+  profile: string;
+  rating_mode: string;
+  rows: AbsoluteRating[];
+}
+
 export interface RatingChange {
   symbol: string;
   previous_rating: string;
@@ -232,6 +263,11 @@ export interface BacktestRun {
   benchmark_cagr: number | null;
   benchmark_sharpe: number | null;
   avg_turnover: number | null;
+  // Section 27's fractional-Kelly sizing. `kelly_fraction` is computed by the
+  // API from these two, so both front ends show the same position size rather
+  // than each deriving one.
+  payoff_ratio: number | null;
+  kelly_fraction: number | null;
   assumed_txn_cost: number;
 }
 

@@ -91,6 +91,34 @@ export default function TrackRecord() {
         </div>
       </section>
 
+      {latest.kelly_fraction !== null && latest.payoff_ratio !== null && (
+        <section className="panel">
+          <h2>How much to bet</h2>
+          <div className="metrics">
+            <Metric label="Suggested position" value={formatPercent(latest.kelly_fraction)} />
+            <Metric label="Win rate used" value={formatPercent(latest.win_rate)} />
+            <Metric label="Payoff ratio used" value={formatScore(latest.payoff_ratio, 2)} />
+          </div>
+          {latest.kelly_fraction <= 0 ? (
+            <p className="callout callout-warn">
+              The Kelly criterion says <strong>do not take this bet at all</strong> — at this
+              win rate and payoff ratio the strategy has no positive edge to size, so any
+              position is a losing proposition on average.
+            </p>
+          ) : (
+            <p className="muted small">
+              A <strong>quarter-Kelly</strong> size: the growth-optimal bet given this run's
+              own {formatPercent(latest.win_rate)} win rate and{" "}
+              {formatScore(latest.payoff_ratio, 2)} payoff ratio, then cut to a quarter
+              because full Kelly is famously too volatile to live with and is exquisitely
+              sensitive to an over-estimated edge. Treat it as an upper bound, not a
+              recommendation — it assumes the future resembles this backtest, which is
+              exactly the assumption the confidence intervals above tell you to doubt.
+            </p>
+          )}
+        </section>
+      )}
+
       <section className="panel">
         <h2>Run history</h2>
         <table>
