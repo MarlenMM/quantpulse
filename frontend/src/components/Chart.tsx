@@ -15,9 +15,31 @@
  * other front end.
  */
 import { Suspense, lazy } from "react";
+import type { ComponentType } from "react";
 import type { Data, Layout } from "plotly.js";
+import type { PlotParams } from "react-plotly.js";
 
-const Plot = lazy(() => import("react-plotly.js"));
+/**
+ * `react-plotly.js` is CommonJS, and bundlers disagree about how deep its
+ * default export ends up.
+ *
+ * A bare `lazy(() => import("react-plotly.js"))` worked under Vite 7 (Rollup +
+ * esbuild), where the namespace's `.default` was the component itself. Vite 8
+ * bundles with Rolldown, whose interop yields `{ default: { default: Component } }`
+ * — so React received an object and every charting page died at runtime with
+ * "Element type is invalid. Received a promise that resolves to: [object
+ * Object]". Neither `tsc` nor `vite build` catches it: the types are fine and
+ * the build succeeds. Only loading a page with a chart does.
+ *
+ * Unwrapping whichever shape arrives keeps this working on both bundlers rather
+ * than trading one breakage for the mirror-image one on the next upgrade.
+ */
+const Plot = lazy(async () => {
+  const mod: unknown = await import("react-plotly.js");
+  const first = (mod as { default: unknown }).default;
+  const component = typeof first === "function" ? first : (first as { default: unknown }).default;
+  return { default: component as ComponentType<PlotParams> };
+});
 
 const BASE_LAYOUT: Partial<Layout> = {
   paper_bgcolor: "rgba(0,0,0,0)",
