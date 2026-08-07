@@ -20,24 +20,40 @@ import type { Data, Layout } from "plotly.js";
 import type { PlotParams } from "react-plotly.js";
 
 /**
- * `react-plotly.js` is CommonJS, and bundlers disagree about how deep its
- * default export ends up.
+ * Resolving `react-plotly.js`'s component has broken twice, in two different
+ * ways, so this unwraps by *asking what a React element type looks like* rather
+ * than by pattern-matching one library version's packaging.
  *
- * A bare `lazy(() => import("react-plotly.js"))` worked under Vite 7 (Rollup +
- * esbuild), where the namespace's `.default` was the component itself. Vite 8
- * bundles with Rolldown, whose interop yields `{ default: { default: Component } }`
- * — so React received an object and every charting page died at runtime with
- * "Element type is invalid. Received a promise that resolves to: [object
- * Object]". Neither `tsc` nor `vite build` catches it: the types are fine and
- * the build succeeds. Only loading a page with a chart does.
+ * A valid element type is a function (function or class component) **or** an
+ * object carrying `$$typeof` — which is what `forwardRef` and `memo` produce.
+ * Testing only for a function is what broke the second time.
  *
- * Unwrapping whichever shape arrives keeps this working on both bundlers rather
- * than trading one breakage for the mirror-image one on the next upgrade.
+ * The two failures, both runtime-only — `tsc --noEmit` and `vite build` pass
+ * either way, and the page dies with "Element type is invalid. Received a
+ * promise that resolves to: [object Object]":
+ *
+ * 1. **Vite 7 → 8.** v7 (Rollup + esbuild) resolved the CJS namespace's
+ *    `.default` to the component. v8 bundles with Rolldown, whose interop
+ *    yields `{ default: { default: Component } }`, so React got an object.
+ * 2. **react-plotly.js 2 → 4.** v4 is dual ESM/CJS and ships the component as a
+ *    **`forwardRef` object** (`{ $$typeof, render }`), not a plain function — so
+ *    a `typeof === "function"` test fell through to a non-existent `.default`
+ *    and handed React `undefined`.
  */
+function isElementType(value: unknown): boolean {
+  if (typeof value === "function") return true;
+  return typeof value === "object" && value !== null && "$$typeof" in value;
+}
+
 const Plot = lazy(async () => {
   const mod: unknown = await import("react-plotly.js");
   const first = (mod as { default: unknown }).default;
-  const component = typeof first === "function" ? first : (first as { default: unknown }).default;
+  const component = isElementType(first) ? first : (first as { default: unknown })?.default;
+  if (!isElementType(component)) {
+    throw new Error(
+      "react-plotly.js did not resolve to a React component — its packaging changed again",
+    );
+  }
   return { default: component as ComponentType<PlotParams> };
 });
 
