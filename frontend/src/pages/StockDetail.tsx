@@ -222,6 +222,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               title="Sensitivity to the market, against an equal-weight proxy."
             />
             <Metric
+              label="Sharpe"
+              value={formatScore(data.risk.sharpe, 2)}
+              title="Return per unit of total risk."
+            />
+            <Metric
               label="Sortino"
               value={formatScore(data.risk.sortino, 2)}
               title="Return per unit of downside risk."

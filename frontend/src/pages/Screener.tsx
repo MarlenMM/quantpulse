@@ -3,7 +3,13 @@ import { ErrorBox, Loading, RatingChip } from "../components/Common";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
 import { CATEGORIES, SUBSCORE_KEYS, type ScreenerRow } from "../lib/types";
-import { confidenceLabel, formatScore, humanize, searchSymbols } from "../lib/format";
+import {
+  RATING_ORDER,
+  confidenceLabel,
+  formatScore,
+  humanize,
+  searchSymbols,
+} from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 /** The balanced profile's default weights (Section 7.5's table). */
@@ -90,15 +96,46 @@ function rateAll(
 }
 
 export default function Screener() {
-  const { data, error, loading } = useApi(() => api.screener(), []);
+  const [profile, setProfile] = useState("balanced");
+  const [absolute, setAbsolute] = useState(false);
   const [query, setQuery] = useState("");
   const [sector, setSector] = useState("");
+  const [ratingFilter, setRatingFilter] = useState<string[]>([]);
+  const [minConfidence, setMinConfidence] = useState(0);
   const [weights, setWeights] = useState<Record<string, number>>(DEFAULT_WEIGHTS);
+
+  const { data: profiles } = useApi(() => api.profiles(), []);
+  const selected = profiles?.find((p) => p.name === profile);
+
+  // Only `income` and `conservative` need their own stored ranking; the other
+  // four differ by weights alone, so they read the balanced rows and are
+  // applied through the sliders below. Requesting a profile that has no stored
+  // rows would return an empty table rather than the same names re-weighted.
+  const fetchProfile = selected?.rescores ? profile : "balanced";
+  const { data, error, loading } = useApi(() => api.screener(fetchProfile), [fetchProfile]);
+
+  // Absolute ratings come from the server: they need
+  // `build_composite(rating_mode="absolute")` over the stored raw category
+  // values, and a second copy of that mapping here would drift from the engine.
+  const { data: absoluteData } = useApi(
+    () => (absolute ? api.screenerAbsolute(fetchProfile) : Promise.resolve(null)),
+    [absolute, fetchProfile],
+  );
+
+  // Selecting a profile loads its weights into the sliders, so the table shows
+  // that profile rather than the profile's name over balanced weights.
+  const applyProfile = (name: string) => {
+    setProfile(name);
+    const next = profiles?.find((p) => p.name === name);
+    if (next) setWeights({ ...next.weights });
+  };
 
   const sectors = useMemo(
     () => [...new Set((data?.rows ?? []).map((r) => r.sector).filter(Boolean))].sort() as string[],
     [data],
   );
+
+  const absoluteUnavailable = absolute && absoluteData !== null && !absoluteData?.available;
 
   const rows = useMemo(() => {
     const all = data?.rows ?? [];
@@ -107,17 +144,34 @@ export default function Screener() {
     const scores = new Map(all.map((row) => [row.symbol, reweight(row, weights)]));
     const ratings = rateAll(scores, data?.strong_buy_cutoff ?? 90);
 
+    const absoluteBySymbol = new Map(
+      (absoluteData?.available ? absoluteData.rows : []).map((r) => [r.symbol, r]),
+    );
+    const useAbsolute = absolute && absoluteBySymbol.size > 0;
+
     let result = all;
     if (sector) result = result.filter((r) => r.sector === sector);
+    if (minConfidence > 0) {
+      result = result.filter((r) => (r.data_confidence ?? 0) >= minConfidence);
+    }
     if (query.trim()) result = searchSymbols(result, query);
-    const scored = result.map((row) => ({
-      row,
-      custom: scores.get(row.symbol) ?? null,
-      rating: ratings.get(row.symbol) ?? row.rating,
-    }));
+
+    let scored = result.map((row) => {
+      const abs = absoluteBySymbol.get(row.symbol);
+      return {
+        row,
+        custom: useAbsolute ? (abs?.composite_score ?? null) : (scores.get(row.symbol) ?? null),
+        rating: useAbsolute
+          ? (abs?.rating ?? row.rating)
+          : (ratings.get(row.symbol) ?? row.rating),
+      };
+    });
+    // Rating filter applies to what the table actually shows, so it follows
+    // whichever scheme is active rather than the stored balanced verdict.
+    if (ratingFilter.length) scored = scored.filter((s) => ratingFilter.includes(s.rating));
     if (!query.trim()) scored.sort((a, b) => (b.custom ?? -Infinity) - (a.custom ?? -Infinity));
     return scored;
-  }, [data, query, sector, weights]);
+  }, [data, absoluteData, absolute, query, sector, weights, ratingFilter, minConfidence]);
 
   if (loading) return <Loading what="the screener" />;
   if (error) return <ErrorBox error={error} />;
@@ -153,7 +207,76 @@ export default function Screener() {
             ))}
           </select>
         </label>
+        <label>
+          Rating
+          <select
+            multiple
+            value={ratingFilter}
+            onChange={(e) =>
+              setRatingFilter([...e.target.selectedOptions].map((o) => o.value))
+            }
+          >
+            {RATING_ORDER.map((r) => (
+              <option key={r} value={r}>{humanize(r)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Min coverage <output>{minConfidence}%</output>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={minConfidence}
+            onChange={(e) => setMinConfidence(Number(e.target.value))}
+          />
+        </label>
       </div>
+
+      <details className="panel">
+        <summary>Investor profile &amp; rating scheme</summary>
+        <div className="controls">
+          <label>
+            Start from profile
+            <select value={profile} onChange={(e) => applyProfile(e.target.value)}>
+              {(profiles ?? []).map((p) => (
+                <option key={p.name} value={p.name}>{humanize(p.name)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Rating scheme
+            <select
+              value={absolute ? "absolute" : "relative"}
+              onChange={(e) => setAbsolute(e.target.value === "absolute")}
+            >
+              <option value="relative">Relative</option>
+              <option value="absolute">Absolute</option>
+            </select>
+          </label>
+        </div>
+        {selected && <p className="muted small">{selected.description}</p>}
+        {selected?.rescores && (
+          <p className="muted small">
+            Scored under the <strong>{humanize(profile)}</strong> profile — its sub-scores
+            are genuinely different, not the balanced ones re-weighted.
+          </p>
+        )}
+        <p className="muted small">
+          <strong>Relative</strong> always names a top decile Strong Buy, however the whole
+          market looks — that is the plan's own warning, not a bug. <strong>Absolute</strong>{" "}
+          measures every category against a fixed bar instead, so a broadly falling market
+          genuinely produces fewer Strong Buys (and can produce none).
+        </p>
+        {absoluteUnavailable && (
+          <p className="callout callout-warn">
+            These rows were scored before raw category values were stored, so an absolute
+            rating cannot be derived from them — showing the relative ranking instead. The
+            next refresh will populate them.
+          </p>
+        )}
+      </details>
 
       <details className="panel">
         <summary>Re-weight categories</summary>

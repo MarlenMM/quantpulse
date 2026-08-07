@@ -41,12 +41,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from quantpulse.analysis import forecasting, macro, risk, scoring, smart_money, technical
+from quantpulse.analysis.investor_profiles import CATEGORIES, get_profile, profile_names
 from quantpulse.api.schemas import (
+    AbsoluteRating,
+    AbsoluteRatingResponse,
     AnalystConsensusModel,
     BacktestRun,
     ForecastRow,
     GlossaryTerm,
     HealthResponse,
+    InvestorProfileModel,
     MacroOverlay,
     MacroOverlayComponent,
     MonteCarloBand,
@@ -65,6 +69,7 @@ from quantpulse.api.schemas import (
     TickerSummary,
 )
 from quantpulse.glossary import TERMS
+from quantpulse.portfolio.optimization import kelly_position_fraction
 from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
 
@@ -198,6 +203,87 @@ def screener(
         ),
         count=len(rows),
         rows=rows,
+    )
+
+
+@app.get("/api/profiles", response_model=list[InvestorProfileModel], tags=["screener"])
+def profiles() -> list[InvestorProfileModel]:
+    """Section 23's six investor-profile presets, balanced first.
+
+    Served rather than duplicated in the client for the same reason the
+    glossary is: these weights are the scoring engine's own configuration, and a
+    second copy in TypeScript would drift the moment one is retuned.
+    """
+    return [
+        InvestorProfileModel(
+            name=profile.name,
+            description=profile.description,
+            weights=dict(profile.weights),
+            # Only these two need their own stored ranking; the rest are a
+            # re-weighting the client can do instantly on rows it already has.
+            rescores=bool(profile.income_tilt or profile.prefer_low_volatility),
+        )
+        for profile in (get_profile(name) for name in profile_names())
+    ]
+
+
+@app.get("/api/screener/absolute", response_model=AbsoluteRatingResponse, tags=["screener"])
+def screener_absolute(
+    profile: str = Query("balanced", description="Investor profile whose weights to apply."),
+    session: Session = Depends(db_session),
+) -> AbsoluteRatingResponse:
+    """Re-rate the scored universe against a *fixed* bar instead of its peers.
+
+    A relative rating always names a top decile Strong Buy however the whole
+    market looks -- Section 22's warning, not a bug. Absolute mode measures each
+    category against a fixed scale instead, so a broadly falling market
+    genuinely produces fewer Strong Buys (and can produce none).
+
+    Computed here rather than in the client because it needs
+    `scoring.build_composite(..., rating_mode="absolute")` over the stored raw
+    category values. Reimplementing that mapping in TypeScript would put a
+    second copy of the scoring engine in the codebase; the Streamlit page
+    delegates to the same function for exactly this reason.
+
+    Returns `available=false` when the stored rows predate the raw columns: an
+    absolute rating cannot be recovered from a percentile, and saying so is
+    honest where silently serving relative ratings under an absolute label
+    would not be.
+    """
+    rows = persistence.read_screener_rows(session, profile=profile)
+    if rows.empty:
+        return AbsoluteRatingResponse(available=False, profile=profile)
+
+    raw_columns = [f"{category}_raw" for category in CATEGORIES]
+    if not set(raw_columns).issubset(rows.columns):
+        return AbsoluteRatingResponse(available=False, profile=profile)
+
+    raw = rows[raw_columns].copy()
+    raw.columns = list(CATEGORIES)
+    raw.index = rows["symbol"]
+    if raw.notna().to_numpy().sum() == 0:
+        return AbsoluteRatingResponse(available=False, profile=profile)
+
+    scored = scoring.build_composite(
+        raw, profile=get_profile(profile), rating_mode="absolute"
+    ).scores
+    if scored.empty:
+        return AbsoluteRatingResponse(available=False, profile=profile)
+
+    return AbsoluteRatingResponse(
+        available=True,
+        profile=profile,
+        # `build_composite` promotes the symbol index to a column and resets to
+        # a positional index, so the symbol must be read from the column --
+        # taking it from `iterrows`'s index yields "0", "1", "2".
+        rows=[
+            AbsoluteRating(
+                symbol=str(record["symbol"]),
+                composite_score=float(record["composite_score"]),
+                rating=str(record["rating"]),
+            )
+            for _, record in scored.iterrows()
+        ],
     )
 
 
@@ -464,9 +550,21 @@ def backtest(
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(db_session),
 ) -> list[BacktestRun]:
-    """Stored strategy backtest runs, newest first, with bootstrap CIs (Section 7.6)."""
+    """Stored strategy backtest runs, newest first, with bootstrap CIs (Section 7.6).
+
+    Each run carries its own fractional-Kelly position size, computed here from
+    the run's realized win rate and payoff ratio. Deriving it server-side keeps
+    one implementation of Section 27's sizing rule: the Streamlit Track Record
+    page calls `kelly_position_fraction` directly, and a second copy in
+    TypeScript could quietly disagree about how much to bet.
+    """
     frame = persistence.read_backtest_history(session, limit=limit)
-    return [BacktestRun(**row) for row in _rows(frame)]
+    runs = []
+    for row in _rows(frame):
+        run = BacktestRun(**row)
+        run.kelly_fraction = kelly_position_fraction(run.win_rate, run.payoff_ratio)
+        runs.append(run)
+    return runs
 
 
 @app.get("/api/prices/{symbol}", response_model=list[PriceBar], tags=["stocks"])
