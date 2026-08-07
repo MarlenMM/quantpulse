@@ -39,6 +39,16 @@ import type { PlotParams } from "react-plotly.js";
  *    **`forwardRef` object** (`{ $$typeof, render }`), not a plain function — so
  *    a `typeof === "function"` test fell through to a non-existent `.default`
  *    and handed React `undefined`.
+ *
+ * With the versions currently pinned a bare `import()` would in fact resolve
+ * correctly, because v4's ESM `exports` hand back the forwardRef object
+ * directly — failure (1) needed v2's CJS-only packaging and is no longer
+ * reachable. This is kept anyway: it costs nothing, it survives either
+ * packaging, and it fails with a named error instead of a blank page. Two
+ * breakages in two days is enough evidence that this boundary moves.
+ *
+ * `tests/charts.spec.ts` is what guards this now. Only failure (2) is still
+ * reproducible there, for exactly the reason above.
  */
 function isElementType(value: unknown): boolean {
   if (typeof value === "function") return true;

@@ -62,5 +62,17 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The static checks above cannot see a failed dynamic import: two
+      # charting regressions shipped straight through them (a Vite 8 CommonJS
+      # interop change, then react-plotly.js 4 shipping a forwardRef object),
+      # each leaving every chart page blank while type-check and build stayed
+      # green. These load the real built bundle in a real browser, which is the
+      # only thing that reproduces either.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Runtime tests
+        run: npm run test:e2e
+
       - name: Audit
         run: npm audit --audit-level=high
