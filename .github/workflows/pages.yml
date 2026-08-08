@@ -24,6 +24,16 @@ on:
   # never fires for it -- without this call the published site would keep
   # serving whatever data was current when a human last pushed code.
   workflow_call:
+    inputs:
+      ref:
+        description: >-
+          Git ref to publish. The nightly must pass `main`, because it commits
+          the refreshed database *during* its own run and `github.sha` is
+          frozen at the commit that started it -- checking that out would
+          publish the database from before the refresh, every single night,
+          with every step green.
+        type: string
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -41,7 +51,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # `inputs.ref` is empty for a push or a manual dispatch, which falls back
+      # to the triggering commit -- the right thing when the point is to publish
+      # what someone just pushed. See the `workflow_call` input above for why
+      # the nightly has to override it.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Report what is being published
+        run: |
+          echo "publishing $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
+          echo "demo database last changed in $(git log -1 --pretty='%h %ad' --date=short -- quantpulse_demo.db)"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -55,7 +76,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -101,10 +122,10 @@ jobs:
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         id: pages
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: frontend/dist
 
@@ -116,4 +137,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
