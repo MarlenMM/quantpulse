@@ -3,6 +3,7 @@ import { Chart } from "../components/Chart";
 import { ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
+import { Link } from "../lib/router";
 import { CATEGORIES, SUBSCORE_KEYS } from "../lib/types";
 import {
   confidenceLabel,
@@ -396,7 +397,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               <Metric label="Mean target" value={formatPrice(data.analyst_consensus.mean_price_target)} />
             </div>
           ) : (
-            <p className="muted">No analyst coverage stored.</p>
+            <p className="muted small">
+              No analyst estimates stored for this company. They are gathered on the weekly
+              refresh — the freshness line on the <Link to="/dashboard">Dashboard</Link> says
+              when that last completed, and reads "never run" if it has not.
+            </p>
           )}
         </div>
 
@@ -421,7 +426,15 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               ))}
             </ul>
           ) : (
-            <p className="muted">No matching articles recently.</p>
+            // Say which of the two it is. "No articles" reads as a broken
+            // feed, and a reader who cannot tell an un-run pipeline from a
+            // failed one has no way to judge anything else on the page either.
+            <p className="muted small">
+              No articles from the last three weeks mention this company. Company news is
+              gathered on the weekly refresh — the freshness line on the{" "}
+              <Link to="/dashboard">Dashboard</Link> says when that last completed, and
+              reads "never run" if it has not.
+            </p>
           )}
         </div>
       </section>
