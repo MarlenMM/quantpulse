@@ -96,7 +96,21 @@ export function Chart({
         <Plot
           data={data}
           layout={{ ...BASE_LAYOUT, ...layout, height, autosize: true }}
-          config={{ displayModeBar: false, responsive: true }}
+          config={{
+            // The mode bar used to be off entirely, and that made every chart a
+            // one-way trip: dragging a box on a Plotly figure zooms in, but the
+            // only way back out was a double-click nobody is told about. Zoom
+            // in on a price chart to read a week and the chart just stays that
+            // way. `"hover"` keeps the figure clean at rest and puts the way
+            // out where a hand already is.
+            displayModeBar: "hover",
+            // Pared down to the ones that answer "how do I undo that": zoom,
+            // pan, reset. Lasso and box *select* do nothing useful on these
+            // figures and were only ever a way to get stuck.
+            modeBarButtonsToRemove: ["select2d", "lasso2d", "toggleSpikelines"],
+            displaylogo: false,
+            responsive: true,
+          }}
           style={{ width: "100%" }}
           useResizeHandler
         />

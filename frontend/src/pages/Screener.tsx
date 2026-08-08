@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ErrorBox, Loading, RatingChip } from "../components/Common";
+import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
 import { CATEGORIES, SUBSCORE_KEYS, type ScreenerRow } from "../lib/types";
@@ -136,6 +137,22 @@ export default function Screener() {
   );
 
   const absoluteUnavailable = absolute && absoluteData !== null && !absoluteData?.available;
+
+  // Whether the sliders still sit exactly where the chosen profile put them.
+  //
+  // This decides whether the table shows one score column or two. The Score
+  // column is recomputed live from the sliders; "Stored" is the value the
+  // nightly wrote. Until a slider moves they are the same number by
+  // construction, so showing both by default gave every row two identical
+  // columns, one of them labelled with a word that explains nothing about why
+  // it is there. It earns its place the moment it disagrees, and not before.
+  const reweighted = useMemo(() => {
+    const base = selected?.weights;
+    if (!base) return false;
+    return CATEGORIES.some(
+      (category) => Math.abs((weights[category] ?? 0) - (base[category] ?? 0)) > 1e-9,
+    );
+  }, [selected, weights]);
 
   const rows = useMemo(() => {
     const all = data?.rows ?? [];
@@ -315,10 +332,27 @@ export default function Screener() {
             <th scope="col">Symbol</th>
             <th scope="col">Company</th>
             <th scope="col">Sector</th>
-            <th scope="col">Rating</th>
-            <th scope="col" className="num">Score</th>
-            <th scope="col" className="num">Stored</th>
-            <th scope="col">Coverage</th>
+            <th scope="col">
+              Rating
+              <Tip term="Rating" />
+            </th>
+            <th scope="col" className="num">
+              Score
+              <Tip term="Composite score" />
+            </th>
+            {reweighted ? (
+              <th scope="col" className="num">
+                Stored
+                <Tip
+                  label="the stored score"
+                  text="What the nightly job scored this stock at, under the profile's own weights. The Score column beside it is your slider settings applied to the same stored sub-scores — this column is what you are comparing against."
+                />
+              </th>
+            ) : null}
+            <th scope="col">
+              Coverage
+              <Tip term="Data coverage" />
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -329,7 +363,9 @@ export default function Screener() {
               <td>{row.sector ?? "—"}</td>
               <td><RatingChip rating={rating} /></td>
               <td className="num">{formatScore(custom)}</td>
-              <td className="num muted">{formatScore(row.composite_score)}</td>
+              {reweighted ? (
+                <td className="num muted">{formatScore(row.composite_score)}</td>
+              ) : null}
               <td className="muted small">{confidenceLabel(row.data_confidence)}</td>
             </tr>
           ))}

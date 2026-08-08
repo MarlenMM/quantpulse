@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Chart } from "../components/Chart";
 import { ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
+import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { CATEGORIES, SUBSCORE_KEYS } from "../lib/types";
 import {
@@ -42,10 +43,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
 
       {score ? (
         <div className="metrics">
-          <Metric label="Rating" value={<RatingChip rating={score.rating} />} title="Where this ranks against peers — relative, not absolute." />
-          <Metric label="Composite" value={formatScore(score.composite_score)} title="The blended 0–100 score this app ranks by." />
-          <Metric label="Percentile" value={formatScore(score.percentile_rank, 0)} title="Scored higher than this share of the universe." />
-          <Metric label="Coverage" value={confidenceLabel(score.data_confidence)} title="How much underlying data was actually available." />
+          <Metric label="Rating" value={<RatingChip rating={score.rating} />} term="Rating" />
+          <Metric label="Composite" value={formatScore(score.composite_score)} term="Composite score" />
+          <Metric label="Percentile" value={formatScore(score.percentile_rank, 0)} term="Percentile rank" />
+          <Metric label="Coverage" value={confidenceLabel(score.data_confidence)} term="Data coverage" />
         </div>
       ) : (
         <p className="muted">This symbol is tracked but has no composite score yet.</p>
@@ -155,14 +156,23 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                   <th scope="col" className="num">Target</th>
                   <th scope="col" className="num">Low</th>
                   <th scope="col" className="num">High</th>
-                  <th scope="col" className="num">Hit rate</th>
-                  <th scope="col" className="num">vs naive</th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record."
-                  >
+                  <th scope="col" className="num">
+                    Hit rate
+                    <Tip term="Hit rate" />
+                  </th>
+                  <th scope="col" className="num">
+                    vs naive
+                    <Tip
+                      label="the naive comparison"
+                      text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
+                    />
+                  </th>
+                  <th scope="col" className="num">
                     Windows
+                    <Tip
+                      label="windows"
+                      text="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record; below the minimum it is suppressed entirely and shows a dash."
+                    />
                   </th>
                 </tr>
               </thead>
@@ -209,32 +219,32 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             <Metric
               label="Volatility (ann.)"
               value={formatPercent(data.risk.historical_volatility)}
-              title="How much this stock has actually moved, annualised."
+              term="Volatility"
             />
             <Metric
               label="Implied vol"
               value={formatPercent(data.risk.implied_volatility)}
-              title="How much movement the options market is pricing in."
+              term="Implied volatility"
             />
             <Metric
               label="Beta"
               value={formatScore(data.risk.beta, 2)}
-              title="Sensitivity to the market, against an equal-weight proxy."
+              term="Beta"
             />
             <Metric
               label="Sharpe"
               value={formatScore(data.risk.sharpe, 2)}
-              title="Return per unit of total risk."
+              term="Sharpe ratio"
             />
             <Metric
               label="Sortino"
               value={formatScore(data.risk.sortino, 2)}
-              title="Return per unit of downside risk."
+              term="Sortino ratio"
             />
             <Metric
               label={`Daily VaR ${data.risk.var_confidence ? `${(data.risk.var_confidence * 100).toFixed(0)}%` : ""}`}
               value={formatPercent(data.risk.value_at_risk)}
-              title="On the worst days, this stock lost at least this much."
+              term="Value at Risk"
             />
           </div>
           <p className="muted small">

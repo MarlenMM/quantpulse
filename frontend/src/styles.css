@@ -104,6 +104,73 @@ h2 { font-size: 1.15rem; margin: 0 0 0.6rem; }
 .metric-hint { color: var(--muted); font-size: 0.78rem; max-width: 22rem; }
 .info { color: var(--muted); }
 
+/* The ⓘ hint. The bubble is `position: fixed` because these markers sit inside
+   tables and panels that clip or scroll their overflow -- an absolutely
+   positioned bubble gets cut off exactly where a wide table needs explaining
+   most. `Tip.tsx` computes and clamps the coordinates. */
+.tip { display: inline-flex; align-items: center; }
+
+.tip-trigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0 0.15rem;
+  margin-left: 0.15rem;
+  cursor: help;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85em;
+  line-height: 1;
+  border-radius: 999px;
+  transition: color 0.12s ease;
+}
+.tip-trigger:hover,
+.tip-trigger[aria-expanded="true"] { color: var(--accent); }
+.tip-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.tip-bubble {
+  position: fixed;
+  z-index: 50;
+  display: block;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* Purely decorative: hovering the bubble itself must not keep it open, or a
+     tooltip that follows the pointer becomes a thing you have to dismiss. */
+  pointer-events: none;
+  animation: tip-in 0.12s ease-out;
+}
+
+/* Anchored by its bottom edge when it opens upwards. Kept out of the keyframes
+   so the fade cannot clobber it -- an animated `transform` and a static one on
+   the same element is how a bubble ends up drawn over its own trigger. */
+.tip-above { transform: translateY(-100%); }
+
+.tip-term {
+  display: block;
+  color: var(--accent);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+}
+
+@keyframes tip-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip-bubble { animation: none; }
+}
+
 /* Tables scroll horizontally on small screens instead of forcing the whole
    page to scroll sideways (the mobile pass). */
 table { width: 100%; border-collapse: collapse; font-size: 0.92rem; display: block; overflow-x: auto; }
