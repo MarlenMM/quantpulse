@@ -73,7 +73,10 @@ def render_analyst_comparison(symbol: str, row: pd.Series) -> None:
     )
     if consensus is None:
         right.metric("Analyst consensus", "—")
-        right.caption("No analyst coverage stored for this symbol.")
+        right.caption(
+            "No analyst estimates stored. They are gathered on the weekly refresh — "
+            "the Settings page lists when each dataset last ran."
+        )
         return
 
     counts = {
@@ -725,7 +728,14 @@ def main() -> None:
     st.subheader("What's driving this", help=tip("Sentiment score"))
     news = data.symbol_news(symbol, limit=10)
     if news.empty:
-        st.caption("No Tier-1 articles matched this symbol in the last three weeks.")
+        # Name which of the two this is. "No articles" reads as a broken feed,
+        # and a reader who cannot tell an un-run pipeline from a failed one has
+        # no way to judge anything else on the page either.
+        st.caption(
+            "No Tier-1 articles from the last three weeks mention this company. "
+            "Company news is gathered on the weekly refresh — the Settings page lists "
+            'when each dataset last ran, and says "never run" if it has not.'
+        )
     else:
         for item in news.itertuples():
             title = item.title or "(untitled)"
