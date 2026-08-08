@@ -1,0 +1,119 @@
+# Publish the read-only demo to GitHub Pages.
+#
+# Section 20 wants a free, always-on public link. ADR 4.4 pins the *full* app
+# (Portfolio Manager, LLM narration) to Streamlit Community Cloud, which needs
+# a one-time interactive sign-in nobody can automate. This is the half that can
+# be automated end to end, and it costs nothing: Pages is free on public repos.
+#
+# Pages serves files, so the React SPA -- which is a static bundle already --
+# needs its API turned into files too. `scripts/build_static_site.py` does that
+# by running the real FastAPI app over the committed demo database and writing
+# every response it can produce, so the published numbers are the API's own
+# output rather than a second implementation.
+#
+# What this deliberately does NOT publish: the Portfolio Manager. It needs
+# per-visitor write state, which no static host can provide, and the API is
+# read-only by design (see the module docstring in `api/main.py`).
+name: Publish demo site
+
+on:
+  push:
+    branches: [main]
+  # Called by the nightly data refresh once it has committed fresh data.
+  # The nightly's own commit carries `[skip ci]`, so the `push` trigger above
+  # never fires for it -- without this call the published site would keep
+  # serving whatever data was current when a human last pushed code.
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never deploy two versions at once, and never cancel a deployment half-way:
+# an interrupted Pages deploy can leave the site partly updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # The same command CI runs. Slower than a hand-picked subset (it pulls
+      # the nightly job's ML stack, which generating JSON does not need), but
+      # a hand-picked subset is a third dependency list to keep in sync, and
+      # `uv.lock` is the one that is already proven.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Pre-render the API to static JSON
+        run: uv run python scripts/build_static_site.py
+
+      # A project site lives at https://<owner>.github.io/<repo>/, so every
+      # asset URL and the router's path matching carry that prefix.
+      - name: Build the client
+        run: npm run build
+        working-directory: frontend
+        env:
+          VITE_STATIC_API: "1"
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      # Pages has no SPA rewrite: a deep link like /stocks/AAPL is a missing
+      # file, and a missing file is served as 404.html. Making that a copy of
+      # index.html means the app boots and its router reads the path, which is
+      # the standard (and only) way to keep client-side routes shareable here.
+      - name: Serve deep links through the app
+        run: cp dist/index.html dist/404.html
+        working-directory: frontend
+
+      # The generator and the client agree about filenames only by convention:
+      # they are in different languages and neither imports the other. If they
+      # ever disagree, every request 404s and every page renders blank -- with
+      # the type check, the build and the fixture-stubbed suite all still
+      # green. This loads the artifact that is about to be published and reads
+      # real numbers off it.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Check the built site actually serves its data
+        run: npm run test:static
+        working-directory: frontend
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
