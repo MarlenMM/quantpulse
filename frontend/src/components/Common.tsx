@@ -8,6 +8,7 @@
  */
 import type { ReactNode } from "react";
 import { ratingColor, ratingLabel } from "../lib/format";
+import { Tip } from "./Tip";
 
 export function Loading({ what = "data" }: { what?: string }) {
   return <p className="muted" role="status">Loading {what}…</p>;
@@ -38,18 +39,22 @@ export function Metric({
   label,
   value,
   hint,
+  term,
   title,
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
+  /** Glossary term explaining this metric. Preferred over `title`. */
+  term?: string;
+  /** A one-off explanation for something the glossary has no entry for. */
   title?: string;
 }) {
   return (
-    <div className="metric" title={title}>
+    <div className="metric">
       <div className="metric-label">
         {label}
-        {title ? <span className="info" aria-hidden="true"> ⓘ</span> : null}
+        <Tip term={term} text={title} label={label} />
       </div>
       <div className="metric-value">{value}</div>
       {hint ? <div className="metric-hint">{hint}</div> : null}
