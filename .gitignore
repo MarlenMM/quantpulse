@@ -50,3 +50,6 @@ htmlcov/
 .idea/
 .vscode/
 *.swp
+
+# Deploy-shaped virtualenv built by ./run.sh from requirements.txt.
+.venv-app/
