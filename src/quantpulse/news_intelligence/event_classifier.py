@@ -31,6 +31,8 @@ Two judgment calls live here (the reason Section 21 rates this Opus/High):
    Section 21 warns about.
 """
 
+import logging
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
@@ -41,7 +43,14 @@ import pandas as pd
 if TYPE_CHECKING:
     from transformers import Pipeline
 
+logger = logging.getLogger(__name__)
+
 _MODEL_NAME = "facebook/bart-large-mnli"
+
+# How many articles go through the model per call. Small enough that a deadline
+# is checked often (a chunk is the granularity at which work can be abandoned),
+# large enough that batching still pays. Inference dominates either way.
+DEFAULT_CHUNK_SIZE = 32
 
 # A finance-framed hypothesis template markedly outperforms the library
 # default ("This example is {}.") on headline text -- the model is scoring
@@ -187,6 +196,8 @@ def classify_articles(
     *,
     text_columns: tuple[str, ...] = ("title", "summary"),
     max_classified: int | None = None,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    deadline: float | None = None,
 ) -> pd.Series:
     """Classify each row of `articles`, returning a Series of `EventClassification`.
 
@@ -212,6 +223,17 @@ def classify_articles(
 
     Rows are taken in frame order, so a caller wanting "the newest N classified"
     should sort before calling. `None` (the default) classifies everything.
+
+    `deadline` (a `time.monotonic()` value) stops the run cleanly once it
+    passes, leaving the remaining rows as `_empty_result()`. It exists because
+    `max_classified` alone is a bet on how fast the machine is, and that bet has
+    been lost in production: a cap tuned to about 38 minutes on a development
+    machine exhausted a 90-minute budget on a GitHub runner, so the step was
+    killed and the entire night's news -- classification *and* the sentiment
+    that feeds the composite score -- landed nowhere. A deadline degrades the
+    same way an over-cap already does, into an event type carrying its own
+    documented half-life, instead of into nothing at all. Rows go through in
+    chunks so the clock is checked often enough to matter.
     """
     present_columns = [c for c in text_columns if c in articles.columns]
 
@@ -230,20 +252,36 @@ def classify_articles(
         nonempty_positions = nonempty_positions[:max_classified]
     results: list[EventClassification] = [_empty_result()] * len(texts)
     if nonempty_positions:
-        batch = [texts.iloc[i] for i in nonempty_positions]
-        raw_batch = _load_classifier()(
-            batch,
-            candidate_labels=_CANDIDATE_LABELS,
-            hypothesis_template=_HYPOTHESIS_TEMPLATE,
-            multi_label=False,
-        )
-        # Defensive, not currently observed: verified live against the real
-        # model that a list input (including a one-item list) always returns
-        # a list of dicts, never a bare dict -- kept as cheap insurance
-        # against a future transformers version changing that, not because
-        # it's been seen to happen.
-        raw_list = raw_batch if isinstance(raw_batch, list) else [raw_batch]
-        for position, raw in zip(nonempty_positions, raw_list, strict=True):
-            results[position] = _result_from_raw(dict(raw))
+        # Loaded before the loop so a cold weight download is never mistaken
+        # for slow inference by the first chunk's deadline check.
+        classifier = _load_classifier()
+        classified = 0
+        for start in range(0, len(nonempty_positions), chunk_size):
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning(
+                    "Event classification stopped at its deadline after %d of %d "
+                    "articles; the rest are recorded as '%s'.",
+                    classified,
+                    len(nonempty_positions),
+                    EventType.OTHER,
+                )
+                break
+            chunk = nonempty_positions[start : start + chunk_size]
+            batch = [texts.iloc[i] for i in chunk]
+            raw_batch = classifier(
+                batch,
+                candidate_labels=_CANDIDATE_LABELS,
+                hypothesis_template=_HYPOTHESIS_TEMPLATE,
+                multi_label=False,
+            )
+            # Defensive, not currently observed: verified live against the real
+            # model that a list input (including a one-item list) always returns
+            # a list of dicts, never a bare dict -- kept as cheap insurance
+            # against a future transformers version changing that, not because
+            # it's been seen to happen.
+            raw_list = raw_batch if isinstance(raw_batch, list) else [raw_batch]
+            for position, raw in zip(chunk, raw_list, strict=True):
+                results[position] = _result_from_raw(dict(raw))
+            classified += len(chunk)
 
     return pd.Series(results, index=articles.index)
