@@ -182,6 +182,10 @@ _NEWS_REFRESH_ON_WEEKLY_ONLY = True
 # -- comfortably inside the 90-minute step budget below.
 _MAX_SENTIMENT_ARTICLES = 7_000
 _MAX_CLASSIFIED_ARTICLES = 1_500
+# Time held back from the classifier's deadline so the rows it *did* produce
+# still get written. A step that spends its whole budget classifying and is then
+# killed before persisting has done the expensive part for nothing.
+_NEWS_PERSIST_MARGIN_SECONDS = 120
 
 # Per-step wall-clock budgets. `step()` enforces these so a stalled dependency
 # costs one step instead of the entire run.
@@ -620,7 +624,11 @@ def _in_session(fn: "Any") -> int:
 
 
 def _persist_tier1_news(
-    results: list[TickerFetchResult], universe: pd.DataFrame, today: date
+    results: list[TickerFetchResult],
+    universe: pd.DataFrame,
+    today: date,
+    *,
+    deadline: float | None = None,
 ) -> int:
     """Run the (session-free) Tier-1 news models, then persist the results in one session.
 
@@ -628,7 +636,9 @@ def _persist_tier1_news(
     session while it runs, so SQLite's single writer isn't locked for the
     duration of hundreds of classifications.
     """
-    sentiment_records, news_records = process_tier1_news(results, universe, today)
+    sentiment_records, news_records = process_tier1_news(
+        results, universe, today, deadline=deadline
+    )
     if not sentiment_records and not news_records:
         return 0
     with get_session() as session:
@@ -1390,7 +1400,11 @@ def _cap_articles(articles: pd.DataFrame) -> pd.DataFrame:
 
 
 def process_tier1_news(
-    results: list[TickerFetchResult], universe: pd.DataFrame, today: date
+    results: list[TickerFetchResult],
+    universe: pd.DataFrame,
+    today: date,
+    *,
+    deadline: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Entity-tag, classify, and sentiment-score Tier-1 news into persistable records.
 
@@ -1412,27 +1426,44 @@ def process_tier1_news(
     articles = articles.drop_duplicates(subset=["link"]).reset_index(drop=True)
     articles = _cap_articles(articles)
 
+    # The three model passes run cheapest-first, and the order is load-bearing.
+    #
+    # Classification used to run before sentiment. When the step then exhausted
+    # its wall-clock budget it was killed mid-classification, so *nothing* was
+    # persisted -- not the event types it had managed, and not the sentiment it
+    # had never reached. Sentiment is the half that feeds the composite score,
+    # so it now runs first and the expensive classifier takes whatever time is
+    # left. Each pass is timed, because "step tier1_news failed after 5400s"
+    # says nothing about which of the three spent it.
+    started = time.monotonic()
+
     gazetteer = entity_extraction.build_gazetteer(universe)
     articles["matched_symbols"] = entity_extraction.tag_articles(articles, gazetteer)
+    tagged_at = time.monotonic()
+
+    articles["sentiment"] = sentiment.score_articles(articles)
+    scored_at = time.monotonic()
+
     # Keep the EventType enum in-frame so the decay step reads each event's
     # half-life directly; stringify only when building the stored row.
     # Newest-first from `_cap_articles`, so the expensive classifier spends its
     # budget where the recency-decay step gives the most weight. Everything past
-    # the limit is `EventType.OTHER` -- see `_MAX_CLASSIFIED_ARTICLES` above.
+    # the limit -- or past the deadline -- is `EventType.OTHER`.
     classifications = event_classifier.classify_articles(
-        articles, max_classified=_MAX_CLASSIFIED_ARTICLES
+        articles,
+        max_classified=_MAX_CLASSIFIED_ARTICLES,
+        deadline=deadline,
     )
-    if len(articles) > _MAX_CLASSIFIED_ARTICLES:
-        logger.info(
-            "Tier-1 news: event-typed the newest %d of %d articles; the rest are "
-            "recorded as '%s'. Sentiment, which is what feeds the composite score, "
-            "covers all of them.",
-            _MAX_CLASSIFIED_ARTICLES,
-            len(articles),
-            event_classifier.EventType.OTHER,
-        )
     articles["event_type"] = classifications.apply(lambda c: c.event_type)
-    articles["sentiment"] = sentiment.score_articles(articles)
+    logger.info(
+        "Tier-1 news over %d articles: entity tagging %.0fs, sentiment %.0fs, "
+        "classification %.0fs (cap %d).",
+        len(articles),
+        tagged_at - started,
+        scored_at - tagged_at,
+        time.monotonic() - scored_at,
+        _MAX_CLASSIFIED_ARTICLES,
+    )
 
     news_records: list[dict[str, Any]] = []
     for row in articles.itertuples():
@@ -1752,8 +1783,16 @@ def run(
             # begin with, so this costs a single day of freshness in one of
             # seven categories -- against a failure mode that has so far cost
             # every category, every week.
+            # The classifier gets whatever is left of the step's own budget,
+            # minus a margin for persisting what it produced. Without this the
+            # deadline would be the SIGALRM that kills the step, which is the
+            # failure being fixed rather than a graceful stop before it.
+            news_deadline = time.monotonic() + (
+                _STEP_TIMEOUT_SECONDS["tier1_news"] - _NEWS_PERSIST_MARGIN_SECONDS
+            )
             rows_updated += step(
-                "tier1_news", lambda: _persist_tier1_news(results, universe_df, today)
+                "tier1_news",
+                lambda: _persist_tier1_news(results, universe_df, today, deadline=news_deadline),
             )
             rows_updated += step(
                 "tier2_news", lambda: _in_session(lambda s: refresh_tier2_news(s, today))

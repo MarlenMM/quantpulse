@@ -61,6 +61,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # The weekly branch runs three local models, and the two Hugging Face ones
+      # -- facebook/bart-large-mnli and FinBERT -- are about 2 GB of weights
+      # that were being downloaded fresh on every single run. `event_classifier`
+      # already documented this cache as existing; it did not. Restored on a
+      # weekly key so a stale entry cannot pin an old revision forever.
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: hf-${{ runner.os }}-
+
       - name: Apply migrations
         run: uv run alembic upgrade head
         env:
@@ -104,10 +116,44 @@ jobs:
           git add quantpulse_demo.db
           if git diff --cached --quiet; then
             echo "No changes to commit."
-          else
-            git commit -m "Nightly data refresh [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "Nightly data refresh [skip ci]"
+
+          # Retry on a rejected push, replaying this run's database on top of
+          # whatever landed meanwhile.
+          #
+          # This is not defensive decoration. The weekly branch runs for hours,
+          # and a single human push during that window makes the job's own push
+          # a non-fast-forward -- at which point every hour of fetching is
+          # discarded and the only trace is a red job with a one-second failing
+          # step. That happened: a 3h27m run that had successfully refreshed
+          # fundamentals, analyst consensus, forecasts and the backtest threw all
+          # of it away because a commit landed while it was working.
+          #
+          # Replaying rather than merging is safe *because* the database is the
+          # only file this job writes and this job is the only thing that writes
+          # it: take main for everything else, keep this run's data for that one
+          # file. A merge would have to resolve a binary conflict with no basis
+          # for choosing.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "::warning::push rejected (attempt $attempt) -- main moved while this run was fetching; replaying on top of it"
+            cp quantpulse_demo.db "$RUNNER_TEMP/refreshed.db"
+            git fetch origin main
+            git reset --hard origin/main
+            cp "$RUNNER_TEMP/refreshed.db" quantpulse_demo.db
+            git add quantpulse_demo.db
+            if git diff --cached --quiet; then
+              echo "main already carries this data."
+              exit 0
+            fi
+            git commit -m "Nightly data refresh [skip ci]"
+          done
+          echo "::error::could not push the refreshed database after 3 attempts"
+          exit 1
 
   # Republish the public demo against the data this run just committed.
   #
