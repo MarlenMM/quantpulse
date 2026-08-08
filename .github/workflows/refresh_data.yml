@@ -89,3 +89,23 @@ jobs:
             git commit -m "Nightly data refresh [skip ci]"
             git push
           fi
+
+  # Republish the public demo against the data this run just committed.
+  #
+  # It has to be an explicit call rather than a `push` trigger on the Pages
+  # workflow: the commit above carries `[skip ci]`, which suppresses every
+  # workflow that push would otherwise start. Without this the site would go on
+  # serving whatever data was current the last time a human pushed code, while
+  # looking perfectly healthy.
+  #
+  # `always()` for the same reason the commit step uses it -- a partial refresh
+  # still produced data worth publishing, and the job's exit code is there for
+  # visibility rather than to discard the night's work.
+  publish:
+    needs: refresh
+    if: always()
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

@@ -26,18 +26,42 @@ import {
 
 const PathContext = createContext<string>("/");
 
+/**
+ * Where the app is mounted, without its trailing slash.
+ *
+ * Empty when the app owns its origin (development, `vite preview`, any host
+ * serving it at the root). On GitHub Pages a project site lives under
+ * `/<repo>/`, so `window.location.pathname` carries that prefix and would
+ * never match a route pattern. Vite fills `BASE_URL` in from its `base`
+ * option, so the same bundle works either way and nothing here is hardcoded to
+ * one host.
+ */
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+/** Browser pathname -> route path. */
+function toRoute(pathname: string): string {
+  if (BASE && pathname.startsWith(BASE)) return pathname.slice(BASE.length) || "/";
+  return pathname;
+}
+
+/** Route path -> browser pathname. */
+function toHref(route: string): string {
+  return `${BASE}${route}`;
+}
+
 export function navigate(to: string): void {
-  if (to !== window.location.pathname) {
-    window.history.pushState({}, "", to);
+  const href = toHref(to);
+  if (href !== window.location.pathname) {
+    window.history.pushState({}, "", href);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
 }
 
 export function Router({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(window.location.pathname);
+  const [path, setPath] = useState(() => toRoute(window.location.pathname));
 
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
+    const onPop = () => setPath(toRoute(window.location.pathname));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -77,7 +101,7 @@ export function Link({
   const isActive = path === to;
   return (
     <a
-      href={to}
+      href={toHref(to)}
       onClick={onClick}
       className={className}
       aria-current={isActive ? "page" : undefined}
