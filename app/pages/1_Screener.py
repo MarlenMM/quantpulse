@@ -42,6 +42,11 @@ st.set_page_config(page_title="QuantPulse — Screener", page_icon="🔎", layou
 SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
 # The pre-normalization inputs absolute mode re-scores from (see `rescore_absolute`).
 RAW_COLUMNS = {category: f"{category}_raw" for category in CATEGORIES}
+# Result-table columns that hold a number and therefore need a format. The
+# table's column set is not fixed -- "Stored" only appears once the sliders
+# disagree with the profile -- and a Styler formatter keyed on an absent column
+# raises rather than being ignored.
+_NUMERIC_COLUMNS = frozenset({"Score", "Stored"})
 
 
 def _custom_profile(weights: dict[str, float], profile_name: str) -> InvestorProfile:
@@ -324,10 +329,21 @@ def main() -> None:
         "composite_score": "Stored",
         "Coverage": "Coverage",
     }
+    # "Stored" only earns a column once it disagrees with "Score".
+    #
+    # Score is the sliders applied live; Stored is what the nightly job wrote.
+    # While the sliders sit exactly where the profile put them the two are the
+    # same number by construction, so showing both by default gave every row a
+    # duplicated column whose header explains nothing about why it is there.
+    reweighted = any(abs(weights[category] - base.weights[category]) > 1e-9 for category in weights)
+    if not reweighted:
+        columns.pop("composite_score")
     st.dataframe(
         display[list(columns)]
         .rename(columns=columns)
-        .style.format({"Score": "{:.1f}", "Stored": "{:.1f}"}),
+        # Only the columns actually present -- a Styler formatter keyed on a
+        # column that was dropped raises rather than being ignored.
+        .style.format({name: "{:.1f}" for name in columns.values() if name in _NUMERIC_COLUMNS}),
         hide_index=True,
         width="stretch",
         height=460,

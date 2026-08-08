@@ -1,5 +1,6 @@
 import { Chart } from "../components/Chart";
 import { EmptyState, ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
+import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
 import {
@@ -90,7 +91,10 @@ export default function Dashboard() {
         </div>
 
         <div className="panel">
-          <h2 title="An in-house 0–100 gauge of market risk appetite.">Market Regime ⓘ</h2>
+          <h2>
+            Market Regime
+            <Tip term="Market Regime Index" label="the Market Regime Index" />
+          </h2>
           {regime.loading ? <Loading /> : null}
           {latestRegime && latestRegime.regime_score !== null ? (
             <>
@@ -116,10 +120,10 @@ export default function Dashboard() {
                 ]}
               />
               <div className="metrics">
-                <Metric label="VIX" value={formatScore(latestRegime.vix_level)} title="The market's expectation of near-term volatility." />
-                <Metric label="Breadth >200DMA" value={formatPctAlreadyScaled(latestRegime.breadth_pct_above_200dma)} title="Share of the universe trading above its 200-day average." />
-                <Metric label="10Y-2Y" value={formatScore(latestRegime.yield_curve_spread, 2)} title="Yield-curve spread; negative is an inversion." />
-                <Metric label="Macro tone" value={formatScore(latestRegime.macro_news_tone, 2)} title="Average tone of macro news coverage; negative is gloomier." />
+                <Metric label="VIX" value={formatScore(latestRegime.vix_level)} term="VIX" />
+                <Metric label="Breadth >200DMA" value={formatPctAlreadyScaled(latestRegime.breadth_pct_above_200dma)} term="Market breadth" />
+                <Metric label="10Y-2Y" value={formatScore(latestRegime.yield_curve_spread, 2)} term="Yield curve spread" />
+                <Metric label="Macro tone" value={formatScore(latestRegime.macro_news_tone, 2)} term="Sentiment score" />
               </div>
             </>
           ) : (
