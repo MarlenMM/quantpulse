@@ -75,7 +75,7 @@ class OnDemandAnalysis:
     composite_score: float | None
     absolute_rating: str | None
     data_confidence: float | None
-    patterns: pd.DataFrame
+    patterns: list[Any]
     forecasts: list[Any]
     fundamentals: dict[str, Any] | None
     analyst: dict[str, Any] | None
@@ -87,6 +87,21 @@ class OnDemandAnalysis:
     @property
     def covered_categories(self) -> list[str]:
         return [name for name, value in self.category_raw.items() if value is not None]
+
+    def patterns_frame(self) -> pd.DataFrame:
+        """Detected formations as a table, newest first.
+
+        `detect_all_chart_patterns` returns `ChartPattern` objects, not a frame.
+        Keeping them as objects here and converting only for display means the
+        caller that wants the geometry still has it, and the caller that wants a
+        table does not have to know the dataclass's field names.
+        """
+        if not self.patterns:
+            return pd.DataFrame()
+        frame = pd.DataFrame([vars(pattern) for pattern in self.patterns])
+        if "end_date" in frame.columns:
+            frame = frame.sort_values("end_date", ascending=False)
+        return frame.reset_index(drop=True)
 
 
 def _indicator_frame(prices: pd.DataFrame) -> pd.DataFrame:
@@ -185,7 +200,7 @@ def analyse(
         composite_score=composite,
         absolute_rating=rating,
         data_confidence=confidence,
-        patterns=detected if detected is not None else pd.DataFrame(),
+        patterns=list(detected) if detected else [],
         forecasts=forecasts,
         fundamentals=fundamentals,
         analyst=analyst,

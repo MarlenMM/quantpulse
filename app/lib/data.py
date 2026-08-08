@@ -19,6 +19,7 @@ per-symbol readers cache per symbol automatically.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -28,6 +29,8 @@ import streamlit as st
 from quantpulse.config import get_settings
 from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
+
+logger = logging.getLogger(__name__)
 
 TTL_SECONDS = 300
 
@@ -229,3 +232,58 @@ def has_any_data() -> bool:
 def portfolio_backend() -> str:
     """Which storage backend the config selects (ADR 4.5): `sqlite` or `session`."""
     return get_settings().portfolio_backend
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def catalogue() -> pd.DataFrame:
+    """Every listed symbol a visitor may search for, ranked or merely catalogued.
+
+    Cached like the rest of this module, and it matters more here: the search
+    box re-runs on every keystroke, and this is ~13,000 rows.
+    """
+    try:
+        with get_session() as session:
+            return persistence.read_searchable_catalogue(session)
+    except Exception:
+        # A database written before the `coverage` migration has no catalogue.
+        # That is a stale file, not a broken app: the caller falls back to the
+        # ranked universe and the page keeps working, which is a far better
+        # outcome than a traceback where the search box should be. The next
+        # nightly run migrates and re-commits the database.
+        logger.warning("Catalogue unavailable; falling back to the ranked universe.")
+        return pd.DataFrame(
+            columns=["symbol", "name", "sector", "asset_type", "exchange", "coverage"]
+        )
+
+
+# On-demand results are cached for far longer than the rest of this module.
+# Each one is a live fetch of three endpoints plus a forecast, so re-running it
+# on every Streamlit rerun -- which is every widget interaction -- would make
+# the page feel broken and hammer a free data source for no new information.
+# Fifteen minutes sits comfortably inside the life of a daily bar.
+ON_DEMAND_TTL_SECONDS = 900
+
+
+@st.cache_data(ttl=ON_DEMAND_TTL_SECONDS, show_spinner=False)
+def on_demand_analysis(symbol: str, sector: str | None) -> Any:
+    """Analyse a symbol the nightly job has never scored. None if it has no prices.
+
+    The stored composites and the stored fundamentals go in as context: the
+    first places this stock against the ranking, and the second is the peer
+    group its fundamentals are ranked inside. Without that peer group the
+    fundamental score would be a company ranked against itself, which is
+    always 100 -- see `on_demand._fundamental_score`.
+    """
+    from datetime import date as _date
+
+    from quantpulse import on_demand
+
+    with get_session() as session:
+        ranked = persistence.read_screener_rows(session)
+        peers = persistence.read_latest_fundamentals(session, as_of=_date.today())
+    return on_demand.analyse(
+        symbol,
+        sector=sector,
+        ranked_composites=ranked["composite_score"] if not ranked.empty else None,
+        sector_peers=peers if not peers.empty else None,
+    )
