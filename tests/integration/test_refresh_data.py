@@ -56,6 +56,22 @@ def _stamp_migration_head(eng: Engine) -> None:
         )
 
 
+@pytest.fixture(autouse=True)
+def _no_live_listing_fetch():
+    """No test in this file may reach Nasdaq's symbol directory over the network.
+
+    `run()` syncs the searchable catalogue, so without this every test that
+    drives it would make a live HTTP call -- slow, flaky, and (worse) it would
+    insert 13,000 real symbols into a fixture built around three. The catalogue
+    tests below patch this with their own rows.
+    """
+    with patch(
+        "refresh_data.listing_client.fetch_us_listings",
+        return_value=pd.DataFrame(columns=["symbol", "name", "exchange", "asset_type"]),
+    ):
+        yield
+
+
 @pytest.fixture
 def engine(tmp_path: Path) -> Engine:
     eng = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
@@ -1348,3 +1364,101 @@ def test_news_runs_after_the_steps_a_visitor_actually_looks_at() -> None:
             "otherwise takes the whole weekly branch down with it"
         )
     assert order["tier1_news"] < order["tier2_news"]
+
+
+# --------------------------------------------------------------------------- #
+# The searchable catalogue (Ticker.coverage).
+#
+# The nightly job can afford to score a few hundred names; the US market lists
+# about 13,000. The catalogue records the rest as *names only* so they can be
+# searched for and analysed on demand. Two properties make that safe, and both
+# are the kind that fail silently if they break: a ranked symbol must never be
+# demoted to a name, and 12,500 new rows must not leak into any fetch loop,
+# ranking, or survivorship-aware backtest.
+# --------------------------------------------------------------------------- #
+
+
+def _listings(*rows: tuple[str, str, str, str]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["symbol", "name", "exchange", "asset_type"])
+
+
+def test_catalogue_records_symbols_the_ranked_universe_does_not_have(session: Session) -> None:
+    session.add(Ticker(symbol="AAPL", name="Apple", asset_type="equity", is_active=True))
+    session.flush()
+
+    listings = _listings(
+        ("AAPL", "Apple Inc.", "Nasdaq", "equity"),
+        ("RKLB", "Rocket Lab", "Nasdaq", "equity"),
+        ("SPY", "SPDR S&P 500 ETF", "NYSE Arca", "etf"),
+    )
+    with patch("refresh_data.listing_client.fetch_us_listings", return_value=listings):
+        added = refresh_data.sync_catalogue(session)
+
+    tickers = {t.symbol: t for t in session.scalars(select(Ticker))}
+    assert added == 2
+    assert tickers["RKLB"].coverage == Ticker.CATALOGUE
+    assert tickers["SPY"].coverage == Ticker.CATALOGUE
+
+
+def test_catalogue_never_demotes_a_ranked_symbol(session: Session) -> None:
+    """The ranked row has three years of prices behind it; the listing row has a name.
+
+    The two sources disagree constantly -- on share classes, on recent index
+    changes, on how a company is spelled. Whenever they do, the row with data
+    behind it has to win, or a nightly sync quietly drops a scored stock out of
+    the Screener.
+    """
+    session.add(
+        Ticker(
+            symbol="AAPL",
+            name="Apple",
+            sector="Information Technology",
+            asset_type="equity",
+            is_active=True,
+            coverage=Ticker.RANKED,
+        )
+    )
+    session.flush()
+
+    with patch(
+        "refresh_data.listing_client.fetch_us_listings",
+        return_value=_listings(("AAPL", "Apple Inc. - Common Stock", "Nasdaq", "equity")),
+    ):
+        added = refresh_data.sync_catalogue(session)
+
+    apple = session.get(Ticker, "AAPL")
+    assert added == 0
+    assert apple is not None
+    assert apple.coverage == Ticker.RANKED
+    assert apple.is_active is True
+    assert apple.sector == "Information Technology"  # not blanked by the listing row
+
+
+def test_catalogue_rows_stay_out_of_the_active_universe(session: Session) -> None:
+    """The one property that keeps a 13,000-row catalogue from becoming a
+    13,000-ticker nightly job.
+
+    Every existing reader and the whole fetch loop filter on `is_active`, so a
+    catalogue row being active is not a cosmetic mistake -- it is thousands of
+    price fetches, a ranking full of unscored names, and bogus S&P 500
+    membership intervals.
+    """
+    session.add(Ticker(symbol="AAPL", name="Apple", asset_type="equity", is_active=True))
+    session.flush()
+    with patch(
+        "refresh_data.listing_client.fetch_us_listings",
+        return_value=_listings(*[(f"SYM{i}", f"Co {i}", "Nasdaq", "equity") for i in range(50)]),
+    ):
+        refresh_data.sync_catalogue(session)
+
+    active = refresh_data._active_universe(session)
+    assert list(active["symbol"]) == ["AAPL"]
+    assert len(session.scalars(select(Ticker)).all()) == 51
+
+
+def test_catalogue_sync_is_idempotent(session: Session) -> None:
+    listings = _listings(("RKLB", "Rocket Lab", "Nasdaq", "equity"))
+    with patch("refresh_data.listing_client.fetch_us_listings", return_value=listings):
+        first = refresh_data.sync_catalogue(session)
+        second = refresh_data.sync_catalogue(session)
+    assert (first, second) == (1, 0)
