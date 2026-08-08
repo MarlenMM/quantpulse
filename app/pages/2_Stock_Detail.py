@@ -43,7 +43,7 @@ from lib.format import (
     rating_label,
 )
 from lib.glossary import tip
-from lib.search import format_choice
+from lib.search import format_choice, search_symbols
 from quantpulse.analysis import forecasting, macro, risk, smart_money, technical
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import chatbot
@@ -515,6 +515,159 @@ def render_chat(symbol: str, context_blocks: list[str]) -> None:
     st.caption(chatbot.ADVICE_DISCLAIMER)
 
 
+def select_symbol(rows: pd.DataFrame) -> str | None:
+    """One search box over every listed symbol, not just the scored ones.
+
+    The picker used to offer only the few hundred names the nightly job scores,
+    so a company outside them was not merely unranked -- it was unreachable, and
+    the page gave no hint that it existed. The catalogue holds about 13,000, and
+    searching it costs nothing until someone picks a row.
+    """
+    # The scored rows are the authority on what is ranked, and the catalogue only
+    # adds names it does not already carry. Reading "is this ranked?" from the
+    # catalogue instead would make routing depend on two sources agreeing: when
+    # they drift -- a stale cache, a database written before the last sync -- a
+    # scored stock gets sent down the live path and loses the entire nightly
+    # analysis, showing a thin live estimate where a full one exists.
+    ranked = rows.reindex(columns=["symbol", "name", "sector"]).assign(coverage="ranked")
+    extra = data.catalogue()
+    if not extra.empty:
+        extra = extra[~extra["symbol"].isin(set(ranked["symbol"]))]
+    catalogue = pd.concat([ranked, extra], ignore_index=True) if not extra.empty else ranked
+
+    query = st.text_input(
+        "Search any listed company or ticker",
+        placeholder="e.g. AAPL, Rocket Lab, RKLB, ASML",
+        help="Searches all US-listed symbols, not only the ones in the ranking.",
+    )
+    matches = search_symbols(catalogue, query, limit=12)
+    if not matches:
+        st.warning(f"Nothing listed matches “{query}”.")
+        return None
+
+    coverage = dict(zip(catalogue["symbol"], catalogue["coverage"], strict=False))
+    preselected = st.session_state.get("detail_symbol")
+    if not query and preselected in set(catalogue["symbol"]):
+        matches = [preselected] + [m for m in matches if m != preselected]
+
+    def label(candidate: str) -> str:
+        base = format_choice(catalogue, candidate)
+        # Say which are ranked *in the picker*, so the difference is visible
+        # before clicking rather than explained afterwards.
+        return base if coverage.get(candidate) == "ranked" else f"{base}  ·  not ranked"
+
+    symbol = st.selectbox("Symbol", matches, index=0, format_func=label)
+    st.session_state["detail_symbol"] = symbol
+    return str(symbol)
+
+
+def render_on_demand(symbol: str, catalogue: pd.DataFrame) -> None:
+    """A symbol outside the ranking, analysed live.
+
+    Everything here is labelled for what it is. The rating is absolute, because
+    this stock has no peer group to be in the top decile of; the percentile is a
+    *placement* against the stored ranking rather than a rank within it; and the
+    categories that cannot be computed from a few seconds of fetching are listed
+    as missing rather than quietly scored zero.
+    """
+    match = catalogue[catalogue["symbol"] == symbol]
+    name = str(match["name"].iloc[0]) if not match.empty else None
+    sector = (
+        str(match["sector"].iloc[0]) if not match.empty and match["sector"].notna().all() else None
+    )
+
+    with st.spinner(f"Fetching and analysing {symbol} now…"):
+        result = data.on_demand_analysis(symbol, sector)
+
+    if result is None:
+        st.error(
+            f"**{symbol}** is listed, but no price history came back for it just now. "
+            "That usually means it is newly listed, suspended, or the data source is "
+            "rate-limiting. Nothing is wrong with your search."
+        )
+        return
+
+    st.markdown(f"### {symbol} — {name or ''}")
+    st.info(
+        f"**Computed just now, not part of the ranking.** {symbol} is one of "
+        f"{len(catalogue):,} listed symbols the app knows about but does not score "
+        "nightly, so this was fetched and analysed on the spot. It is not in the "
+        "Screener and has no track record here."
+    )
+
+    header = st.columns(4)
+    header[0].metric(
+        "Rating (absolute)",
+        rating_label(result.absolute_rating),
+        help="Measured against fixed bars, not against peers — this stock is not in a "
+        "scored universe, so it has no decile to be in the top of.",
+    )
+    header[1].metric("Composite", format_score(result.composite_score), help=tip("Composite score"))
+    header[2].metric(
+        "Would place above",
+        "—" if result.percentile_vs_ranked is None else f"{result.percentile_vs_ranked:.0f}%",
+        help="Where this score would sit among the ranked universe. A placement, not a "
+        "rank: this was scored from a few seconds of fetching, they were scored by a "
+        "full nightly pipeline.",
+    )
+    header[3].metric(
+        "Coverage", confidence_label(result.data_confidence), help=tip("Data coverage")
+    )
+    st.caption(
+        f"Prices through {result.as_of} · analysed {result.computed_at:%H:%M} · "
+        f"{len(result.prices)} bars · categories used: "
+        f"{', '.join(humanize(c) for c in result.covered_categories) or 'none'}"
+    )
+
+    bars = result.prices.set_index(pd.DatetimeIndex(pd.to_datetime(result.prices["date"])))
+    overlays: dict[str, pd.Series] = {}
+    if len(bars) >= 50:
+        overlays["SMA 50"] = bars["close"].rolling(50).mean()
+    if len(bars) >= 200:
+        overlays["SMA 200"] = bars["close"].rolling(200).mean()
+    st.plotly_chart(charts.price_chart(bars, overlays=overlays), width="stretch")
+
+    if result.forecasts:
+        st.subheader("Forecast")
+        st.caption(
+            "Horizons are limited to what two years of history can support. There is no "
+            "hit rate: grading a forecast needs a stored track record, and this symbol has "
+            "none — treat these as unproven."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Model": f.model_name,
+                        "Horizon (days)": f.horizon_days,
+                        "Return": format_percent(f.point_return),
+                        "Target": format_price(f.point_price),
+                        "Low": format_price(f.lower_price),
+                        "High": format_price(f.upper_price),
+                    }
+                    for f in result.forecasts
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    detected = result.patterns_frame()
+    if not detected.empty:
+        st.subheader("Detected patterns")
+        st.dataframe(detected.head(15), hide_index=True, width="stretch")
+
+    if result.notes:
+        st.subheader("What is missing, and why")
+        for note in result.notes:
+            st.markdown(f"- {note}")
+
+    st.caption(
+        "Educational/research tool. Not financial advice. Not a registered investment "
+        "advisor. Past backtested performance does not guarantee future results."
+    )
+
+
 def main() -> None:
     st.title("🔬 Stock Detail")
     rows = data.screener_rows()
@@ -522,21 +675,18 @@ def main() -> None:
         st.info("No scored symbols yet — run `scripts/refresh_data.py` first.")
         return
 
-    symbols = rows["symbol"].tolist()
-    preselected = st.session_state.get("detail_symbol")
-    index = symbols.index(preselected) if preselected in symbols else 0
-    # Labels carry the company name so a picker confirms you chose the company
-    # you meant, not a similarly-spelled ticker (Section 31).
-    labels = rows[["symbol", "name"]]
-    symbol = st.selectbox(
-        "Symbol",
-        symbols,
-        index=index,
-        format_func=lambda s: format_choice(labels, s),
-    )
-    st.session_state["detail_symbol"] = symbol
+    symbol = select_symbol(rows)
+    if symbol is None:
+        return
 
-    row = rows[rows["symbol"] == symbol].iloc[0]
+    scored = rows[rows["symbol"] == symbol]
+    if scored.empty:
+        # Listed but never scored: everything below reads stored analysis that
+        # does not exist for it, so this is a different page, not a degraded one.
+        render_on_demand(symbol, data.catalogue())
+        return
+
+    row = scored.iloc[0]
     header = st.columns([2, 1, 1, 1])
     header[0].markdown(f"### {symbol} — {row['name'] or ''}")
     header[0].caption(row["sector"] or "Sector unknown")

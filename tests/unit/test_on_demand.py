@@ -201,3 +201,25 @@ def test_the_result_carries_the_date_of_the_data_not_of_the_request(no_network) 
     assert result is not None
     assert result.as_of == series["date"].iloc[-1].date()
     assert result.computed_at.date() >= result.as_of
+
+
+def test_patterns_are_the_detector_s_own_objects_not_a_frame(no_network) -> None:
+    """The detector returns `ChartPattern` objects, and a stub that returned a
+    DataFrame instead let a page call `.empty` on a list all the way to a live
+    run. Pin the real shape here so no fixture can drift from it again.
+    """
+    result = on_demand.analyse("TEST")
+    assert result is not None
+    assert isinstance(result.patterns, list)
+    frame = result.patterns_frame()
+    assert isinstance(frame, pd.DataFrame)
+    if result.patterns:
+        assert len(frame) == len(result.patterns)
+
+
+def test_patterns_frame_is_empty_when_nothing_was_detected(no_network) -> None:
+    with patch.object(on_demand.patterns, "detect_all_chart_patterns", return_value=[]):
+        result = on_demand.analyse("TEST")
+    assert result is not None
+    assert result.patterns == []
+    assert result.patterns_frame().empty
