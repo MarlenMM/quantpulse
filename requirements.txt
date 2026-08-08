@@ -30,7 +30,7 @@ pandas-ta-classic==0.6.52
 pyportfolioopt==1.6.0
 pandas-market-calendars==5.4.0
 sqlalchemy==2.0.51
-alembic==1.18.5
+alembic==1.19.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
