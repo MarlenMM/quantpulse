@@ -25,6 +25,21 @@ REPO = Path(__file__).resolve().parents[2]
 # a title plus either data or an explanatory empty state.
 MIN_RENDERED_CHARS = 120
 
+# The machine-learning stack belongs to `scripts/refresh_data.py` -- spaCy for
+# entity extraction, BART for event classification, FinBERT for sentiment. The
+# app only ever reads what that job already wrote, so no page may import any of
+# it, and `requirements.txt` (what Streamlit Community Cloud installs) leaves
+# all three out. Together they are roughly 2.5 GB of wheels on Linux, which is
+# more disk and memory than the free tier has: if a page ever grows an import
+# of one, the deploy stops working, and it stops working at install time on a
+# host nobody is watching rather than here.
+#
+# Checked after the render rather than before, and by absence from `sys.modules`
+# rather than by making the import fail -- that way this runs inside the *full*
+# development environment, where all three are installed and an accidental
+# import would otherwise succeed silently.
+FORBIDDEN_MODULES = ("torch", "transformers", "spacy", "thinc")
+
 
 def main() -> int:
     page_path, database = sys.argv[1], sys.argv[2]
@@ -84,6 +99,18 @@ def main() -> int:
     )
     if len(rendered) < MIN_RENDERED_CHARS:
         print(f"EMPTY: rendered only {len(rendered)} characters of text")
+        return 1
+
+    imported = sorted(
+        name
+        for name in FORBIDDEN_MODULES
+        if name in sys.modules or any(m.startswith(f"{name}.") for m in sys.modules)
+    )
+    if imported:
+        print(
+            f"HEAVY IMPORT: rendering this page imported {', '.join(imported)}, which the "
+            "deployed app's requirements.txt deliberately omits"
+        )
         return 1
 
     print(f"OK: {len(rendered)} chars, {len(app.metric)} metrics, {len(app.dataframe)} tables")
