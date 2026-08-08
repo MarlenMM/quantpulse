@@ -2,7 +2,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -704,6 +704,104 @@ def test_run_skips_on_non_trading_day(engine: Engine) -> None:
 
     assert len(logs) == 1
     assert logs[0].status == "skipped_non_trading_day"
+
+
+def _one_name_universe() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "symbol": "SYM0",
+                "name": "SYM0",
+                "sector": "Technology",
+                "industry": "Software",
+                "exchange": None,
+                "asset_type": "equity",
+                "is_active": True,
+            }
+        ]
+    )
+
+
+def _run_recording_weekly_flag(engine: Engine, **kwargs: object) -> tuple[list[bool], list[str]]:
+    """Run once and report the `is_weekly` each ticker fetch was handed."""
+    fake_get_session, factory = _fake_session_factory(engine)
+    seen: list[bool] = []
+
+    def record(
+        symbol: str, last_price_date: date | None, is_weekly: bool, **_: object
+    ) -> refresh_data.TickerFetchResult:
+        seen.append(is_weekly)
+        return refresh_data.TickerFetchResult(symbol=symbol, price_df=_price_df(symbol, rows=1))
+
+    with (
+        patch("refresh_data.get_session", fake_get_session),
+        patch(
+            "refresh_data.wikipedia_client.fetch_sp500_constituents",
+            return_value=_one_name_universe(),
+        ),
+        patch("refresh_data.fetch_ticker_data", side_effect=record),
+        patch(
+            "refresh_data.edgar_13f_client.fetch_institutional_ownership_trend",
+            return_value=_empty_df(list(refresh_data._INSTITUTIONAL_COLUMNS)),
+        ),
+        patch("refresh_data.gdelt_client.fetch_articles", return_value=_empty_df(["title", "url"])),
+        patch(
+            "refresh_data.gdelt_client.fetch_tone_timeline",
+            return_value=_empty_df(["date", "tone", "query"]),
+        ),
+    ):
+        refresh_data.run(job_name="test_run_overrides", **kwargs)  # type: ignore[arg-type]
+
+    with factory() as session:
+        statuses = [log.status for log in session.scalars(select(RefreshLog)).all()]
+    return seen, statuses
+
+
+def test_ignore_market_calendar_runs_on_a_closed_day(engine: Engine) -> None:
+    """The catch-up override.
+
+    Without it a database that has missed a run cannot be brought up to date
+    except by waiting for the calendar to agree -- which for the weekly branch
+    means waiting a week.
+    """
+    with patch("refresh_data.is_trading_day", return_value=False):
+        seen, statuses = _run_recording_weekly_flag(engine, ignore_market_calendar=True)
+
+    assert seen, "the run skipped the closed day instead of overriding it"
+    assert "skipped_non_trading_day" not in statuses
+
+
+def test_a_closed_day_is_still_skipped_by_default(engine: Engine) -> None:
+    """Mutation guard: the test above must be testing the override, not the day."""
+    with patch("refresh_data.is_trading_day", return_value=False):
+        seen, statuses = _run_recording_weekly_flag(engine)
+
+    assert seen == []
+    assert statuses == ["skipped_non_trading_day"]
+
+
+def test_force_weekly_runs_the_weekly_branch_on_a_non_weekly_day(engine: Engine) -> None:
+    """The weekly branch is where fundamentals, analyst consensus, news and
+    sentiment come from, and it is the branch that has actually failed on a
+    runner. Learning whether a fix worked should not take a week.
+
+    The weekly weekday is patched to whatever today is *not*, so this asserts
+    the same thing on every day of the week rather than passing six days in
+    seven for the wrong reason.
+    """
+    today = datetime.now(refresh_data._MARKET_TZ).date()
+    not_today = (today.weekday() + 1) % 7
+
+    with (
+        patch("refresh_data.is_trading_day", return_value=True),
+        patch.object(refresh_data, "_WEEKLY_REFRESH_WEEKDAY", not_today),
+    ):
+        forced, _ = _run_recording_weekly_flag(engine, force_weekly=True)
+        default, _ = _run_recording_weekly_flag(engine)
+
+    assert forced == [True]
+    # The default is untouched: an ordinary day is still a daily run.
+    assert default == [False]
 
 
 # --------------------------------------------------------------------------- #
