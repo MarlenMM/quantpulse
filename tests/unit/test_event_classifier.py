@@ -265,3 +265,58 @@ class TestClassificationBudget:
         with patch.object(ec, "_load_classifier", return_value=_fake):
             results = ec.classify_articles(self._frame(4), max_classified=99)
         assert all(r.event_type is ec.EventType.EARNINGS for r in results)
+
+
+class TestClassificationDeadline:
+    """A wall-clock stop, because an article cap is a bet on the machine's speed.
+
+    That bet was lost in production. Caps tuned to roughly 38 minutes on a
+    development machine exhausted a 90-minute budget on a GitHub runner; the
+    step was killed by its own timeout, and because it died mid-classification
+    the entire night's news -- event types *and* the sentiment that feeds the
+    composite score -- was never persisted at all. A deadline degrades into the
+    same `OTHER` an over-cap already produces, instead of into nothing.
+    """
+
+    @staticmethod
+    def _frame(n: int) -> pd.DataFrame:
+        return pd.DataFrame({"title": [f"Company {i} reports earnings" for i in range(n)]})
+
+    @staticmethod
+    def _fake(batch, **kwargs):  # type: ignore[no-untyped-def]
+        return [
+            {"labels": ["corporate earnings or financial results"], "scores": [0.9]} for _ in batch
+        ]
+
+    def test_stops_once_the_deadline_passes(self) -> None:
+        # A clock that starts before the deadline and is past it by the second
+        # check, so exactly one chunk goes through the model.
+        clock = iter([0.0, 100.0, 100.0, 100.0])
+
+        with (
+            patch.object(ec, "_load_classifier", return_value=self._fake),
+            patch.object(ec.time, "monotonic", lambda: next(clock)),
+        ):
+            results = ec.classify_articles(self._frame(9), chunk_size=3, deadline=50.0)
+
+        assert [r.event_type for r in results[:3]] == [ec.EventType.EARNINGS] * 3
+        assert all(r.event_type is ec.EventType.OTHER for r in results[3:])
+        # The same degraded state an over-cap produces, not a new one.
+        assert all(r.confidence == 0.0 for r in results[3:])
+
+    def test_a_deadline_that_never_passes_classifies_everything(self) -> None:
+        """Mutation guard: the test above must be measuring the deadline, not
+        the chunking."""
+        with (
+            patch.object(ec, "_load_classifier", return_value=self._fake),
+            patch.object(ec.time, "monotonic", lambda: 0.0),
+        ):
+            results = ec.classify_articles(self._frame(9), chunk_size=3, deadline=50.0)
+        assert all(r.event_type is ec.EventType.EARNINGS for r in results)
+
+    def test_chunking_alone_classifies_everything(self) -> None:
+        """No deadline: chunk boundaries must not drop rows."""
+        with patch.object(ec, "_load_classifier", return_value=self._fake):
+            results = ec.classify_articles(self._frame(10), chunk_size=3)
+        assert len(results) == 10
+        assert all(r.event_type is ec.EventType.EARNINGS for r in results)
