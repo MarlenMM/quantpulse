@@ -2,7 +2,9 @@
 
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
-**Live demo:** not yet deployed — see [Live Demo & Deployment](#live-demo--deployment) below for the two steps to stand one up on Streamlit Community Cloud.
+**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, refreshed every weeknight, no sign-up and no keys. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
+
+**Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 
 ![QuantPulse walkthrough: Dashboard, Screener, Stock Detail, and Backtest / Track Record](docs/screenshots/demo.gif)
 
@@ -18,7 +20,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,364** (unit, integration, and property-based via Hypothesis), all passing |
+| Automated tests | **1,411** (unit, integration, and property-based via Hypothesis), all passing |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
@@ -215,29 +217,90 @@ guidance a free screener doesn't offer.
 
 ## Live Demo & Deployment
 
-`.github/workflows/refresh_data.yml` keeps a small, repo-committed demo
-database (`quantpulse_demo.db` — distinct from your own local
-`quantpulse.db`, see `.gitignore`) up to date every weeknight, so Streamlit
-Community Cloud can serve a public demo without the live app needing any API
-keys of its own (ADR 4.4). Two one-time steps, both manual — neither can be
-scripted from outside your own accounts:
+There are two deployments, and they are deliberately different shapes.
 
-1. **Seed the demo database once**, locally, with your own free-tier keys:
-   ```bash
-   DATABASE_URL=sqlite:///./quantpulse_demo.db uv run alembic upgrade head
-   DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_data.py
-   git add quantpulse_demo.db && git commit -m "Seed the live-demo database" && git push
+### 1. GitHub Pages — the public link, fully automated
+
+**<https://marlenmm.github.io/quantpulse/>**
+
+The React SPA, served as static files, free on public repos, always on, nothing
+to sign into. Pages cannot run Python, so `scripts/build_static_site.py`
+pre-renders the read API instead: it runs the real FastAPI app through
+Starlette's `TestClient` over the committed demo database and writes every
+response the client can ask for (524 files, ~29 MB). **The published numbers are
+the API's own output**, not a second implementation — the same discipline that
+keeps the two front ends agreeing.
+
+`.github/workflows/pages.yml` builds and publishes it on every push to `main`,
+and the nightly refresh calls that workflow directly once it has committed fresh
+data. (It has to be an explicit call: the nightly's commit carries `[skip ci]`,
+which suppresses every workflow a push would otherwise start.)
+
+Before publishing, the workflow loads the finished bundle in a real browser and
+reads real numbers off it. That check is load-bearing rather than ceremonial:
+the generator and the client agree about filenames only by convention, they are
+in different languages, and a one-character disagreement would 404 every request
+while the type check, the build and the unit tests all stayed green.
+
+**What Pages cannot host:** the Portfolio Manager. It needs per-visitor write
+state, and the API is read-only by design (see `api/main.py`'s docstring). Run
+`./run.sh` for that, or deploy the Streamlit app below.
+
+### 2. Streamlit Community Cloud — the full app, one manual step
+
+The seven-page Streamlit app, including the Portfolio Manager and the LLM
+narration layer. Connecting a repo needs an interactive GitHub sign-in, so this
+is the one step that cannot be scripted. The repo is already prepared for it:
+
+1. Go to **<https://share.streamlit.io>** and sign in with GitHub.
+2. **Create app** → **Deploy a public app from GitHub**.
+3. Fill in: Repository `MarlenMM/quantpulse`, Branch `main`, Main file path
+   `app/Home.py`. Under **Advanced settings**, set Python version **3.12**.
+4. In the same **Advanced settings** panel, paste this into **Secrets**:
+   ```toml
+   DATABASE_URL = "sqlite:///./quantpulse_demo.db"
+   PORTFOLIO_BACKEND = "session"
    ```
-   After this, the nightly workflow takes over — it commits an updated
-   `quantpulse_demo.db` back to `main` every weeknight (see the workflow
-   file's own comments for why that's safe now that ADR 4.5's session-vs-
-   sqlite split exists). Also add `FINNHUB_API_KEY` / `FRED_API_KEY` /
-   `SEC_EDGAR_USER_AGENT` as **repo secrets** (Settings → Secrets and
-   variables → Actions) so the nightly job itself can fetch fresh data.
+5. **Deploy**. First build takes a few minutes.
 
-   **Without those secrets the nightly still runs, but four datasets stay
-   permanently empty**, and the app will show them as "never run" rather than
-   pretending otherwise. Worth knowing which cost what:
+`requirements.txt` is what that host installs, and it deliberately omits torch,
+transformers and spaCy — the nightly job's models, roughly 2.5 GB of wheels,
+which no page imports and the free tier cannot fit. It is generated from
+`uv.lock` by `scripts/sync_requirements.py`, and every page render in the test
+suite asserts none of the three ends up in `sys.modules`.
+
+`PORTFOLIO_BACKEND=session` is the part that matters (ADR 4.5): it keeps every
+visitor's holdings in their own browser session rather than the shared committed
+file. An LLM key (Section 4.3) is optional — the app runs fine without one.
+
+Streamlit Community Cloud auto-redeploys on every push to `main`, so each
+night's data commit refreshes the live app with no separate step.
+
+### Data and secrets
+
+`.github/workflows/refresh_data.yml` keeps the repo-committed demo database
+(`quantpulse_demo.db` — distinct from your own local `quantpulse.db`, see
+`.gitignore`) up to date every weeknight, so neither deployment needs API keys
+of its own (ADR 4.4).
+
+That database is already seeded and committed — a fresh clone has real data
+immediately, which is why `./run.sh` needs no setup. To rebuild it from scratch
+(after a long gap, or to change the history depth):
+
+```bash
+DATABASE_URL=sqlite:///./quantpulse_demo.db uv run alembic upgrade head
+DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_data.py
+git add quantpulse_demo.db && git commit -m "Reseed the live-demo database" && git push
+```
+
+The nightly workflow then keeps it current, committing an updated
+`quantpulse_demo.db` back to `main` every weeknight (the workflow file's own
+comments explain why that is safe given ADR 4.5's session-vs-sqlite split).
+
+Fresher data needs **repo secrets** (Settings → Secrets and variables →
+Actions). **Without them the nightly still runs, but some datasets stay
+permanently empty**, and the app shows them as "never run" rather than
+pretending otherwise. Worth knowing which cost what:
 
    | Secret | What stays empty without it |
    |---|---|
@@ -250,25 +313,9 @@ scripted from outside your own accounts:
    all, which is why the composite score still computes without any of the
    above (at a lower `data_confidence`, which every page displays).
 
-2. **Connect the repo at [share.streamlit.io](https://share.streamlit.io)**:
-   point it at this repo, branch `main`, main file `app/Home.py`, then set
-   these under the *app's* own Settings → Secrets (a `.streamlit/secrets.toml`-
-   format screen, separate from the GitHub repo secrets above):
-   ```toml
-   DATABASE_URL = "sqlite:///./quantpulse_demo.db"
-   PORTFOLIO_BACKEND = "session"
-   ```
-   `PORTFOLIO_BACKEND=session` is the part that actually matters (ADR 4.5):
-   it keeps every visitor's portfolio entries in their own browser session
-   instead of the shared file, so the committed demo database only ever
-   holds the same public screener/market data every visitor already sees.
-   An LLM key (Section 4.3) is optional — the app runs fine without one.
-
-Streamlit Community Cloud auto-redeploys on every push to `main`, so each
-night's data commit above refreshes the live app automatically — no
-separate redeploy step to remember. Once connected, replace the "not yet
-deployed" line near the top of this file with the actual `share.streamlit.io`
-URL.
+   As of 2026-08-08 only `SEC_EDGAR_USER_AGENT` is set, so short interest and
+   the FRED macro series are empty in the published demo — which every page
+   reports as "never run" rather than scoring as zero.
 
 ## Development
 
@@ -288,9 +335,11 @@ analysis engine stays UI-agnostic.
 
 Full detail in [Section 15 of the plan](PROJECT_PLAN.md#15-development-roadmap--milestones).
 Phases 0–12 are complete, as is Section 21's final look-ahead-bias/
-normalization review across the scoring → forecasting → backtest chain. What's
-left is the two manual "Live Demo & Deployment" steps above, which need your
-own accounts and API keys and can't be scripted from the repo.
+normalization review across the scoring → forecasting → backtest chain, and the
+public demo is live on GitHub Pages. The one thing left is optional: connecting
+the repo to Streamlit Community Cloud for a hosted copy of the *full* app,
+which needs an interactive sign-in nobody can script (steps above). `./run.sh`
+gives you the same thing locally in the meantime.
 
 ## Disclaimer
 
