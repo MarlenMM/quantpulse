@@ -12,6 +12,7 @@ writes anyway, so mixing concurrent fetches with concurrent writes would
 only add "database is locked" failures without buying any real parallelism.
 """
 
+import argparse
 import logging
 import signal
 import sys
@@ -1507,9 +1508,37 @@ def refresh_tier2_news(session: Session, today: date) -> int:
     return persistence.upsert_news_events(session, records)
 
 
-def run(job_name: str = "refresh_data") -> str:
+def run(
+    job_name: str = "refresh_data",
+    *,
+    force_weekly: bool = False,
+    ignore_market_calendar: bool = False,
+) -> str:
+    """Run the refresh. Both overrides exist for operations, not for the schedule.
+
+    `force_weekly` runs the weekly branch (fundamentals, analyst consensus,
+    13F, forecasts, backtest, news and sentiment) on a day that is not Monday.
+    The weekly branch is the one that has historically failed to complete --
+    it once exhausted the six-hour job limit -- and waiting a week to find out
+    whether a fix worked is a bad feedback loop. It is also how a database that
+    has never had a successful weekly run gets caught up without pretending
+    today is Monday.
+
+    `ignore_market_calendar` runs on a closed day. Normally a non-trading day is
+    a deliberate cheap no-op; when catching up, refusing to run because it
+    happens to be Saturday is the wrong answer.
+
+    Neither is set by the schedule. `.github/workflows/refresh_data.yml` exposes
+    both as manual-dispatch inputs.
+    """
     run_id = configure_logging(get_settings().log_level)
-    logger.info("%s starting (run_id=%s)", job_name, run_id)
+    logger.info(
+        "%s starting (run_id=%s, force_weekly=%s, ignore_market_calendar=%s)",
+        job_name,
+        run_id,
+        force_weekly,
+        ignore_market_calendar,
+    )
     # Before anything expensive. A missed `alembic upgrade head` otherwise
     # surfaces as "table X has no column named Y" from whichever step writes
     # that column first -- nine minutes and 503 tickers into the run. Checked
@@ -1531,7 +1560,7 @@ def run(job_name: str = "refresh_data") -> str:
     rows_updated = 0
     failed_steps: list[str] = []
 
-    if not is_trading_day(today):
+    if not is_trading_day(today) and not ignore_market_calendar:
         logger.info("%s: market closed today (%s), skipping refresh", job_name, today)
         with get_session() as session:
             session.add(
@@ -1591,7 +1620,7 @@ def run(job_name: str = "refresh_data") -> str:
         name_by_symbol = {symbol: name for symbol, name in active_tickers}
         sector_by_symbol = dict(zip(universe_df["symbol"], universe_df["sector"], strict=True))
 
-        is_weekly = today.weekday() == _WEEKLY_REFRESH_WEEKDAY
+        is_weekly = force_weekly or today.weekday() == _WEEKLY_REFRESH_WEEKDAY
 
         results: list[TickerFetchResult] = []
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
@@ -1756,11 +1785,31 @@ def run(job_name: str = "refresh_data") -> str:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Refresh the QuantPulse database.")
+    parser.add_argument(
+        "--force-weekly",
+        action="store_true",
+        help="Run the weekly steps (fundamentals, analyst, 13F, forecasts, backtest, "
+        "news, sentiment) even when today is not Monday.",
+    )
+    parser.add_argument(
+        "--ignore-market-calendar",
+        action="store_true",
+        help="Run even when the exchange is closed, instead of skipping.",
+    )
+    arguments = parser.parse_args()
+
     # Exit non-zero on a hard failure so the scheduled workflow actually goes
     # red. Previously `run()` caught everything, recorded status="failed" in
     # `refresh_log`, and still exited 0 -- so GitHub Actions reported four
     # consecutive successes while the deployed demo's prices sat frozen and
     # nobody had any reason to look. "partial" stays green on purpose: that is
     # the designed degradation for one flaky upstream source, not an outage.
-    if run() == "failed":
+    if (
+        run(
+            force_weekly=arguments.force_weekly,
+            ignore_market_calendar=arguments.ignore_market_calendar,
+        )
+        == "failed"
+    ):
         sys.exit(1)

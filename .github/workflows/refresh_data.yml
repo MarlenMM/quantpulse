@@ -25,7 +25,23 @@ on:
     #
     # The script still checks the NYSE calendar, so a holiday is a cheap no-op.
     - cron: "0 22 * * 1-5"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_weekly:
+        description: >-
+          Run the weekly steps (fundamentals, analyst consensus, 13F, forecasts,
+          backtest, news, sentiment) even though today is not Monday. Use this to
+          catch a database up, or to find out whether a fix to the weekly branch
+          worked without waiting a week for the schedule to tell you.
+        type: boolean
+        default: false
+      ignore_market_calendar:
+        description: >-
+          Run even when the exchange is closed. Normally a closed day is a
+          deliberate no-op; when catching up, "it is Saturday" is not a reason
+          to do nothing.
+        type: boolean
+        default: false
 
 jobs:
   refresh:
@@ -51,7 +67,10 @@ jobs:
           DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
       - name: Run nightly refresh
-        run: uv run python scripts/refresh_data.py
+        run: >-
+          uv run python scripts/refresh_data.py
+          ${{ inputs.force_weekly && '--force-weekly' || '' }}
+          ${{ inputs.ignore_market_calendar && '--ignore-market-calendar' || '' }}
         env:
           DATABASE_URL: "sqlite:///./quantpulse_demo.db"
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
