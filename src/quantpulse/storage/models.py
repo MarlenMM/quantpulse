@@ -39,9 +39,30 @@ class Base(DeclarativeBase):
 
 
 class Ticker(Base):
-    """Universe definition. `is_active` flags current-vs-removed without deleting history."""
+    """Universe definition. `is_active` flags current-vs-removed without deleting history.
+
+    `coverage` is a different axis and the two must not be confused:
+
+    * `is_active` answers "is this in the index we track right now" -- it drives
+      index-membership reconstruction and every nightly fetch.
+    * `coverage` answers "how much do we know about this symbol at all":
+      ``ranked`` means the nightly job fetches and scores it, so it appears in
+      the Screener; ``catalogue`` means we know the symbol exists and can search
+      for it, and nothing more.
+
+    The catalogue exists so a visitor can look up a company that is not one of
+    the few hundred the nightly job can afford to score. Storing ~13,000 names
+    costs about a megabyte; storing ~13,000 *price histories* would be several
+    hundred, past the point where GitHub refuses the file at all. Catalogue rows
+    are therefore deliberately `is_active=False`: every existing reader filters
+    on that column, so adding them cannot quietly pull thousands of symbols into
+    the nightly job or into a ranking that never scored them.
+    """
 
     __tablename__ = "tickers"
+
+    RANKED = "ranked"
+    CATALOGUE = "catalogue"
 
     symbol: Mapped[str] = mapped_column(String(10), primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
@@ -50,6 +71,7 @@ class Ticker(Base):
     exchange: Mapped[str | None] = mapped_column(String(20))
     asset_type: Mapped[str] = mapped_column(String(10), default="equity")
     is_active: Mapped[bool] = mapped_column(default=True)
+    coverage: Mapped[str] = mapped_column(String(16), default=RANKED, server_default=RANKED)
 
 
 class IndexMembershipHistory(Base):

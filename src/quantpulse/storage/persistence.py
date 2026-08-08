@@ -1109,6 +1109,44 @@ def read_ticker_universe(session: Session, *, active_only: bool = True) -> pd.Da
     return pd.DataFrame(rows, columns=["symbol", "name", "sector", "asset_type"])
 
 
+def read_searchable_catalogue(
+    session: Session, *, asset_types: Sequence[str] = ("equity",)
+) -> pd.DataFrame:
+    """Every symbol a visitor may search for, ranked or not.
+
+    Deliberately *not* filtered on `is_active`. That column means "currently in
+    the index the nightly job tracks", and the whole point of the catalogue is
+    the symbols that are not. Filtering on it here is the one mistake that would
+    make this function silently return the same 500 names the Screener already
+    shows.
+
+    `coverage` comes back with each row because the caller has to be able to say
+    which it is: a ranked symbol has a stored score and a place in the ranking,
+    while a catalogue symbol has nothing until someone asks for it and it is
+    computed live. Presenting the two as though they were equally established is
+    exactly the kind of false confidence the rest of the app works to avoid.
+    """
+    stmt = select(
+        Ticker.symbol,
+        Ticker.name,
+        Ticker.sector,
+        Ticker.asset_type,
+        Ticker.exchange,
+        Ticker.coverage,
+    )
+    if asset_types:
+        stmt = stmt.where(Ticker.asset_type.in_(list(asset_types)))
+    rows = session.execute(stmt.order_by(Ticker.symbol)).all()
+    return pd.DataFrame(
+        rows, columns=["symbol", "name", "sector", "asset_type", "exchange", "coverage"]
+    )
+
+
+def read_coverage(session: Session, symbol: str) -> str | None:
+    """`ranked`, `catalogue`, or None when the symbol is not listed at all."""
+    return session.scalar(select(Ticker.coverage).where(Ticker.symbol == symbol))
+
+
 def read_latest_prices(session: Session, symbols: Sequence[str]) -> dict[str, float]:
     """Each symbol's most recent close — for pricing a portfolio.
 

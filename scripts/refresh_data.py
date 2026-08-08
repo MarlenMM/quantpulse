@@ -51,6 +51,7 @@ from quantpulse.ingestion import (
     edgar_client,
     fred_client,
     gdelt_client,
+    listing_client,
     news_client,
     options_client,
     short_interest_client,
@@ -388,6 +389,59 @@ def sync_universe(session: Session) -> int:
 
     session.flush()
     return len(constituents)
+
+
+def sync_catalogue(session: Session) -> int:
+    """Record every US-listed symbol as searchable, without scoring any of them.
+
+    The nightly job can afford to fetch and score a few hundred names; the US
+    market lists about 13,000 securities. Rather than pretend the rest do not
+    exist, they go in as `coverage="catalogue"` -- searchable, analysable on
+    demand, and invisible to everything else.
+
+    Two invariants make that safe, and both are asserted in the tests:
+
+    * **A ranked symbol is never demoted.** This only ever inserts rows that are
+      absent. If the S&P 500 sync and the listing directory disagree about a
+      symbol -- and they will, on share classes and recent changes -- the ranked
+      row wins, because it is the one with three years of prices behind it.
+    * **Catalogue rows are `is_active=False`.** Every existing reader, the whole
+      nightly pipeline and the index-membership reconstruction all filter on
+      that column, so 12,500 new rows cannot leak into a fetch loop, a ranking,
+      or a survivorship-aware backtest.
+
+    Returns the number of newly catalogued symbols, which is large on the first
+    run and near zero afterwards.
+    """
+    listings = listing_client.fetch_us_listings()
+    known = set(session.scalars(select(Ticker.symbol)))
+
+    added = 0
+    for row in listings.itertuples(index=False):
+        if row.symbol in known:
+            continue
+        session.add(
+            Ticker(
+                symbol=row.symbol,
+                name=row.name,
+                sector=None,
+                industry=None,
+                exchange=row.exchange,
+                asset_type=row.asset_type,
+                is_active=False,
+                coverage=Ticker.CATALOGUE,
+            )
+        )
+        added += 1
+
+    session.flush()
+    logger.info(
+        "Catalogue: %d listed symbols, %d newly recorded (%d already known).",
+        len(listings),
+        added,
+        len(listings) - added,
+    )
+    return added
 
 
 def reconcile_index_membership(session: Session, today: date) -> int:
@@ -1639,6 +1693,17 @@ def run(
     try:
         with get_session() as session:
             rows_updated += sync_universe(session)
+            # The searchable catalogue of everything else. Cheap (one file
+            # fetch, names only) and it must not be able to break the ranked
+            # universe, so it runs behind `step()` like any other optional
+            # source: a Nasdaq outage costs search coverage for a day, not the
+            # night's prices.
+            # Its OWN session, deliberately. `step()` swallows the exception but
+            # cannot undo what it did to the session: a failed flush leaves the
+            # shared one needing a rollback, so the *next* statement on it fails
+            # too and an isolated step takes down the whole run. That is exactly
+            # what a malformed listing row did the first time this ran.
+            rows_updated += step("catalogue", lambda: _in_session(sync_catalogue))
             # Record the index add/drop this sync just detected into the
             # point-in-time membership history, so it stays honest for the
             # survivorship-aware backtest between cold-start re-seeds (Section 6.9).
