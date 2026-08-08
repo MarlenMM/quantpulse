@@ -18,7 +18,7 @@
 # `uv.lock`, so the deployed app runs exactly what the test suite ran against.
 # Regenerate with `python scripts/sync_requirements.py`; CI fails if it is stale.
 
-streamlit==1.59.1
+streamlit==1.61.0
 plotly==6.9.0
 pandas==3.0.3
 numpy==2.5.1
