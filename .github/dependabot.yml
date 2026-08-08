@@ -3,18 +3,21 @@
 # separately-pinned dependency sets (Section 29's "dependency pinning"):
 # the Python backend (uv.lock), the React frontend (package-lock.json), and
 # the GitHub Actions themselves (pinned by tag in ci.yml/refresh_data.yml).
-#
-# Note on `requirements.txt`: it is generated from `uv.lock` (see
-# `scripts/sync_requirements.py`) and only exists because Streamlit Community
-# Cloud installs from it. Dependabot's pip updater sees it too, so it may open
-# a PR bumping a pin there on its own. Such a PR fails
-# `tests/unit/test_deploy_requirements.py` by design, with a message saying to
-# regenerate from the lockfile -- the lockfile is the single source of truth,
-# and a pin that disagrees with it is exactly the drift that test exists to catch.
 version: 2
 updates:
+  # `requirements.txt` is excluded on purpose. It is *generated* from `uv.lock`
+  # by `scripts/sync_requirements.py`, and exists only because Streamlit
+  # Community Cloud installs from it. Left visible to Dependabot it produced one
+  # PR per package bumping a pin there and nowhere else -- which
+  # `tests/unit/test_deploy_requirements.py` correctly fails, since a pin that
+  # disagrees with the lockfile is exactly the drift it guards. The fix belongs
+  # upstream: bump `uv.lock`, which the entry below still covers, and
+  # regenerate. Every dependency here is a transitive of one declared in
+  # `pyproject.toml`, so nothing goes unwatched.
   - package-ecosystem: "pip"
     directory: "/"
+    exclude-paths:
+      - "requirements.txt"
     schedule:
       interval: "weekly"
 
