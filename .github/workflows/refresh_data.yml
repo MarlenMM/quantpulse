@@ -101,6 +101,11 @@ jobs:
   # `always()` for the same reason the commit step uses it -- a partial refresh
   # still produced data worth publishing, and the job's exit code is there for
   # visibility rather than to discard the night's work.
+  #
+  # `ref: main` is load-bearing. `github.sha` is fixed at whatever `main` pointed
+  # at when this run started, and the refresh job commits the new database
+  # *after* that -- so the default checkout would publish last night's data
+  # every night, with every step green and nothing to notice.
   publish:
     needs: refresh
     if: always()
@@ -109,3 +114,5 @@ jobs:
       pages: write
       id-token: write
     uses: ./.github/workflows/pages.yml
+    with:
+      ref: main

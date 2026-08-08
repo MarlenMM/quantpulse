@@ -40,13 +40,14 @@ account, no API key, no bill.
 
 ## What each page is for
 
-The public link has the first four. Your local copy has all seven.
+The public link has five of these — everything except the Portfolio Manager and
+Settings, which are marked below. Your local copy has all seven.
 
 | Page | What it's for | What you can do |
 |---|---|---|
 | **Dashboard** | The market at a glance | See today's top-ranked names, whether the market is risk-on or risk-off, which sectors money moved into this month, and which ratings changed since yesterday |
 | **Screener** | The ranked list of all 503 companies | Sort and filter the whole S&P 500 by score, rating or sector; search by name; switch investor profile (below); compare up to four names side by side; download it as a spreadsheet |
-| **Stock Detail** | One company, in depth | Price chart, the seven category scores behind its rating, detected chart patterns, forecasts at four horizons with their track record, risk numbers, short interest |
+| **Stock Detail** | One company, in depth | Price chart, the category scores behind its rating, detected chart patterns, forecasts at four horizons each with its own track record, volatility/Sharpe/Sortino/beta, and a simulated range of future prices |
 | **Backtest / Track Record** | Did the ranking actually work? | The historical result of following the ratings, with confidence intervals and a benchmark to compare against |
 | **Portfolio Manager** *(local only)* | Your own holdings | Enter what you own, see risk, correlation, sector concentration, add/trim/hold/sell suggestions, and three target allocations with a concrete trade list |
 | **Settings** *(local only)* | What's switched on | Which data sources are configured and when each last ran |
@@ -115,12 +116,15 @@ promise.
 
 ## Why some things are empty
 
-The nightly job collects everything it can from free sources. Four datasets need
-credentials the project deliberately doesn't buy:
+The nightly job collects everything it can from free sources. Two different
+reasons some things are still blank:
 
-- **Fundamentals, analyst consensus, news sentiment** — these come from free
-  sources but are collected on the *weekly* branch of the nightly job, which
-  runs on Mondays. They should populate on the next Monday run.
+- **Fundamentals, analyst consensus, news sentiment** — these need no key at
+  all. They are collected on the *weekly* branch of the nightly job, which runs
+  on Mondays, and that branch has not yet completed on a runner: the first
+  attempt hit GitHub's six-hour job limit while running a news-classification
+  model over too many articles. The caps that fix it are in place, so **Monday
+  is when we find out** — until then these three stay honestly empty.
 - **Short interest** needs a Finnhub key; **macro rates** need a FRED key.
   Both have free tiers, but neither is set, so those two stay empty forever
   unless you add them. Nothing asks you to.
