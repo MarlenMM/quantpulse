@@ -1,30 +1,33 @@
-name: Nightly Data Refresh
+name: Data Refresh (manual)
 
 on:
-  schedule:
-    # 22:00 UTC = 17:00 EST / 18:00 EDT -- one to two hours after the 16:00 ET
-    # close, on the SAME calendar day in New York. Moved here from 02:00 UTC,
-    # which was wrong in three compounding ways:
-    #
-    #  * **Stale option quotes.** GitHub's scheduler routinely slips ~3 hours
-    #    under load, so a 02:00 UTC job actually ran around 04:45-05:30 UTC,
-    #    i.e. roughly 00:45-01:30 ET. By then Yahoo's option chain has gone
-    #    stale overnight, which is how the database ended up with an implied
-    #    volatility of 0.46% for Apple and sub-penny values for 96% of names.
-    #  * **Friday was never captured.** At 02:00 UTC the run lands on the
-    #    *previous* US evening, so Mon-Fri UTC covered Sunday through Thursday
-    #    in New York. Friday's close needed a Saturday 02:00 UTC run, which
-    #    `1-5` excludes. Firing at 22:00 UTC makes the UTC weekday and the ET
-    #    trading day the same, so Mon-Fri means Mon-Fri.
-    #  * **The date was off by one.** `run()` derived "today" from the runner's
-    #    UTC clock, which at 02:00 UTC is already tomorrow in New York -- so
-    #    Monday's closing data was stamped Tuesday and `is_trading_day` was
-    #    asked about the wrong date. That is now fixed in the script itself
-    #    (it reads the date in exchange time), and this schedule keeps the two
-    #    aligned even without it.
-    #
-    # The script still checks the NYSE calendar, so a holiday is a cheap no-op.
-    - cron: "0 22 * * 1-5"
+  # No `schedule:` -- by design. Nothing refreshes on a timer: a person asks for
+  # a refresh, either from the app's own Settings page or by dispatching this
+  # workflow. Dispatching is the only path that can update the repo-committed
+  # demo database, so it is what keeps the public deployments current.
+  #
+  # This used to run on `cron: "0 22 * * 1-5"`, and the reasoning behind that
+  # timing is kept because it now governs *when a manual run is worth doing*
+  # rather than when one happens:
+  #
+  #  * **Run after the US close, not before.** 22:00 UTC is one to two hours
+  #    after the 16:00 ET close on the same calendar day in New York. Earlier
+  #    than that and the day's closing prices and option chain are not published
+  #    yet -- the database once ended up with an implied volatility of 0.46% for
+  #    Apple, and sub-penny values for 96% of names, from running too early.
+  #  * **The date is derived in exchange time**, not the runner's, so a run near
+  #    midnight UTC still stamps the New York trading day rather than tomorrow.
+  #    That lives in the script and needs no help from the trigger.
+  #
+  # Two consequences of there being no schedule, both handled by the inputs
+  # below rather than left as surprises:
+  #
+  #  * The weekly branch no longer comes round by itself. It keys off Monday, so
+  #    without `force_weekly` a database refreshed on Tuesdays would never see
+  #    fundamentals, analyst consensus, 13F, forecasts, the backtest, news or
+  #    sentiment again.
+  #  * A closed day is still a cheap no-op unless `ignore_market_calendar` says
+  #    otherwise, which is usually what you want and occasionally not.
   workflow_dispatch:
     inputs:
       force_weekly:
@@ -78,7 +81,7 @@ jobs:
         env:
           DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
-      - name: Run nightly refresh
+      - name: Run refresh
         run: >-
           uv run python scripts/refresh_data.py
           ${{ inputs.force_weekly && '--force-weekly' || '' }}
@@ -98,16 +101,19 @@ jobs:
       # data ever lands in this shared file -- only the same screener/market
       # data every visitor already sees. `[skip ci]` skips re-running the
       # test workflow on a data-only commit; the bot identity is GitHub's
-      # standard one for Actions-authored commits. This nightly commit is
-      # also what keeps the scheduled workflow itself from being
-      # auto-disabled after 60 days of no repo activity (ADR 4.4's own
-      # caveat) -- a side effect, not a separate thing to remember to do.
+      # standard one for Actions-authored commits.
       #
-      # `if: always()` because the refresh step now exits non-zero on a hard
+      # ADR 4.4's caveat about GitHub auto-disabling a workflow after 60 days of
+      # repo inactivity no longer applies -- that only ever affected `schedule:`
+      # triggers, and there is none left to keep alive. The flip side is that
+      # the demo database, and therefore both public deployments, are only as
+      # fresh as the last time somebody dispatched this.
+      #
+      # `if: always()` because the refresh step exits non-zero on a hard
       # failure (so the job actually goes red instead of silently reporting
       # success for days). Whatever data did land before the failure is still
       # worth committing -- the point of the exit code is visibility, not
-      # discarding a partly-successful night's work.
+      # discarding a partly-successful run's work.
       - name: Commit refreshed demo database
         if: always()
         run: |
@@ -118,7 +124,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Nightly data refresh [skip ci]"
+          git commit -m "Data refresh [skip ci]"
 
           # Retry on a rejected push, replaying this run's database on top of
           # whatever landed meanwhile.
@@ -150,7 +156,7 @@ jobs:
               echo "main already carries this data."
               exit 0
             fi
-            git commit -m "Nightly data refresh [skip ci]"
+            git commit -m "Data refresh [skip ci]"
           done
           echo "::error::could not push the refreshed database after 3 attempts"
           exit 1
@@ -165,12 +171,12 @@ jobs:
   #
   # `always()` for the same reason the commit step uses it -- a partial refresh
   # still produced data worth publishing, and the job's exit code is there for
-  # visibility rather than to discard the night's work.
+  # visibility rather than to discard the run's work.
   #
   # `ref: main` is load-bearing. `github.sha` is fixed at whatever `main` pointed
   # at when this run started, and the refresh job commits the new database
-  # *after* that -- so the default checkout would publish last night's data
-  # every night, with every step green and nothing to notice.
+  # *after* that -- so the default checkout would publish the previous run's
+  # data every time, with every step green and nothing to notice.
   publish:
     needs: refresh
     if: always()

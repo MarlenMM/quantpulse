@@ -22,6 +22,20 @@ class Settings(BaseSettings):
     portfolio_backend: Literal["sqlite", "session"] = "sqlite"
     database_url: str = "sqlite:///./quantpulse.db"
 
+    # Whether the Settings page offers a "Refresh now" button. Nothing runs on a
+    # schedule, so on your own machine this is how the data gets refreshed.
+    #
+    # Left unset it follows the deployment shape rather than guessing, because
+    # the two shapes genuinely differ: `sqlite` is your own persistent instance,
+    # where a refresh writes a database that survives and one person decides
+    # when to spend the API quota. `session` is the hosted demo, where the
+    # button would be wrong twice over -- any visitor could start a multi-hour
+    # job on shared free-tier quota, and it would fail on import anyway, since
+    # that host installs `requirements.txt`, which deliberately omits the torch
+    # / transformers / spaCy stack the refresh needs. Set it explicitly to
+    # override the inference in either direction.
+    manual_refresh_enabled: bool | None = None
+
     # Section 4.3: LLM is a narrator over precomputed numbers, never the
     # source of them. Swappable via this flag; the app works with it unset.
     llm_provider: Literal["gemini", "groq", "ollama"] = "gemini"
@@ -86,6 +100,12 @@ class Settings(BaseSettings):
     # the forecast price window is 1,280 days. It also roughly halves the
     # database, which matters because the demo DB is committed to git.
     seed_history_period: str = "10y"
+
+    def manual_refresh_allowed(self) -> bool:
+        """Whether this instance may start a data refresh from the UI."""
+        if self.manual_refresh_enabled is None:
+            return self.portfolio_backend == "sqlite"
+        return self.manual_refresh_enabled
 
 
 @lru_cache

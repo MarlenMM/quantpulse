@@ -62,7 +62,7 @@ def render_empty_state() -> None:
 
     A brand-new checkout has an empty database, so the honest first-run screen
     is instructions rather than a grid of blank charts. Section 6.2's
-    cold-start/nightly split is the thing a new user most needs pointed out.
+    cold-start/incremental split is the thing a new user most needs pointed out.
     """
     st.info("No analysis data yet — the pipeline hasn't been run against this database.")
     st.markdown(
@@ -70,14 +70,16 @@ def render_empty_state() -> None:
         **To populate it:**
 
         ```bash
-        uv run alembic upgrade head        # create the schema
+        uv run alembic upgrade head                  # create the schema
         uv run python scripts/seed_initial_data.py   # one-time historical backfill
-        uv run python scripts/refresh_data.py        # nightly incremental refresh + scoring
         ```
 
-        The cold-start backfill is a separate, resumable job from the nightly
+        The cold-start backfill is a separate, resumable job from the incremental
         refresh (Section 6.2) — it pulls years of history for the whole universe
-        and can take a while on the first run.
+        and can take a while on the first run. It is also the only step that has
+        to happen at a terminal: after it, keep the data current from
+        **⚙️ Settings → Run a refresh**. Nothing runs on a schedule, so a refresh
+        happens when you ask for one.
         """
     )
 

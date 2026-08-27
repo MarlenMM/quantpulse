@@ -2,7 +2,7 @@
 
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
-**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, refreshed every weeknight, no sign-up and no keys. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
+**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
 
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 
@@ -20,12 +20,12 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,411** (unit, integration, and property-based via Hypothesis), all passing |
+| Automated tests | **1,466** (unit, integration, and property-based via Hypothesis) |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
-| Free data sources integrated | **8** feed the nightly refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
+| Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
-| Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** — four differ by category weights alone, and two (income, conservative) genuinely re-score a category, so the nightly stores their rankings separately |
-| Chart pattern families detected | **4** — head-and-shoulders, double top/bottom, triangles/wedges/channels, cup-and-handle — detected nightly across the universe and shown per stock with a confidence score |
+| Composite scoring | **7 categories** (fundamentals, technicals, analyst consensus, news sentiment, momentum, industry/macro, smart money) × **6 investor-profile presets** — four differ by category weights alone, and two (income, conservative) genuinely re-score a category, so each refresh stores their rankings separately |
+| Chart pattern families detected | **4** — head-and-shoulders, double top/bottom, triangles/wedges/channels, cup-and-handle — detected across the whole universe on every refresh and shown per stock with a confidence score |
 | Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, and a Monte Carlo fan chart. The first three are graded out-of-sample against the naive baseline; Monte Carlo deliberately is not, because it simulates the same random walk the baseline evaluates in closed form (grading it would be grading the baseline against itself) |
 | Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
 | Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, and Black-Litterman driven by the app's own composite scores, each with a concrete buy/sell trade list |
@@ -49,7 +49,7 @@ flowchart TB
     end
 
     subgraph ING["Ingestion Layer"]
-        SCHED["GitHub Actions cron (nightly)"]
+        SCHED["Refresh, on demand<br/>(Settings page · Actions dispatch)"]
         FETCH["Rate-limited, circuit-broken, cached fetch clients"]
     end
 
@@ -144,12 +144,27 @@ where its storage backends already live.
 
 ```bash
 uv run python scripts/seed_initial_data.py   # one-time historical backfill (slow)
-uv run python scripts/refresh_data.py        # nightly incremental refresh + scoring
+uv run python scripts/refresh_data.py        # incremental refresh + scoring (also a button in the app)
 ```
 
 The backfill takes a few hours for the full ~1,200-symbol universe and is
 resumable — it infers progress from the database, so re-running it continues
 rather than starting over. Expect roughly 300 MB.
+
+**Refreshes are manual, on purpose.** Nothing runs on a timer: the data changes
+when you ask it to, from **⚙️ Settings → Run a refresh** in the app (the usual
+way — it runs in the background and tails its own log while you keep using the
+app) or by running the script above. Two things follow from there being no
+schedule, and the page offers a checkbox for each:
+
+- **Run it after the US close.** Earlier and the day's closing prices and option
+  chain simply have not been published yet.
+- **The weekly branch no longer comes round by itself.** Fundamentals, analyst
+  consensus, 13F, forecasts, the backtest, news and sentiment key off Monday, so
+  tick *Include the weekly steps* to refresh them on any other day. That run
+  takes hours rather than minutes.
+- A refresh is a deliberate no-op on a weekend or holiday unless you tick *Run
+  even though the market is closed today*.
 
 #### Known limitation: survivorship coverage of delisted companies
 
@@ -207,7 +222,7 @@ for the full, honest list of what's explicitly out of scope:
 | Ranking methodology | Fully transparent — read the actual scoring source | Proprietary/opaque |
 | Backtesting | Built in: walk-forward, bootstrap-confidence-interval-aware | Not available on free tiers |
 | Portfolio-level guidance | Add/Trim/Hold/Sell + concentration/sector-gap warnings | Watchlists only, no guidance |
-| Data cadence | Nightly batch, by design (Section 2) — a research tool, not a ticker tape | Real-time |
+| Data cadence | Batch, refreshed when you ask it to, by design (Section 2) — a research tool, not a ticker tape | Real-time |
 | Coverage | US equities & ETFs, S&P 500 universe | Global, much broader |
 | News/sentiment | 3-tier (company/industry/market), scored by a local FinBERT model | Headlines only, no built-in scoring |
 
@@ -232,9 +247,9 @@ the API's own output**, not a second implementation — the same discipline that
 keeps the two front ends agreeing.
 
 `.github/workflows/pages.yml` builds and publishes it on every push to `main`,
-and the nightly refresh calls that workflow directly once it has committed fresh
-data. (It has to be an explicit call: the nightly's commit carries `[skip ci]`,
-which suppresses every workflow a push would otherwise start.)
+and the refresh workflow calls it directly once it has committed fresh data.
+(It has to be an explicit call: the refresh's commit carries `[skip ci]`, which
+suppresses every workflow a push would otherwise start.)
 
 Before publishing, the workflow loads the finished bundle in a real browser and
 reads real numbers off it. That check is load-bearing rather than ceremonial:
@@ -264,7 +279,7 @@ is the one step that cannot be scripted. The repo is already prepared for it:
 5. **Deploy**. First build takes a few minutes.
 
 `requirements.txt` is what that host installs, and it deliberately omits torch,
-transformers and spaCy — the nightly job's models, roughly 2.5 GB of wheels,
+transformers and spaCy — the refresh job's models, roughly 2.5 GB of wheels,
 which no page imports and the free tier cannot fit. It is generated from
 `uv.lock` by `scripts/sync_requirements.py`, and every page render in the test
 suite asserts none of the three ends up in `sys.modules`.
@@ -278,10 +293,15 @@ night's data commit refreshes the live app with no separate step.
 
 ### Data and secrets
 
-`.github/workflows/refresh_data.yml` keeps the repo-committed demo database
+`.github/workflows/refresh_data.yml` updates the repo-committed demo database
 (`quantpulse_demo.db` — distinct from your own local `quantpulse.db`, see
-`.gitignore`) up to date every weeknight, so neither deployment needs API keys
-of its own (ADR 4.4).
+`.gitignore`), so neither deployment needs API keys of its own (ADR 4.4). It is
+**dispatched by hand** (Actions → Data Refresh → Run workflow), not on a
+schedule — so both public deployments are only as fresh as the last time
+somebody ran it. The in-app refresh button stays off in hosted `session` mode
+(`MANUAL_REFRESH_ENABLED`): a shared URL is no place to let a visitor start an
+hours-long job on rate-limited quota, and that host omits the model stack the
+refresh needs anyway.
 
 That database is already seeded and committed — a fresh clone has real data
 immediately, which is why `./run.sh` needs no setup. To rebuild it from scratch
@@ -293,12 +313,13 @@ DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_d
 git add quantpulse_demo.db && git commit -m "Reseed the live-demo database" && git push
 ```
 
-The nightly workflow then keeps it current, committing an updated
-`quantpulse_demo.db` back to `main` every weeknight (the workflow file's own
-comments explain why that is safe given ADR 4.5's session-vs-sqlite split).
+Dispatching the workflow then keeps it current, committing an updated
+`quantpulse_demo.db` back to `main` (the workflow file's own comments explain
+why that is safe given ADR 4.5's session-vs-sqlite split) and republishing the
+Pages site against it.
 
 Fresher data needs **repo secrets** (Settings → Secrets and variables →
-Actions). **Without them the nightly still runs, but some datasets stay
+Actions). **Without them the job still runs, but some datasets stay
 permanently empty**, and the app shows them as "never run" rather than
 pretending otherwise. Worth knowing which cost what:
 
