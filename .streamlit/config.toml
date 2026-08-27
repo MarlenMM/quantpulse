@@ -6,8 +6,10 @@ base = "dark"
 primaryColor = "#3b82f6"
 
 [server]
-# The nightly job writes the database; the app only reads it. Watching the
-# whole tree would reload the app mid-refresh for no benefit.
+# "auto" watches Python sources only, which is what we want: a refresh now runs
+# as a subprocess of this app and writes the database underneath it, and having
+# the app reload itself mid-write would buy nothing. Fresh rows reach the pages
+# by the refresh clearing `lib.data`'s caches when it finishes, not by a watcher.
 fileWatcherType = "auto"
 
 [browser]

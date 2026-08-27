@@ -11,8 +11,8 @@ Plain-English guide. No setup, no keys, no payment — none of this costs anythi
 **https://marlenmm.github.io/quantpulse/**
 
 Open it on any device. It shows the research side of the app: rankings, per-stock
-detail, charts, forecasts, the track record, the glossary. It refreshes itself
-every weeknight.
+detail, charts, forecasts, the track record, the glossary. It shows whatever
+data was current the last time somebody ran a refresh — nothing is on a timer.
 
 It is **read-only**. It cannot hold a portfolio, because it is a set of files on
 a free host with nothing running behind it — there is no server to save anything
@@ -116,15 +116,17 @@ promise.
 
 ## Why some things are empty
 
-The nightly job collects everything it can from free sources. Two different
-reasons some things are still blank:
+A refresh collects everything it can from free sources. Two different reasons
+some things are still blank:
 
 - **Fundamentals, analyst consensus, news sentiment** — these need no key at
-  all. They are collected on the *weekly* branch of the nightly job, which runs
-  on Mondays, and that branch has not yet completed on a runner: the first
-  attempt hit GitHub's six-hour job limit while running a news-classification
-  model over too many articles. The caps that fix it are in place, so **Monday
-  is when we find out** — until then these three stay honestly empty.
+  all. They come from the *weekly* branch, which a refresh only runs on Mondays
+  unless it is asked to, and that branch has not yet completed on a runner: the
+  first attempt hit GitHub's six-hour job limit while running a
+  news-classification model over too many articles. The caps that fix it are in
+  place. Running the app yourself, tick **Include the weekly steps** on
+  ⚙️ Settings → Run a refresh to fill these in on any day; until someone does,
+  they stay honestly empty.
 - **Short interest** needs a Finnhub key; **macro rates** need a FRED key.
   Both have free tiers, but neither is set, so those two stay empty forever
   unless you add them. Nothing asks you to.
@@ -136,9 +138,11 @@ tells you so.
 
 ## If something looks wrong
 
-- **The public link shows old data.** It republishes after each weeknight
-  refresh. A weekend or a holiday means no new data — the Dashboard's freshness
-  strip tells you the date it's actually showing.
+- **The public link shows old data.** Nothing refreshes on a schedule: it
+  republishes after somebody runs a refresh, and that is the only time it
+  changes. The Dashboard's freshness strip tells you the date it's actually
+  showing. Running the app yourself, ⚙️ Settings → Run a refresh is the
+  button that updates it.
 - **`./run.sh` says Python 3.12 is required.** Run the one-line install command
   it prints, then run `./run.sh` again.
 - **A page says a section can't be computed.** That's usually the honest

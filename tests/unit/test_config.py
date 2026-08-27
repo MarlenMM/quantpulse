@@ -20,6 +20,31 @@ def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
 
 
+class TestManualRefreshGate:
+    """Who is allowed to start a refresh from the UI.
+
+    Nothing refreshes on a schedule any more, so the button is the trigger --
+    and a wrong default here is not cosmetic in either direction. Too strict and
+    the only instance that can refresh its own data cannot; too loose and any
+    visitor to the hosted demo can start a multi-hour job on shared free-tier
+    quota, on a host whose `requirements.txt` omits the model stack it needs.
+    """
+
+    def test_a_local_sqlite_instance_may_refresh(self) -> None:
+        assert Settings(_env_file=None).manual_refresh_allowed()
+
+    def test_a_hosted_session_mode_demo_may_not(self) -> None:
+        settings = Settings(_env_file=None, portfolio_backend="session")
+        assert not settings.manual_refresh_allowed()
+
+    def test_an_explicit_setting_overrides_the_inference(self) -> None:
+        # Both directions: the inference is a default, not a policy.
+        assert not Settings(_env_file=None, manual_refresh_enabled=False).manual_refresh_allowed()
+        assert Settings(
+            _env_file=None, portfolio_backend="session", manual_refresh_enabled=True
+        ).manual_refresh_allowed()
+
+
 class TestSchemaVersionGate:
     """A missed `alembic upgrade head` must fail in second one, not minute nine.
 

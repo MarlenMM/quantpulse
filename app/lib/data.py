@@ -11,10 +11,12 @@ Every function is a thin wrapper: open a session, call one
 because the readers are plain functions over a `Session`, they stay testable
 without Streamlit even though the wrappers here are not.
 
-`TTL_SECONDS` is short enough that a nightly refresh landing mid-session shows
-up without a restart, and long enough that clicking around a page doesn't
-re-query on every rerun. `st.cache_data` also keys on arguments, so the
-per-symbol readers cache per symbol automatically.
+`TTL_SECONDS` is short enough that data landing mid-session shows up without a
+restart, and long enough that clicking around a page doesn't re-query on every
+rerun. It is a backstop rather than the main path: a refresh started from the
+Settings page clears these caches the moment it finishes (`lib/refresh.py`), so
+the wait only applies to rows that arrived some other way. `st.cache_data` also
+keys on arguments, so the per-symbol readers cache per symbol automatically.
 """
 
 from __future__ import annotations
