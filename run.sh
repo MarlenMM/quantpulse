@@ -10,11 +10,11 @@
 # Portfolio Manager, against the demo database that is committed to this repo.
 #
 # It needs no API key and no account. Everything it shows comes from
-# `quantpulse_demo.db`, which the nightly GitHub Actions job refreshes.
+# `quantpulse_demo.db`, which a dispatched GitHub Actions run refreshes.
 #
 # Deliberately built from `requirements.txt` rather than `uv sync`: that is the
 # app's own dependency set (18 packages, ~30 seconds) instead of the whole
-# project's, which includes the nightly job's machine-learning stack -- around
+# project's, which includes the refresh job's machine-learning stack -- around
 # 2.5 GB of wheels the app never imports. It is also exactly what the hosted
 # deploy installs, so running this locally exercises the deployed shape.
 set -euo pipefail
