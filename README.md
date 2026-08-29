@@ -1,10 +1,24 @@
 # QuantPulse
 
+[![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
+[![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-1a7f37.svg)](https://marlenmm.github.io/quantpulse/)
+[![Tests](https://img.shields.io/badge/tests-1%2C466-1a7f37.svg)](tests/)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
+[![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
+
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
 **Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
 
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
+
+> **Why a fresh clone is ~70 MB.** `quantpulse_demo.db` (63 MB) is committed on
+> purpose: it is what makes `./run.sh`, the test suite and the public demo work
+> immediately, with no hours-long seeding run and no API keys — a deliberate
+> trade of repository size against a reader's first five minutes. Your own
+> working database (`quantpulse.db`) is gitignored and never committed. The
+> reasoning, and how to rebuild the demo database from scratch, are under
+> [Data and secrets](#data-and-secrets).
 
 ![QuantPulse walkthrough: Dashboard, Screener, Stock Detail, and Backtest / Track Record](docs/screenshots/demo.gif)
 
