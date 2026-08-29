@@ -83,7 +83,11 @@ test("a stock page deep link renders its charts", async ({ page }) => {
   // router strips the project-site base prefix off the path.
   await page.goto("stocks/AIZ");
 
-  await expect(page.getByText("AIZ")).toBeVisible();
+  // The h1 specifically, not any text node: the symbol also appears in the
+  // chart titles and axis labels, so a bare getByText matches five elements
+  // and fails Playwright's strict mode for a reason unrelated to the deep
+  // link this test exists to check.
+  await expect(page.getByRole("heading", { level: 1, name: /^AIZ/ })).toBeVisible();
   await expect(page.locator(".js-plotly-plot")).toHaveCount(3);
   await expect(page.locator(".main-svg").first()).toBeVisible();
 
