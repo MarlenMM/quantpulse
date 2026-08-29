@@ -46,7 +46,11 @@ from quantpulse.storage.models import (
 )
 
 APP_DIR = Path(__file__).resolve().parents[2] / "app"
-AS_OF = date(2026, 7, 27)
+# Anchored to today, not to a literal date: every window these pages read is
+# measured from `date.today()`, so fixture rows pinned to a fixed calendar date
+# drift out of those windows as real time passes and the assertions start
+# failing on commits that touched nothing. See test_ui_orphan_sections.py.
+AS_OF = date.today()
 
 
 def _seed(engine: Engine) -> None:

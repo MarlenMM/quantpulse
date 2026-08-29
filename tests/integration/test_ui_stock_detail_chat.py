@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date, timedelta
+from datetime import time as dtime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -28,7 +29,14 @@ from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.storage.models import Base, CompositeScore, Forecast, PriceHistory, Ticker
 
 PAGE = str(Path(__file__).resolve().parents[2] / "app" / "pages" / "2_Stock_Detail.py")
-AS_OF = date(2026, 7, 27)
+# Anchored to today, not to a literal date. Every window the Stock Detail page
+# reads is measured from `date.today()` -- news over 21 days, the cross-asset
+# macro series over 60 -- so fixture rows pinned to a fixed calendar date age
+# out of those windows and the sections under test silently stop rendering.
+# That is exactly what happened: these tests passed for a month and then began
+# failing on a commit that touched none of them. Seeding relative to today
+# keeps the fixtures inside the windows the code actually queries.
+AS_OF = date.today()
 
 
 @pytest.fixture
@@ -235,7 +243,7 @@ class TestNarrativeUsesTwoAndFourAreWired:
                         article_id=f"a{index}",
                         tier=1,
                         title=title,
-                        published_at=datetime(2026, 7, 26),
+                        published_at=datetime.combine(AS_OF - timedelta(days=1), dtime.min),
                         matched_symbols=["NVDA"],
                         event_type="earnings",
                         sentiment_score=polarity,
