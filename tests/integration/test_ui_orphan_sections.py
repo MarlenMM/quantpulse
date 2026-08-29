@@ -39,7 +39,14 @@ from quantpulse.storage.models import (
 APP_DIR = Path(__file__).resolve().parents[2] / "app"
 STOCK_DETAIL = str(APP_DIR / "pages" / "2_Stock_Detail.py")
 BACKTEST_PAGE = str(APP_DIR / "pages" / "4_Backtest.py")
-AS_OF = date(2026, 7, 27)
+# Anchored to today, not to a literal date. Every window the Stock Detail page
+# reads is measured from `date.today()` -- news over 21 days, the cross-asset
+# macro series over 60 -- so fixture rows pinned to a fixed calendar date age
+# out of those windows and the sections under test silently stop rendering.
+# That is exactly what happened: these tests passed for a month and then began
+# failing on a commit that touched none of them. Seeding relative to today
+# keeps the fixtures inside the windows the code actually queries.
+AS_OF = date.today()
 
 
 def _price_series(session, symbol: str, *, days: int = 400, seed: int = 0) -> None:
