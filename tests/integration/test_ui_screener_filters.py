@@ -29,7 +29,11 @@ from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.storage.models import Base, CompositeScore, Ticker
 
 SCREENER = str(Path(__file__).resolve().parents[2] / "app" / "pages" / "1_Screener.py")
-AS_OF = date(2026, 7, 27)
+# Anchored to today, not to a literal date: every window these pages read is
+# measured from `date.today()`, so fixture rows pinned to a fixed calendar date
+# drift out of those windows as real time passes and the assertions start
+# failing on commits that touched nothing. See test_ui_orphan_sections.py.
+AS_OF = date.today()
 
 # (symbol, sector, composite) -- two sectors so a sector filter has something to
 # exclude, and distinct scores so the ordering is unambiguous.
