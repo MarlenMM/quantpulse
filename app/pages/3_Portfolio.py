@@ -770,7 +770,7 @@ def render_watchlist(store: holdings_lib.PortfolioStore) -> None:
 
 
 def main() -> None:
-    st.title("Portfolio & Watchlist")
+    st.title("Your holdings, scored the same way")
     st.warning(DISCLAIMER)
 
     store = get_store()

@@ -15,8 +15,9 @@ number is worse than no track record page.
 
 import pandas as pd
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 
-from lib import data
+from lib import charts, data
 from lib.brand import PAGE_ICON
 from lib.format import format_percent, format_ratio
 from lib.glossary import tip
@@ -84,8 +85,28 @@ def render_position_sizing(latest: pd.Series) -> None:
         )
 
 
+def _render_interval(
+    column: DeltaGenerator,
+    point: float | None,
+    low: float | None,
+    high: float | None,
+    level: float | None,
+) -> None:
+    """The interval, drawn and then spelled out.
+
+    Both, on purpose. The sentence is the one that has to be right — a reader
+    who cannot see the drawing loses nothing. What the drawing buys is that a
+    reader who is skimming cannot skim past the interval, which is the failure
+    this page exists to prevent.
+    """
+    whisker = charts.interval_whisker(point, low, high)
+    if whisker is not None:
+        column.plotly_chart(whisker, width="stretch", config={"displayModeBar": False})
+    column.caption(interval_caption(low, high, level))
+
+
 def main() -> None:
-    st.title("Backtest / Track Record")
+    st.title("What this would have returned")
     runs = data.backtest_history(limit=20)
     if runs.empty:
         st.info(
@@ -110,18 +131,26 @@ def main() -> None:
         f"{latest['cadence']} rebalancing · {int(latest['n_periods'])} periods"
     )
 
+    # `st.header`, not another subheader: the estimate and its interval are the
+    # page, and everything below is supporting material for reading them.
+    st.header("The estimate, and how sure it is")
+
     columns = st.columns(4)
     columns[0].metric("Sharpe", format_ratio(latest["sharpe"]), help=tip("Sharpe ratio"))
-    columns[0].caption(
-        interval_caption(
-            latest["sharpe_ci_low"], latest["sharpe_ci_high"], latest["ci_confidence_level"]
-        )
+    _render_interval(
+        columns[0],
+        latest["sharpe"],
+        latest["sharpe_ci_low"],
+        latest["sharpe_ci_high"],
+        latest["ci_confidence_level"],
     )
     columns[1].metric("CAGR", format_percent(latest["cagr"]), help=tip("CAGR"))
-    columns[1].caption(
-        interval_caption(
-            latest["cagr_ci_low"], latest["cagr_ci_high"], latest["ci_confidence_level"]
-        )
+    _render_interval(
+        columns[1],
+        latest["cagr"],
+        latest["cagr_ci_low"],
+        latest["cagr_ci_high"],
+        latest["ci_confidence_level"],
     )
     columns[2].metric(
         "Max drawdown", format_percent(latest["max_drawdown"]), help=tip("Max drawdown")
@@ -136,6 +165,12 @@ def main() -> None:
         help=tip("Turnover", "Win rate is the share of rebalance periods that ended positive."),
     )
     columns[3].caption(f"average turnover {format_percent(latest['avg_turnover'])} per rebalance")
+
+    st.caption(
+        "The bar under Sharpe and CAGR is that bootstrap interval, and the hairline "
+        "crossing it is zero. A bar that overlaps the hairline is a result the data has "
+        "not separated from luck; it is drawn grey rather than in the accent to say so."
+    )
 
     st.divider()
     st.subheader("Versus benchmark")

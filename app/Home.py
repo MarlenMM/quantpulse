@@ -85,6 +85,41 @@ def render_empty_state() -> None:
     )
 
 
+#: How old a source may be before its age is worth colouring. Prices refresh
+#: daily and fundamentals weekly, so a single lower threshold would flag half
+#: the strip permanently; a week is where every source here is genuinely behind.
+STALE_AFTER_DAYS = 8
+
+
+def render_freshness(freshness: dict[str, object]) -> None:
+    """When each source last ran, as a strip rather than a sentence.
+
+    This used to be one caption of nine `name: age` pairs joined by middots,
+    which wrapped to three lines of grey text nobody read -- and it is the single
+    most important thing on the page for judging whether any other number here
+    is worth anything. As label-over-value pairs it can be skimmed, and a source
+    that is behind is marked so it can be found without reading all nine.
+    """
+    if not freshness:
+        return
+    items = list(freshness.items())
+    st.caption("Data freshness")
+    # Four to a row: enough to read across, few enough that a long source name
+    # still fits its column on a laptop.
+    for start in range(0, len(items), 4):
+        columns = st.columns(4)
+        for column, (name, value) in zip(columns, items[start : start + 4], strict=False):
+            label = freshness_label(value)
+            behind = label == "never run" or (
+                label.endswith("days ago") and int(label.split()[0]) > STALE_AFTER_DAYS
+            )
+            # `:red[]` / `:gray[]` resolve to the theme's own colours, so a stale
+            # source is marked in the same red the ratings use rather than in a
+            # hardcoded hex that would be wrong in one of the two schemes.
+            marked = f":red[{label}]" if behind else label
+            column.markdown(f"**{humanize(name)}**  \n{marked}")
+
+
 def render_regime(regime: "object") -> None:
     st.subheader("Market Regime", help=tip("Market Regime Index"))
     regime_df = data.market_regime(limit=90)
@@ -176,10 +211,13 @@ def render_sector_rotation() -> None:
 
 
 def main() -> None:
-    st.title("QuantPulse")
-    st.caption(
-        "Self-hosted, $0-cost stock research. The statistics do the thinking; "
-        "the optional LLM layer only narrates numbers that already exist."
+    st.title("Today's read")
+    st.markdown(
+        "The S&P 500, scored across seven categories of public data — fundamentals, "
+        "technicals, analyst estimates, news sentiment, momentum, macro and institutional "
+        "filings. This page is the market-wide view: what ranks highest, what the model "
+        "changed its mind about, and what regime it is all happening in. The statistics "
+        "do the thinking; the optional LLM layer only narrates numbers that already exist."
     )
 
     render_onboarding()
@@ -190,16 +228,16 @@ def main() -> None:
         st.caption(DISCLAIMER)
         return
 
-    freshness = data.data_freshness()
-    stale_bits = [
-        f"{humanize(name)}: {freshness_label(value)}" for name, value in freshness.items()
-    ]
-    st.caption("Data freshness — " + " · ".join(stale_bits))
+    render_freshness(data.data_freshness())
+    st.divider()
 
     left, right = st.columns([2, 1])
 
     with left:
-        st.subheader("Today's top-ranked names")
+        # `st.header`, not `st.subheader`: this is the subject of the page and
+        # every other section on it is context for reading it. When all five
+        # sections take the same heading level, none of them is the page.
+        st.header("Today's top-ranked names")
         rows = data.screener_rows()
         if rows.empty:
             st.info("No composite scores stored yet — run `scripts/refresh_data.py`.")
@@ -230,7 +268,7 @@ def main() -> None:
             )
             st.page_link("pages/1_Screener.py", label="Open the full Screener →")
 
-        st.subheader("What changed since the last refresh")
+        st.subheader("What the model changed its mind about")
         changes = data.rating_changes(limit=10)
         if changes.empty:
             st.caption(
@@ -263,7 +301,7 @@ def main() -> None:
     render_sector_rotation()
 
     st.divider()
-    st.subheader("Today's market-moving news")
+    st.subheader("Market-moving stories")
     st.caption("Tier-2 (industry/thematic) and Tier-3 (macro) stories the news module flagged.")
     news = data.market_moving_news(limit=8)
     if news.empty:

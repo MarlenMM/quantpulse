@@ -11,6 +11,7 @@ readers, and those are tested against a real database in `test_persistence.py`.
 from datetime import date
 
 import pandas as pd
+import plotly.graph_objects as go
 import pytest
 
 from lib import charts
@@ -206,6 +207,53 @@ class TestCharts:
     def test_title_is_applied_when_given(self) -> None:
         fig = charts.allocation_pie({"Tech": 0.6, "Energy": 0.4}, title="By sector")
         assert fig.layout.title.text == "By sector"
+
+    def test_interval_whisker_draws_the_bar_the_tick_and_zero(self) -> None:
+        fig = charts.interval_whisker(1.40, 0.68, 2.35)
+        assert fig is not None
+        # Four line shapes: the drawn domain, the interval bar, the zero
+        # hairline and the point tick. The zero hairline is the one that makes
+        # the picture mean anything, so it must be there even when the interval
+        # is nowhere near it.
+        verticals = [s for s in fig.layout.shapes if s.y0 != s.y1]
+        assert 0.0 in {shape.x0 for shape in verticals}, "no zero reference drawn"
+        assert 1.40 in {shape.x0 for shape in verticals}, "no point estimate drawn"
+        bar = [s for s in fig.layout.shapes if s.y0 == s.y1 and s.line.width > 1]
+        assert (bar[0].x0, bar[0].x1) == (0.68, 2.35)
+
+    def test_interval_whisker_domain_always_contains_zero(self) -> None:
+        # An interval far from zero must still be drawn *against* zero, or the
+        # bar floats with no reference and says nothing.
+        fig = charts.interval_whisker(5.0, 4.0, 6.0)
+        assert fig is not None
+        low, high = fig.layout.xaxis.range
+        assert low < 0.0 < high
+
+    def test_interval_whisker_goes_quiet_when_it_straddles_zero(self) -> None:
+        # The colour change is redundant with the caption beside it, never the
+        # only cue -- but a result that has not been distinguished from luck
+        # must not be drawn as confidently as one that has.
+        confident = charts.interval_whisker(1.40, 0.68, 2.35)
+        inconclusive = charts.interval_whisker(0.40, -0.60, 1.35)
+        assert confident is not None and inconclusive is not None
+
+        def tick_color(fig: go.Figure) -> str:
+            ticks = [s for s in fig.layout.shapes if s.y0 != s.y1 and s.x0 != 0.0]
+            return ticks[0].line.color
+
+        assert tick_color(confident) != tick_color(inconclusive)
+
+    @pytest.mark.parametrize(
+        "point,low,high",
+        [(1.0, None, 2.0), (1.0, 0.5, None), (None, 0.5, 2.0), (1.0, float("nan"), 2.0)],
+    )
+    def test_interval_whisker_declines_to_invent_endpoints(
+        self, point: float | None, low: float | None, high: float | None
+    ) -> None:
+        # A run too short to bootstrap has no interval. Drawing a bar anyway
+        # would be the one thing this whole page exists to prevent, so the
+        # builder returns None and the caller shows the caption alone.
+        assert charts.interval_whisker(point, low, high) is None
 
     def test_price_chart_has_candles_and_overlays(self) -> None:
         bars = self._ohlcv()
