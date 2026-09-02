@@ -36,24 +36,29 @@ scripts, so two people who run it get the same pictures:
 #    measured on: three runners at four horizons for every symbol.
 uv run python scripts/seed_screenshot_db.py --out build/screenshots.db
 
-# 2. Serve the app against it, in another shell.
-DATABASE_URL=sqlite:///build/screenshots.db uv run streamlit run app/Home.py
-
-# 3. Capture all four pages at one viewport.
+# 2. Capture all four pages. Starts and stops the app itself.
 node scripts/capture_screenshots.mjs
 
-# 4. Cross-fade them into demo.gif.
+# 3. Cross-fade them into demo.gif.
 uv run python scripts/build_demo_gif.py
 ```
 
-Step 3 is a script rather than four manual grabs because it is the step that
+Step 2 is a script rather than four manual grabs because it is the step that
 goes wrong silently: a page captured a second too early has a half-drawn chart
 in it, and four pages captured at four slightly different window sizes cannot be
 cross-faded at all. It waits for Streamlit's own status widget to stay gone
 before it shoots, and it takes all four at 1440×900 at 1× — the size the
 committed set uses.
 
-Step 4 refuses to run on frames of differing sizes rather than resizing them: a
+**It also starts a fresh Streamlit per page, which is not fussiness.** Driving
+all four pages through one server dies partway with no traceback and no log
+line — the process is simply gone, and the next navigation gets
+`ECONNREFUSED`. It is a SIGSEGV inside `libarrow`'s mimalloc allocator, a
+native-level crash in this environment rather than a bug in any page: the pages
+render fine one at a time. `tests/integration/test_ui_pages_real_data.py` hit
+the same wall and solved it the same way.
+
+Step 3 refuses to run on frames of differing sizes rather than resizing them: a
 resized screenshot is a blurry screenshot, and these images exist to show the
 type.
 
