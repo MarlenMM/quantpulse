@@ -139,7 +139,7 @@ def render_entry_form(store: holdings_lib.PortfolioStore) -> None:
 
         st.caption(
             "Enter cost basis in **post-split** terms — stored price history is "
-            "split-adjusted, so a pre-split basis will not line up (Section 30)."
+            "split-adjusted, so a pre-split basis will not line up."
         )
 
 
@@ -256,7 +256,7 @@ def render_positions(state: holdings_lib.PortfolioState) -> pd.DataFrame:
         st.warning(
             "One or more holdings have no stored price (delisted, acquired, or simply "
             "never ingested). They're shown with their cost basis and excluded from "
-            "market-value totals rather than erroring out the page (Section 30)."
+            "market-value totals rather than erroring out the page."
         )
     st.caption(
         "**Term** is a descriptive short/long holding-period flag based on purchase "
@@ -548,8 +548,8 @@ def render_target_allocation(
     label = st.radio("Method", list(_OPTIMIZER_METHODS), horizontal=False)
     st.caption(
         "**Hierarchical Risk Parity** never estimates expected returns — it clusters your "
-        "holdings by how they move together and splits risk down that tree, which is why "
-        "Section 27 prefers it. **Black-Litterman** starts from an equilibrium allocation "
+        "holdings by how they move together and splits risk down that tree — which is why it "
+        "is the default here. **Black-Litterman** starts from an equilibrium allocation "
         "and tilts it with this app's own composite scores. **Minimum-volatility** "
         "mean-variance uses only the covariance, avoiding the noisiest input of classic "
         "MPT. All three are descriptions of a model's beliefs, not forecasts — the "
@@ -732,7 +732,7 @@ def render_recommendations(frame: pd.DataFrame, cash: float, plan: RebalancePlan
 
 def render_watchlist(store: holdings_lib.PortfolioStore) -> None:
     st.subheader("Watchlist")
-    st.caption("Tracked but not owned (Section 9) — same analysis, no shares or cost basis.")
+    st.caption("Tracked but not owned — same analysis, no shares or cost basis.")
     state = store.load()
     columns = st.columns([3, 1])
     new_symbol = columns[0].text_input("Add symbol", key="watch_add").strip().upper()

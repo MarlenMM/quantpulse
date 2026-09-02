@@ -146,7 +146,7 @@ def render_regime(regime: "object") -> None:
     )
     st.caption(
         "Built in-house from VIX percentile, index breadth, macro news tone and the "
-        "yield-curve spread (Section 5) — not scraped from a paywalled index."
+        "yield-curve spread — not scraped from a paywalled index."
     )
 
 
