@@ -27,28 +27,34 @@ section). `scripts/seed_screenshot_db.py` refuses to write to either by name.
 
 ## Refreshing them
 
-This used to be a paragraph of instructions to follow by hand. It is now two
+This used to be a paragraph of instructions to follow by hand. It is now three
 scripts, so two people who run it get the same pictures:
 
 ```bash
-# 1. Build the scratch database. Slow -- the forecasting stage trains the
-#    walk-forward models the hit-rate columns are measured on.
+# 1. Build the scratch database. Slow -- 15-30 minutes -- because the
+#    forecasting stage trains the walk-forward models the hit-rate columns are
+#    measured on: three runners at four horizons for every symbol.
 uv run python scripts/seed_screenshot_db.py --out build/screenshots.db
 
-# 2. Run the app against it and capture each page at one viewport.
+# 2. Serve the app against it, in another shell.
 DATABASE_URL=sqlite:///build/screenshots.db uv run streamlit run app/Home.py
-```
 
-Capture `dashboard.png`, `screener.png`, `stock_detail.png` and `backtest.png`
-at the **same** viewport — 1440×900 at 2× is what the current set uses. Then:
+# 3. Capture all four pages at one viewport.
+node scripts/capture_screenshots.mjs
 
-```bash
-# 3. Cross-fade the four into demo.gif.
+# 4. Cross-fade them into demo.gif.
 uv run python scripts/build_demo_gif.py
 ```
 
-Step 3 refuses to run on frames of differing sizes rather than resizing them:
-a resized screenshot is a blurry screenshot, and these images exist to show the
+Step 3 is a script rather than four manual grabs because it is the step that
+goes wrong silently: a page captured a second too early has a half-drawn chart
+in it, and four pages captured at four slightly different window sizes cannot be
+cross-faded at all. It waits for Streamlit's own status widget to stay gone
+before it shoots, and it takes all four at 1440×900 at 1× — the size the
+committed set uses.
+
+Step 4 refuses to run on frames of differing sizes rather than resizing them: a
+resized screenshot is a blurry screenshot, and these images exist to show the
 type.
 
 The seeder runs entirely offline. The one stage of the nightly job that reaches
