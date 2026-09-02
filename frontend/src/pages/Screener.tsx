@@ -258,8 +258,9 @@ export default function Screener() {
             ))}
           </select>
         </label>
-        <label>
-          Min coverage <output>{minConfidence}%</output>
+        <label className="control-row">
+          <span>Min coverage</span>
+          <output>{minConfidence}%</output>
           <input
             type="range"
             min={0}
