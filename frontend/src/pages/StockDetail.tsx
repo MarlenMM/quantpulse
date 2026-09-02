@@ -33,7 +33,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
   if (loading) {
     return (
       <>
-        <h1 className="skeleton" style={{ width: "18rem", height: "2.4rem" }} />
+        {/* A div, not an empty <h1>: a heading with no text is a real
+            accessibility defect, and the announcement is carried by the
+            visually-hidden status line inside the metrics below. */}
+        <div className="skeleton" style={{ width: "18rem", height: "2.4rem" }} />
         <LoadingMetrics what={symbol} count={4} />
         <LoadingChart what={`${symbol}'s price history`} />
       </>
