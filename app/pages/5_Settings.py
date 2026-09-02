@@ -261,7 +261,7 @@ def render_methodology() -> None:
 
 
 def main() -> None:
-    st.title("Settings & About")
+    st.title("What is running, and how it works")
     render_freshness()
     st.divider()
     render_manual_refresh()

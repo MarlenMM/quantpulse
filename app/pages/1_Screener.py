@@ -160,7 +160,7 @@ def latest_regime_score() -> float | None:
 
 
 def main() -> None:
-    st.title("Screener")
+    st.title("Rank the whole universe, your way")
     rows = data.screener_rows()
     if rows.empty:
         st.info(

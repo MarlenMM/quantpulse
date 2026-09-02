@@ -670,7 +670,7 @@ def render_on_demand(symbol: str, catalogue: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    st.title("Stock Detail")
+    st.title("One company, every number behind its score")
     rows = data.screener_rows()
     if rows.empty:
         st.info("No scored symbols yet — run `scripts/refresh_data.py` first.")

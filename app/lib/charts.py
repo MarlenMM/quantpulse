@@ -36,6 +36,7 @@ __all__ = [
     "regime_gauge",
     "correlation_heatmap",
     "sector_bar",
+    "interval_whisker",
 ]
 
 # One accent, used wherever a series has no semantic color of its own — the same
@@ -468,5 +469,107 @@ def monte_carlo_fan_chart(history: pd.DataFrame, fan: Any) -> go.Figure:
         height=380,
         hovermode="x unified",
         legend=dict(orientation="h", y=-0.2),
+    )
+    return fig
+
+
+def interval_whisker(
+    point: float | None,
+    low: float | None,
+    high: float | None,
+    *,
+    height: int = 44,
+) -> go.Figure | None:
+    """A bootstrap interval, drawn against zero.
+
+    The one piece of drawing in this app that is about the *methodology* rather
+    than about the data, and the counterpart of `IntervalWhisker` on the React
+    Track Record page — the two front ends draw the same picture.
+
+    Every headline figure on the Track Record page is a bootstrap estimate, and
+    the interval around it is what decides whether the figure means anything: a
+    Sharpe of 0.8 whose 90% interval runs from -0.4 to 2.0 has not been
+    distinguished from luck, and the number alone cannot say so. The caption
+    beside it says exactly that in words, and has since the page was written.
+    This says it in one glance, so a reader who is skimming cannot skim past it.
+
+    The bar is the interval, the tick inside it is the point estimate, and the
+    hairline is zero. An interval that overlaps zero is drawn in the muted grey
+    rather than the accent — redundantly with the caption, never instead of it.
+
+    Returns None when there is nothing honest to draw, so the caller renders the
+    caption alone rather than a bar with invented ends.
+    """
+    if point is None or low is None or high is None:
+        return None
+    if any(pd.isna(value) for value in (point, low, high)):
+        return None
+
+    # The drawn domain always contains zero, because zero is the whole point of
+    # the picture. 12% padding keeps an endpoint off the edge, where it would
+    # read as "continues off-screen".
+    raw_low, raw_high = min(low, 0.0), max(high, 0.0)
+    pad = (raw_high - raw_low or abs(point) or 1.0) * 0.12
+    straddles_zero = low <= 0.0 <= high
+    color = _MUTED if straddles_zero else _ACCENT
+
+    fig = go.Figure()
+    fig.add_shape(
+        type="line",
+        x0=raw_low - pad,
+        x1=raw_high + pad,
+        y0=0,
+        y1=0,
+        line=dict(color=_MUTED, width=1),
+        opacity=0.35,
+    )
+    fig.add_shape(
+        type="line",
+        x0=low,
+        x1=high,
+        y0=0,
+        y1=0,
+        line=dict(color=color, width=7),
+        opacity=0.4,
+    )
+    fig.add_shape(
+        type="line",
+        x0=0.0,
+        x1=0.0,
+        y0=-1,
+        y1=1,
+        line=dict(color=_MUTED, width=1),
+    )
+    fig.add_shape(
+        type="line",
+        x0=point,
+        x1=point,
+        y0=-0.8,
+        y1=0.8,
+        line=dict(color=color, width=2),
+    )
+    # An invisible trace carrying the whole story as one hover, since the shapes
+    # above have no hover of their own.
+    verdict = "includes zero" if straddles_zero else "excludes zero"
+    fig.add_trace(
+        go.Scatter(
+            x=[point],
+            y=[0],
+            mode="markers",
+            marker=dict(size=1, color="rgba(0,0,0,0)"),
+            hovertemplate=(
+                f"{point:.2f}<br>interval {low:.2f} to {high:.2f}<br>{verdict}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+    fig.update_xaxes(visible=False, range=[raw_low - pad, raw_high + pad], fixedrange=True)
+    fig.update_yaxes(visible=False, range=[-1.4, 1.4], fixedrange=True)
+    fig.update_layout(
+        height=height,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
     )
     return fig
