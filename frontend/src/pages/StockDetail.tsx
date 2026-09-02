@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Chart } from "../components/Chart";
-import { ErrorBox, Loading, Metric, RatingChip } from "../components/Common";
+import {
+  ErrorBox,
+  LoadingChart,
+  LoadingMetrics,
+  Metric,
+  RatingChip,
+} from "../components/Common";
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
@@ -13,13 +19,26 @@ import {
   formatSignedPercent,
   humanize,
 } from "../lib/format";
+import { useThemeTokens } from "../lib/theme";
 import { useApi } from "../lib/useApi";
 
 export default function StockDetail({ symbol }: { symbol: string }) {
   const { data, error, loading } = useApi(() => api.stock(symbol), [symbol]);
   const [model, setModel] = useState<string | null>(null);
+  const theme = useThemeTokens();
 
-  if (loading) return <Loading what={symbol} />;
+  // The whole page comes from one request, so a bare "Loading AIZ…" left the
+  // viewport empty until it landed — on the published demo, long enough to read
+  // as a dead link. The skeleton holds the page's actual shape instead.
+  if (loading) {
+    return (
+      <>
+        <h1 className="skeleton" style={{ width: "18rem", height: "2.4rem" }} />
+        <LoadingMetrics what={symbol} count={4} />
+        <LoadingChart what={`${symbol}'s price history`} />
+      </>
+    );
+  }
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
@@ -38,23 +57,49 @@ export default function StockDetail({ symbol }: { symbol: string }) {
   return (
     <>
       <h1>
-        {data.symbol} <span className="muted">— {data.summary.name ?? ""}</span>
+        <span className="ticker">{data.symbol}</span>
+        {data.summary.name ? ` — ${data.summary.name}` : ""}
       </h1>
-      <p className="muted small">{data.summary.sector ?? "Sector unknown"}</p>
+      <p className="standfirst">
+        {data.summary.sector ?? "Sector unknown"} · every figure below is computed from stored
+        public data, and each one links to its own definition.
+      </p>
 
       {score ? (
         <div className="metrics">
-          <Metric label="Rating" value={<RatingChip rating={score.rating} />} term="Rating" />
-          <Metric label="Composite" value={formatScore(score.composite_score)} term="Composite score" />
-          <Metric label="Percentile" value={formatScore(score.percentile_rank, 0)} term="Percentile rank" />
-          <Metric label="Coverage" value={confidenceLabel(score.data_confidence)} term="Data coverage" />
+          <Metric
+            label="Rating"
+            value={<RatingChip rating={score.rating} />}
+            term="Rating"
+            text
+          />
+          <Metric
+            label="Composite"
+            value={formatScore(score.composite_score)}
+            term="Composite score"
+          />
+          <Metric
+            label="Percentile"
+            value={formatScore(score.percentile_rank, 0)}
+            term="Percentile rank"
+          />
+          <Metric
+            label="Coverage"
+            value={confidenceLabel(score.data_confidence)}
+            term="Data coverage"
+            text
+          />
         </div>
       ) : (
         <p className="muted">This symbol is tracked but has no composite score yet.</p>
       )}
 
-      <section className="panel">
-        <h2>Price</h2>
+      {/* The price history is the one thing a reader opening a stock page came
+          for, so it is the only card on the page. Everything after it is a
+          plain section separated by a rule — nine identical rounded panels in a
+          column is a stack with no first item. */}
+      <section className="card lede">
+        <h2 className="h-lede">Price</h2>
         {data.prices.length > 0 ? (
           <Chart
             ariaLabel={`Candlestick price chart for ${data.symbol}`}
@@ -68,8 +113,8 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                 low: data.prices.map((p) => p.low),
                 close: data.prices.map((p) => p.close),
                 name: "Price",
-                increasing: { line: { color: "#2da44e" } },
-                decreasing: { line: { color: "#cf222e" } },
+                increasing: { line: { color: theme.up } },
+                decreasing: { line: { color: theme.down } },
               } as never,
             ]}
             layout={{ xaxis: { rangeslider: { visible: false } } }}
@@ -79,8 +124,8 @@ export default function StockDetail({ symbol }: { symbol: string }) {
         )}
       </section>
 
-      <section className="grid-2">
-        <div className="panel">
+      <section className="split-even block">
+        <div>
           <h2>Sub-scores</h2>
           {radar.length >= 3 ? (
             <Chart
@@ -92,8 +137,8 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                   r: [...radar.map((e) => e.value), radar[0].value],
                   theta: [...radar.map((e) => e.label), radar[0].label],
                   fill: "toself",
-                  line: { color: "#3b82f6" },
-                  fillcolor: "rgba(59,130,246,0.18)",
+                  line: { color: theme.accent },
+                  fillcolor: theme.accentBand,
                   name: data.symbol,
                 } as never,
               ]}
@@ -108,36 +153,38 @@ export default function StockDetail({ symbol }: { symbol: string }) {
           </p>
         </div>
 
-        <div className="panel">
+        <div>
           <h2>Detected patterns</h2>
           {data.patterns.length > 0 ? (
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Date</th>
-                  <th scope="col">Pattern</th>
-                  <th scope="col">Direction</th>
-                  <th scope="col" className="num">Confidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.patterns.map((p, i) => (
-                  <tr key={i}>
-                    <td>{p.date}</td>
-                    <td>{humanize(p.pattern_type)}</td>
-                    <td>{humanize(p.direction)}</td>
-                    <td className="num">{p.confidence.toFixed(2)}</td>
+            <div className="tablewrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Date</th>
+                    <th scope="col">Pattern</th>
+                    <th scope="col">Direction</th>
+                    <th scope="col" className="num">Confidence</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.patterns.map((p, i) => (
+                    <tr key={i}>
+                      <td>{p.date}</td>
+                      <td>{humanize(p.pattern_type)}</td>
+                      <td>{humanize(p.direction)}</td>
+                      <td className="num">{p.confidence.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <p className="muted">No patterns detected recently.</p>
           )}
         </div>
       </section>
 
-      <section className="panel">
+      <section className="block">
         <h2>Forecast</h2>
         {models.length > 0 ? (
           <>
@@ -149,49 +196,51 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                 ))}
               </select>
             </label>
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col" className="num">Horizon (days)</th>
-                  <th scope="col" className="num">Return</th>
-                  <th scope="col" className="num">Target</th>
-                  <th scope="col" className="num">Low</th>
-                  <th scope="col" className="num">High</th>
-                  <th scope="col" className="num">
-                    Hit rate
-                    <Tip term="Hit rate" />
-                  </th>
-                  <th scope="col" className="num">
-                    vs naive
-                    <Tip
-                      label="the naive comparison"
-                      text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
-                    />
-                  </th>
-                  <th scope="col" className="num">
-                    Windows
-                    <Tip
-                      label="windows"
-                      text="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record; below the minimum it is suppressed entirely and shows a dash."
-                    />
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {forecasts.map((f) => (
-                  <tr key={`${f.model_name}-${f.horizon_days}`}>
-                    <td className="num">{f.horizon_days}</td>
-                    <td className="num">{formatSignedPercent(f.point_return)}</td>
-                    <td className="num">{formatPrice(f.point_price)}</td>
-                    <td className="num">{formatPrice(f.lower_price)}</td>
-                    <td className="num">{formatPrice(f.upper_price)}</td>
-                    <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
-                    <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
-                    <td className="num">{f.hit_rate_windows ?? "—"}</td>
+            <div className="tablewrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col" className="num">Horizon (days)</th>
+                    <th scope="col" className="num">Return</th>
+                    <th scope="col" className="num">Target</th>
+                    <th scope="col" className="num">Low</th>
+                    <th scope="col" className="num">High</th>
+                    <th scope="col" className="num">
+                      Hit rate
+                      <Tip term="Hit rate" />
+                    </th>
+                    <th scope="col" className="num">
+                      vs naive
+                      <Tip
+                        label="the naive comparison"
+                        text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
+                      />
+                    </th>
+                    <th scope="col" className="num">
+                      Windows
+                      <Tip
+                        label="windows"
+                        text="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record; below the minimum it is suppressed entirely and shows a dash."
+                      />
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {forecasts.map((f) => (
+                    <tr key={`${f.model_name}-${f.horizon_days}`}>
+                      <td className="num">{f.horizon_days}</td>
+                      <td className="num">{formatSignedPercent(f.point_return)}</td>
+                      <td className="num">{formatPrice(f.point_price)}</td>
+                      <td className="num">{formatPrice(f.lower_price)}</td>
+                      <td className="num">{formatPrice(f.upper_price)}</td>
+                      <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
+                      <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
+                      <td className="num">{f.hit_rate_windows ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <p className="muted small">
               <strong>Hit rate</strong> is this model's own out-of-sample directional
               accuracy at that horizon — shown next to the forecast, not hidden on
@@ -214,7 +263,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
       </section>
 
       {data.risk ? (
-        <section className="panel">
+        <section className="block">
           <h2>Risk profile</h2>
           <div className="metrics">
             <Metric
@@ -266,7 +315,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
       ) : null}
 
       {data.short_interest ? (
-        <section className="panel">
+        <section className="block">
           <h2>Short interest</h2>
           <div className="metrics">
             <Metric
@@ -302,7 +351,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
       ) : null}
 
       {data.monte_carlo ? (
-        <section className="panel">
+        <section className="block">
           <h2>Simulated price paths</h2>
           <p className="muted small">
             {data.monte_carlo.n_paths.toLocaleString()} random-walk paths over the next{" "}
@@ -330,7 +379,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                 type: "scatter",
                 mode: "lines",
                 fill: "tonexty",
-                fillcolor: "rgba(88,166,255,0.18)",
+                fillcolor: theme.accentBand,
                 line: { width: 0 },
                 name: "5th percentile",
                 hoverinfo: "skip",
@@ -340,7 +389,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                 y: data.monte_carlo.bands.map((b) => b.median),
                 type: "scatter",
                 mode: "lines",
-                line: { width: 2 },
+                line: { width: 2, color: theme.accent },
                 name: "Median path",
               },
             ]}
@@ -358,7 +407,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
       ) : null}
 
       {data.macro_overlay ? (
-        <section className="panel">
+        <section className="block">
           <h2>Macro overlay</h2>
           <p>
             <strong>{data.macro_overlay.sector}</strong> is exposed to{" "}
@@ -385,8 +434,8 @@ export default function StockDetail({ symbol }: { symbol: string }) {
         </section>
       ) : null}
 
-      <section className="grid-2">
-        <div className="panel">
+      <section className="split-even block">
+        <div>
           <h2>Algorithm vs Wall Street</h2>
           {data.analyst_consensus ? (
             <div className="metrics">
@@ -405,7 +454,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
           )}
         </div>
 
-        <div className="panel">
+        <div>
           <h2>What's driving this</h2>
           {data.news.length > 0 ? (
             <ul className="newslist">

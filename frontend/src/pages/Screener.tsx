@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ErrorBox, Loading, RatingChip } from "../components/Common";
+import { ErrorBox, LoadingTable, RatingChip } from "../components/Common";
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
@@ -190,18 +190,38 @@ export default function Screener() {
     return scored;
   }, [data, absoluteData, absolute, query, sector, weights, ratingFilter, minConfidence]);
 
-  if (loading) return <Loading what="the screener" />;
+  if (loading) {
+    return (
+      <>
+        <h1>Screener</h1>
+        <LoadingTable what="the ranked universe" rows={12} columns={[12, 30, 20, 14, 10, 14]} />
+      </>
+    );
+  }
   if (error) return <ErrorBox error={error} />;
   if (!data || data.count === 0) {
-    return <p className="muted">No composite scores stored yet — run the refresh job.</p>;
+    return (
+      <>
+        <h1>Screener</h1>
+        <p className="standfirst">
+          No composite scores are stored yet. Run <code>scripts/refresh_data.py</code> and this
+          table fills in with the universe it scores.
+        </p>
+      </>
+    );
   }
 
   return (
     <>
-      <h1>Screener</h1>
+      <h1>Rank the whole universe, your way</h1>
+      <p className="standfirst">
+        Every scored name, ordered by composite score. Move the category weights and the score{" "}
+        <em>and</em> the rating recompute in the browser from stored sub-scores — no pipeline
+        re-run, because the sub-scores are weight-independent by design.
+      </p>
       <p className="muted small">
-        Ranking as of <strong>{data.as_of}</strong> · {data.count} symbols scored. Ratings are{" "}
-        <em>{data.rating_mode}</em> — the top decile is Strong Buy however the market as a
+        Ranking as of <strong>{data.as_of}</strong> · {data.count} symbols scored · ratings are{" "}
+        <em>{data.rating_mode}</em>, so the top decile is Strong Buy however the market as a
         whole looks.
       </p>
 
@@ -251,7 +271,7 @@ export default function Screener() {
         </label>
       </div>
 
-      <details className="panel">
+      <details>
         <summary>Investor profile &amp; rating scheme</summary>
         <div className="controls">
           <label>
@@ -273,14 +293,14 @@ export default function Screener() {
             </select>
           </label>
         </div>
-        {selected && <p className="muted small">{selected.description}</p>}
+        {selected && <p className="note">{selected.description}</p>}
         {selected?.rescores && (
-          <p className="muted small">
+          <p className="note">
             Scored under the <strong>{humanize(profile)}</strong> profile — its sub-scores
             are genuinely different, not the balanced ones re-weighted.
           </p>
         )}
-        <p className="muted small">
+        <p className="note">
           <strong>Relative</strong> always names a top decile Strong Buy, however the whole
           market looks — that is the plan's own warning, not a bug. <strong>Absolute</strong>{" "}
           measures every category against a fixed bar instead, so a broadly falling market
@@ -295,9 +315,9 @@ export default function Screener() {
         )}
       </details>
 
-      <details className="panel">
+      <details>
         <summary>Re-weight categories</summary>
-        <p className="muted small">
+        <p className="note">
           Score <em>and rating</em> are recomputed instantly from stored sub-scores — no
           pipeline re-run, because the stored sub-scores are weight-independent by design.
           Ratings are always ranked against the whole scored universe, not against
@@ -326,52 +346,63 @@ export default function Screener() {
         </button>
       </details>
 
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Symbol</th>
-            <th scope="col">Company</th>
-            <th scope="col">Sector</th>
-            <th scope="col">
-              Rating
-              <Tip term="Rating" />
-            </th>
-            <th scope="col" className="num">
-              Score
-              <Tip term="Composite score" />
-            </th>
-            {reweighted ? (
-              <th scope="col" className="num">
-                Stored
-                <Tip
-                  label="the stored score"
-                  text="What the nightly job scored this stock at, under the profile's own weights. The Score column beside it is your slider settings applied to the same stored sub-scores — this column is what you are comparing against."
-                />
+      <div className="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Symbol</th>
+              <th scope="col">Company</th>
+              <th scope="col">Sector</th>
+              <th scope="col">
+                Rating
+                <Tip term="Rating" />
               </th>
-            ) : null}
-            <th scope="col">
-              Coverage
-              <Tip term="Data coverage" />
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ row, custom, rating }) => (
-            <tr key={row.symbol}>
-              <td><Link to={`/stocks/${row.symbol}`}>{row.symbol}</Link></td>
-              <td>{row.name ?? "—"}</td>
-              <td>{row.sector ?? "—"}</td>
-              <td><RatingChip rating={rating} /></td>
-              <td className="num">{formatScore(custom)}</td>
+              <th scope="col" className="num">
+                Score
+                <Tip term="Composite score" />
+              </th>
               {reweighted ? (
-                <td className="num muted">{formatScore(row.composite_score)}</td>
+                <th scope="col" className="num">
+                  Stored
+                  <Tip
+                    label="the stored score"
+                    text="What the nightly job scored this stock at, under the profile's own weights. The Score column beside it is your slider settings applied to the same stored sub-scores — this column is what you are comparing against."
+                  />
+                </th>
               ) : null}
-              <td className="muted small">{confidenceLabel(row.data_confidence)}</td>
+              <th scope="col">
+                Coverage
+                <Tip term="Data coverage" />
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length === 0 ? <p className="muted">No symbols match these filters.</p> : null}
+          </thead>
+          <tbody>
+            {rows.map(({ row, custom, rating }) => (
+              <tr key={row.symbol}>
+                <td>
+                  <Link to={`/stocks/${row.symbol}`}>
+                    <span className="ticker">{row.symbol}</span>
+                  </Link>
+                </td>
+                <td>{row.name ?? "—"}</td>
+                <td>{row.sector ?? "—"}</td>
+                <td><RatingChip rating={rating} /></td>
+                <td className="num">{formatScore(custom)}</td>
+                {reweighted ? (
+                  <td className="num muted">{formatScore(row.composite_score)}</td>
+                ) : null}
+                <td className="muted small">{confidenceLabel(row.data_confidence)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.length === 0 ? (
+        <p className="muted" style={{ marginTop: "var(--s4)" }}>
+          Nothing matches these filters. The coverage slider is the usual culprit — it hides
+          any name whose data is thinner than the threshold.
+        </p>
+      ) : null}
     </>
   );
 }

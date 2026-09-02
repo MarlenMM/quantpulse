@@ -11,13 +11,14 @@ thing here and another beside the number it explains.
 
 import streamlit as st
 
+from lib.brand import PAGE_ICON
 from lib.glossary import CATEGORIES, TERMS, search_terms
 
-st.set_page_config(page_title="QuantPulse — Glossary", page_icon="📖", layout="wide")
+st.set_page_config(page_title="QuantPulse — Glossary", page_icon=PAGE_ICON, layout="wide")
 
 
 def main() -> None:
-    st.title("📖 Glossary")
+    st.title("Glossary")
     st.caption(
         "Every metric this app shows, explained without jargon. The same definitions "
         "appear as ⓘ tooltips next to the numbers themselves."

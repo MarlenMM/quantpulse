@@ -26,6 +26,7 @@ import pandas as pd
 import streamlit as st
 
 from lib import charts, data
+from lib.brand import PAGE_ICON
 from lib.format import (
     action_label,
     confidence_label,
@@ -50,10 +51,10 @@ from quantpulse.portfolio.rebalancing import (
 from quantpulse.portfolio.transactions import Transaction, build_lot_book, holding_term, positions
 from quantpulse.storage.db import get_session
 
-st.set_page_config(page_title="QuantPulse — Portfolio", page_icon="💼", layout="wide")
+st.set_page_config(page_title="QuantPulse — Portfolio", page_icon=PAGE_ICON, layout="wide")
 
 DISCLAIMER = (
-    "⚠️ **Educational tool, not financial advice — neither you nor this app is a "
+    "**Educational tool, not financial advice — neither you nor this app is a "
     "licensed advisor.** Per-holding suggestions below are mechanical outputs of the "
     "scoring model. Holding-period labels are descriptive only, never tax advice "
     "(consult a professional)."
@@ -220,7 +221,7 @@ def render_positions(state: holdings_lib.PortfolioState) -> pd.DataFrame:
                 "Sector": sectors.get(symbol) or "Unclassified",
                 "Rating": rating_label(score_row["rating"]) if score_row is not None else "—",
                 "Term": humanize(holding_term(earliest, as_of=date.today())),
-                "Stale": "⚠️ no price" if position.is_stale else "",
+                "Stale": "no price" if position.is_stale else "",
             }
         )
     frame = pd.DataFrame(records)
@@ -769,7 +770,7 @@ def render_watchlist(store: holdings_lib.PortfolioStore) -> None:
 
 
 def main() -> None:
-    st.title("💼 Portfolio & Watchlist")
+    st.title("Portfolio & Watchlist")
     st.warning(DISCLAIMER)
 
     store = get_store()

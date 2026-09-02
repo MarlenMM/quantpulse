@@ -1,9 +1,99 @@
-# Dark mode by default (Section 31: "cheap, and a nice touch for a live demo
-# viewed at night"). Streamlit's own theme toggle still lets a visitor switch;
-# the Plotly figures use transparent backgrounds so they follow either way.
+# ---------------------------------------------------------------------------
+# The Streamlit half of the design system.
+#
+# This file used to be two lines — `base = "dark"` and Tailwind's blue-500 as
+# the primary colour — which meant the Streamlit app was Streamlit's defaults
+# with one hex changed, while the React front end was its own thing. Two front
+# ends over one engine that do not look like the same product is worse than
+# either of them looking generic.
+#
+# So the tokens below are the same ones `frontend/src/styles.css` defines, said
+# in Streamlit's vocabulary: warm paper and warm slate rather than #ffffff and
+# near-black, one ink-blue accent, and the same three type roles — an old-style
+# serif for headings, a grotesque for body, a monospace for code and figures.
+# Nothing is loaded from a font CDN; every family here is resident on macOS,
+# Windows or a Linux desktop, with Georgia and the generic keyword as the floor.
+#
+# Both light and dark are defined in full. Streamlit's own toggle switches
+# between them, and neither is an afterthought — the version of this file that
+# only styled dark is why the charts shipped with grey-on-white axis labels.
+# ---------------------------------------------------------------------------
+
 [theme]
 base = "dark"
-primaryColor = "#3b82f6"
+
+# --- Type ------------------------------------------------------------------
+font = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+headingFont = '"Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Charter, Cambria, Georgia, ui-serif, serif'
+codeFont = 'ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
+
+# A real scale with real contrast, rather than six sizes a quarter-rem apart.
+# h1 is the page; h2 is a section; everything below is a label.
+headingFontSizes = ["2.35rem", "1.4rem", "1.05rem", "0.95rem", "0.85rem", "0.78rem"]
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+baseFontSize = 15
+
+# Figures are the subject of every page here, so they are set larger than the
+# section headings above them — the hierarchy this app needs is data-first.
+metricValueFontSize = "1.9rem"
+
+# --- Shape -----------------------------------------------------------------
+# Nearly square. The 8px-radius-on-everything look is the single most legible
+# signature of an untouched component library.
+baseRadius = "4px"
+buttonRadius = "4px"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+# Series colours for every chart. Streamlit only accepts one list for both
+# schemes, so these are mid-tones legible on paper and on slate alike —
+# accent first, then the rating vocabulary. Deliberately not Streamlit's default
+# blue/red ramp, which reads as red-means-bad on a figure where a second series
+# means nothing of the kind.
+chartCategoricalColors = ["#3a72b8", "#b8862c", "#2c9c5f", "#cf4436", "#8878cf", "#3f9a94"]
+
+# --- Colour: dark (the desk at night) --------------------------------------
+[theme.dark]
+backgroundColor = "#14161a"
+secondaryBackgroundColor = "#1b1e24"
+textColor = "#eae7e0"
+primaryColor = "#7fb1e8"
+linkColor = "#7fb1e8"
+borderColor = "#2b2f37"
+dataframeBorderColor = "#2b2f37"
+dataframeHeaderBackgroundColor = "#1b1e24"
+codeBackgroundColor = "#101317"
+# The rating vocabulary, so a Buy is the same green in a chart, a chip and a
+# Streamlit status box.
+greenColor = "#3faa6c"
+yellowColor = "#cb9d43"
+redColor = "#e8756a"
+grayColor = "#8d887e"
+
+[theme.dark.sidebar]
+backgroundColor = "#101317"
+borderColor = "#2b2f37"
+
+# --- Colour: light (paper) -------------------------------------------------
+[theme.light]
+backgroundColor = "#faf8f4"
+secondaryBackgroundColor = "#f2efe8"
+textColor = "#1b1a17"
+primaryColor = "#1d4e89"
+linkColor = "#1d4e89"
+borderColor = "#ddd7cb"
+dataframeBorderColor = "#ddd7cb"
+dataframeHeaderBackgroundColor = "#f2efe8"
+codeBackgroundColor = "#f2efe8"
+greenColor = "#1c8b4f"
+yellowColor = "#8a6a1c"
+redColor = "#bf3327"
+grayColor = "#78746a"
+
+[theme.light.sidebar]
+backgroundColor = "#f2efe8"
+borderColor = "#ddd7cb"
 
 [server]
 # "auto" watches Python sources only, which is what we want: a refresh now runs

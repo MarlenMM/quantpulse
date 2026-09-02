@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from lib import charts, data
+from lib.brand import PAGE_ICON
 from lib.format import (
     RATING_ORDER,
     confidence_label,
@@ -37,7 +38,7 @@ from quantpulse.analysis.investor_profiles import (
     profile_names,
 )
 
-st.set_page_config(page_title="QuantPulse — Screener", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="QuantPulse — Screener", page_icon=PAGE_ICON, layout="wide")
 
 SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
 # The pre-normalization inputs absolute mode re-scores from (see `rescore_absolute`).
@@ -159,7 +160,7 @@ def latest_regime_score() -> float | None:
 
 
 def main() -> None:
-    st.title("🔎 Screener")
+    st.title("Screener")
     rows = data.screener_rows()
     if rows.empty:
         st.info(
