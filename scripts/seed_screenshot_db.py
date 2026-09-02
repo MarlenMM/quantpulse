@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 
@@ -460,13 +462,28 @@ def run_pipeline(session: Session, today: date) -> dict[str, int]:
     # about" needs two snapshots to diff -- with one it renders its own empty
     # state, which is not what the Home page looks like in use.
     previous = today - timedelta(days=7)
-    written["scores (prior week)"] = refresh_data.refresh_composite_scores(
-        session, universe, previous
-    )
-    written["scores (today)"] = refresh_data.refresh_composite_scores(session, universe, today)
-    written["patterns"] = refresh_data.refresh_pattern_signals(session, universe, today)
-    written["forecasts"] = refresh_data.refresh_forecasts(session, universe, today)
-    written["backtest"] = refresh_data.refresh_backtest(session, today)
+    stages: list[tuple[str, Callable[[], int]]] = [
+        (
+            "scores (prior week)",
+            lambda: refresh_data.refresh_composite_scores(session, universe, previous),
+        ),
+        ("scores (today)", lambda: refresh_data.refresh_composite_scores(session, universe, today)),
+        ("patterns", lambda: refresh_data.refresh_pattern_signals(session, universe, today)),
+        # By far the slowest: it trains the walk-forward models the hit-rate
+        # columns are measured on, three runners x four horizons per symbol.
+        ("forecasts", lambda: refresh_data.refresh_forecasts(session, universe, today)),
+        ("backtest", lambda: refresh_data.refresh_backtest(session, today)),
+    ]
+
+    for name, stage in stages:
+        started = perf_counter()
+        rows = stage()
+        # Committed per stage rather than once at the end. This job runs for
+        # tens of minutes, and losing the finished stages to a crash in the last
+        # one would mean starting the whole thing again.
+        session.commit()
+        written[name] = rows
+        print(f"  {name}: {rows} rows ({perf_counter() - started:.0f}s)", flush=True)
     return written
 
 
@@ -519,10 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260903)
     args = parser.parse_args(argv)
 
-    written = build(args.out.resolve(), args.today, seed=args.seed)
+    build(args.out.resolve(), args.today, seed=args.seed)
     print(f"wrote {args.out}")
-    for stage, rows in written.items():
-        print(f"  {stage}: {rows} rows")
     print(f"\nnow:  DATABASE_URL=sqlite:///{args.out.resolve()} uv run streamlit run app/Home.py")
     return 0
 
