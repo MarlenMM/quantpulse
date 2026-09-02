@@ -666,8 +666,12 @@ td .ticker, .ticker {
   color: var(--muted);
   font-weight: 600;
 }
+/* The UI face with tabular figures, not the mono face. "24 days ago" is a
+   sentence with a number in it, and setting the whole thing in monospace
+   stretches the words to look like a serial number. The rule is that *figures*
+   line up, not that anything containing a digit becomes code. */
 .freshness .f-age {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: var(--t-small);
   font-variant-numeric: tabular-nums;
   color: var(--text-quiet);
@@ -763,7 +767,28 @@ input, select, button, textarea {
   border: var(--rule) solid var(--border-strong);
   border-radius: var(--radius);
 }
-input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--accent); }
+input[type="range"] {
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--accent);
+  min-width: 9rem;
+}
+
+/* A multi-select sized to its options rather than to the UA default, which
+   shows four and a half rows and clips the fifth mid-glyph. */
+select[multiple] { padding: 0.2rem 0.35rem; min-height: 6.4rem; }
+select[multiple] option { padding: 0.12rem 0.2rem; }
+
+/* A control whose caption carries a live value puts the two on one line, so the
+   number sits with its name instead of floating above the input. */
+.control-row {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.control-row input { flex: 1 1 9rem; }
 
 button {
   cursor: pointer;
