@@ -298,7 +298,7 @@ def render_macro_overlay(sector: str | None) -> None:
         + f" over the last ~3 months — a **{tone}** of {adjustment:+.2f} on a -1 to +1 scale."
     )
     st.caption(
-        "Applied only to the sectors these series genuinely move (Section 28): oil for "
+        "Applied only to the sectors these series genuinely move: oil for "
         "Energy, metals for Materials, the dollar for sectors dominated by multinationals "
         "earning abroad. Every other sector gets exactly zero rather than a small "
         "meaningless nudge. This is context, not part of the composite score."
@@ -857,7 +857,7 @@ def main() -> None:
         )
         st.caption(
             "**Hit rate** is this model's own out-of-sample directional accuracy at that "
-            "horizon (Section 7.6) — shown next to the forecast, not hidden on another page. "
+            "horizon — shown next to the forecast, not hidden on another page. "
             "**Windows** is how many separate historical periods it was measured over. A "
             "dash means the model has not been graded over enough distinct windows for a "
             "rate to mean anything, so none is shown rather than a flattering one: at the "

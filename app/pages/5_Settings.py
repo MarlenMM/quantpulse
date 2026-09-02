@@ -182,7 +182,7 @@ def render_pipeline_health() -> None:
     )
     st.caption(
         "A `partial` status means one source failed and was skipped rather than "
-        "aborting the whole run (Section 6.5's graceful degradation)."
+        "aborting the whole run — the pipeline degrades rather than failing."
     )
 
 
@@ -214,7 +214,7 @@ def render_configuration() -> None:
             st.code(f"{provider.name} · {settings.llm_provider}")
             st.caption("Used only to narrate already-computed numbers, never to produce them.")
 
-    st.markdown("**Credentials configured** (values are never displayed — Section 18)")
+    st.markdown("**Credentials configured** — whether a key is set, never its value")
     secrets = {
         "FINNHUB_API_KEY": settings.finnhub_api_key,
         "FRED_API_KEY": settings.fred_api_key,
