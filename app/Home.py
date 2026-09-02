@@ -9,6 +9,7 @@ Streamlit puts this file's directory on `sys.path`, which is what makes
 import streamlit as st
 
 from lib import charts, data
+from lib.brand import PAGE_ICON
 from lib.format import (
     format_pct_already_scaled,
     format_score,
@@ -21,7 +22,7 @@ from quantpulse.analysis import risk, technical
 
 st.set_page_config(
     page_title="QuantPulse — Dashboard",
-    page_icon="📈",
+    page_icon=PAGE_ICON,
     layout="wide",
     # "auto", not "expanded": Streamlit overlays the sidebar on narrow screens,
     # so pinning it open means a phone visitor lands on a nav menu covering the
@@ -78,7 +79,7 @@ def render_empty_state() -> None:
         refresh (Section 6.2) — it pulls years of history for the whole universe
         and can take a while on the first run. It is also the only step that has
         to happen at a terminal: after it, keep the data current from
-        **⚙️ Settings → Run a refresh**. Nothing runs on a schedule, so a refresh
+        **Settings → Run a refresh**. Nothing runs on a schedule, so a refresh
         happens when you ask for one.
         """
     )
@@ -175,7 +176,7 @@ def render_sector_rotation() -> None:
 
 
 def main() -> None:
-    st.title("📈 QuantPulse")
+    st.title("QuantPulse")
     st.caption(
         "Self-hosted, $0-cost stock research. The statistics do the thinking; "
         "the optional LLM layer only narrates numbers that already exist."

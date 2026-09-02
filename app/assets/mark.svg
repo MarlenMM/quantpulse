@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 24" width="26" height="24" role="img" aria-label="QuantPulse">
+  <title>QuantPulse</title>
+  <!--
+    The QuantPulse mark. Hand-plotted, and shared by both front ends: Streamlit
+    reads this file for `page_icon`, and `frontend/src/components/Mark.tsx`
+    redraws the same coordinates so the React masthead can tint them from the
+    page's own theme tokens.
+
+    Three OHLC candles, one per pole of the app's rating vocabulary — a low one
+    in the Sell red, a doji in the Hold amber, a high one in the Buy green,
+    stepping upward. The colours are literals here because a favicon has no
+    stylesheet to read; they are the mid-tones that stay legible on both a light
+    and a dark browser tab strip.
+  -->
+  <g stroke-linecap="round">
+    <g fill="#cf4436" stroke="#cf4436">
+      <line x1="4" x2="4" y1="5" y2="21" stroke-width="1.5"/>
+      <rect x="1.5" y="9" width="5" height="9" rx="1"/>
+    </g>
+    <g fill="#c9902f" stroke="#c9902f">
+      <line x1="13" x2="13" y1="3" y2="19" stroke-width="1.5"/>
+      <rect x="10.5" y="8" width="5" height="7" rx="1"/>
+    </g>
+    <g fill="#2c9c5f" stroke="#2c9c5f">
+      <line x1="22" x2="22" y1="1" y2="16" stroke-width="1.5"/>
+      <rect x="19.5" y="4" width="5" height="8" rx="1"/>
+    </g>
+  </g>
+</svg>

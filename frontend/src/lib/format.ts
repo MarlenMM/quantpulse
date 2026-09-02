@@ -3,23 +3,31 @@
  *
  * The two front ends must agree on what a rating looks like, so the same rule
  * holds here as there: **never encode a rating with color alone** (Section 12).
- * `ratingLabel` always returns an icon *and* a word; color is decoration layered
- * on top. Duplicating this small table in TypeScript is the price of a second
+ * Every rating carries a glyph *and* a word; color is decoration layered on
+ * top. Duplicating this small table in TypeScript is the price of a second
  * front end — the alternative would be shipping presentation strings through
  * the API, which would couple the API's contract to one client's rendering.
+ *
+ * The hexes here are **chart** colors: single values that have to be legible as
+ * a graphic mark on both the paper-light and slate-dark themes, because a
+ * Plotly trace takes a literal and cannot read a CSS custom property. Every
+ * rating that appears as *text or a chip in the DOM* is colored from the
+ * `--up`/`--flat`/`--down` tokens in `styles.css` instead, which are tuned
+ * separately per theme. One value cannot be right in both places, and
+ * pretending otherwise is what left the old light theme with grey-on-white.
  */
 
 export const RATING_ORDER = ["strong_buy", "buy", "hold", "sell", "strong_sell"] as const;
 
 export const RATING_DISPLAY: Record<string, { icon: string; text: string; color: string }> = {
-  strong_buy: { icon: "▲▲", text: "Strong Buy", color: "#1a7f37" },
-  buy: { icon: "▲", text: "Buy", color: "#2da44e" },
-  hold: { icon: "■", text: "Hold", color: "#9a6700" },
-  sell: { icon: "▼", text: "Sell", color: "#cf222e" },
-  strong_sell: { icon: "▼▼", text: "Strong Sell", color: "#a40e26" },
+  strong_buy: { icon: "▲▲", text: "Strong Buy", color: "#0f7a44" },
+  buy: { icon: "▲", text: "Buy", color: "#2c9c5f" },
+  hold: { icon: "■", text: "Hold", color: "#a07c22" },
+  sell: { icon: "▼", text: "Sell", color: "#cf4436" },
+  strong_sell: { icon: "▼▼", text: "Strong Sell", color: "#9e2419" },
 };
 
-const NEUTRAL = "#6e7781";
+const NEUTRAL = "#7a756b";
 
 export function humanize(value: string | null | undefined): string {
   if (!value) return "—";
@@ -36,6 +44,17 @@ export function ratingLabel(rating: string | null | undefined): string {
 
 export function ratingColor(rating: string | null | undefined): string {
   return rating && RATING_DISPLAY[rating] ? RATING_DISPLAY[rating].color : NEUTRAL;
+}
+
+/** The arrow alone, so a chip can set it in its own size next to the word. */
+export function ratingGlyph(rating: string | null | undefined): string {
+  return rating && RATING_DISPLAY[rating] ? RATING_DISPLAY[rating].icon : "·";
+}
+
+/** The word alone. Falls back to a humanized form of an unknown rating. */
+export function ratingText(rating: string | null | undefined): string {
+  if (!rating) return "Unrated";
+  return RATING_DISPLAY[rating]?.text ?? humanize(rating);
 }
 
 /** A missing number is an em dash, never a zero — they mean different things. */

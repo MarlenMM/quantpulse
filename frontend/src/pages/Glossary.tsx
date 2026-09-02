@@ -29,14 +29,23 @@ export default function Glossary() {
     return [...byCategory.entries()];
   }, [data, query]);
 
-  if (loading) return <Loading what="the glossary" />;
+  if (loading) {
+    return (
+      <>
+        <h1>Glossary</h1>
+        <Loading what="the glossary" />
+      </>
+    );
+  }
   if (error) return <ErrorBox error={error} />;
 
   return (
     <>
-      <h1>Glossary</h1>
-      <p className="muted small">
-        Every metric this app shows, explained without jargon.
+      <h1>Every number, in plain English</h1>
+      <p className="standfirst">
+        {(data ?? []).length} terms — every metric this app puts on screen, defined once. The
+        same definitions back the ⓘ hints beside the figures, so a term cannot mean one thing
+        in a tooltip and another here.
       </p>
       <label>
         Search
@@ -48,10 +57,15 @@ export default function Glossary() {
         />
       </label>
 
-      {grouped.length === 0 ? <p className="muted">No glossary entry matches “{query}”.</p> : null}
+      {grouped.length === 0 ? (
+        <p className="muted" style={{ marginTop: "var(--s4)" }}>
+          Nothing matches “{query}”. The search looks at both the term and its definition, so a
+          plain-English word usually finds the jargon for it.
+        </p>
+      ) : null}
 
       {grouped.map(([category, terms]) => (
-        <section className="panel" key={category}>
+        <section className="block" key={category}>
           <h2>{category}</h2>
           <dl className="glossary">
             {terms
