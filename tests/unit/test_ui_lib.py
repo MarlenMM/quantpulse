@@ -8,7 +8,10 @@ data in/`go.Figure` out) and hold all the display logic worth pinning.
 readers, and those are tested against a real database in `test_persistence.py`.
 """
 
+import inspect
+import re
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -16,9 +19,11 @@ import pytest
 
 from lib import charts
 from lib.format import (
+    DEFAULT_STALE_AFTER_DAYS,
     NEUTRAL_COLOR,
     RATING_DISPLAY,
     RATING_ORDER,
+    STALE_AFTER_DAYS,
     action_label,
     confidence_label,
     format_money,
@@ -137,6 +142,37 @@ class TestMissingNumbersFromDataFrames:
         assert format_money(missing) == "—"
         assert format_ratio(missing) == "—"
 
+    def test_a_partly_filled_text_column_reaches_humanize_as_a_float(self) -> None:
+        """The same dtype hazard, one column type over -- and it crashed a page.
+
+        The numeric case above is "NaN renders as nan instead of an em dash".
+        The text case is worse: a partly-filled *text* column carries its NULLs
+        as `float("nan")`, which is truthy, so `.replace` on it raises and takes
+        the whole page down.
+
+        The trigger is the same asymmetry, and it is just as counter-intuitive
+        here: an all-NULL column stays `object` and hands back a clean `None`,
+        while one real value promotes the column and hands back NaN. So a news
+        feed of only Tier-3 macro stories -- `matched_theme` NULL throughout --
+        renders fine, and adding a single themed Tier-2 story to it is what
+        breaks the Home page with "'float' object has no attribute 'replace'".
+
+        Iterated with `itertuples`, because that is how the page reads it, and a
+        hand-written `float("nan")` would not prove the path exists.
+        """
+        macro_only = pd.DataFrame({"title": ["Payrolls beat"], "matched_theme": [None]})
+        mixed = pd.DataFrame(
+            {"title": ["Payrolls beat", "Chips rally"], "matched_theme": [None, "semiconductors"]}
+        )
+        # Pin the mechanism itself, not just its symptom.
+        assert next(macro_only.itertuples()).matched_theme is None
+        promoted = next(mixed.itertuples()).matched_theme
+        assert promoted is not None and pd.isna(promoted) and bool(promoted)
+
+        assert humanize(next(macro_only.itertuples()).matched_theme) == "—"
+        assert humanize(promoted) == "—"
+        assert humanize(list(mixed.itertuples())[1].matched_theme) == "Semiconductors"
+
     def test_infinities_are_missing_too(self) -> None:
         # There is no honest way to print an infinite price or percentage.
         for value in (float("inf"), float("-inf")):
@@ -178,6 +214,55 @@ class TestConfidence:
         assert "partial" in confidence_label(79.9)
         assert "partial" in confidence_label(50)
         assert "thin" in confidence_label(49.9)
+
+
+class TestStalenessThresholdsAgreeAcrossFrontEnds:
+    """The two front ends must call the same source behind at the same age.
+
+    `STALE_AFTER_DAYS` is written twice -- once in `app/lib/format.py` for
+    Streamlit and once in `frontend/src/lib/format.ts` for the SPA -- because
+    neither language can import the other, and shipping presentation thresholds
+    through the read API would couple its contract to one client's rendering.
+    That is the same trade `RATING_DISPLAY` makes, and it carries the same risk:
+    an edit to one table and not the other, which nothing else would catch. Both
+    front ends render the same freshness strip over the same `/health` response,
+    so the drift would show up as a source marked behind in one and not in the
+    other.
+
+    Parsed out of the TypeScript rather than restated here, so this compares the
+    two shipped tables instead of pinning a third copy.
+    """
+
+    @staticmethod
+    def _typescript_table() -> tuple[dict[str, int], int]:
+        source = (
+            Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "format.ts"
+        ).read_text()
+        body = source.split("export const STALE_AFTER_DAYS: Record<string, number> = {", 1)[1]
+        body = body.split("};", 1)[0]
+        table = {name: int(days) for name, days in re.findall(r"(\w+):\s*(\d+)\s*,", body)}
+        fallback = re.search(r"DEFAULT_STALE_AFTER_DAYS\s*=\s*(\d+)", source)
+        assert fallback is not None, "the TypeScript fallback threshold was renamed"
+        return table, int(fallback.group(1))
+
+    def test_the_two_tables_are_identical(self) -> None:
+        typescript, fallback = self._typescript_table()
+        assert typescript, "parsed nothing out of format.ts -- the table was restructured"
+        assert typescript == STALE_AFTER_DAYS
+        assert fallback == DEFAULT_STALE_AFTER_DAYS
+
+    def test_every_source_the_health_endpoint_reports_has_a_threshold(self) -> None:
+        # `read_data_freshness` decides what the strip shows. A source added
+        # there and not here silently falls back to the weekly default, which
+        # for a daily job means it is never marked behind.
+        from quantpulse.storage.persistence import read_data_freshness
+
+        reported = set(
+            re.findall(r'"(\w+)":\s*session\.scalars', inspect.getsource(read_data_freshness))
+        )
+        assert reported, "could not read the freshness sources out of persistence"
+        missing = reported - set(STALE_AFTER_DAYS)
+        assert not missing, f"no staleness threshold for {sorted(missing)}"
 
 
 class TestCharts:

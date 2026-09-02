@@ -125,13 +125,30 @@ def price_chart(
             low=ohlcv["low"],
             close=ohlcv["close"],
             name="Price",
-            increasing_line_color="#2da44e",
-            decreasing_line_color="#cf222e",
+            # The same green and red a Buy and a Sell are, so a rising candle
+            # and a Buy rating are one colour vocabulary rather than two.
+            increasing_line_color=RATING_DISPLAY["buy"][2],
+            decreasing_line_color=RATING_DISPLAY["sell"][2],
         )
     )
-    for label, series in (overlays or {}).items():
+    # Overlays are all drawn in the accent and separated by dash pattern, not by
+    # hue. Two reasons, and the first is the important one: green and red mean
+    # *direction* on this figure, and a moving average given the next colour in
+    # a categorical palette came out green -- a line that means nothing of the
+    # kind, in the colour that means "up", crossing candles that use it
+    # literally. The second is the rule the ratings already follow: a series
+    # that is distinguishable without colour perception stays distinguishable.
+    dashes = ("solid", "dash", "dot", "dashdot")
+    for index, (label, series) in enumerate((overlays or {}).items()):
         fig.add_trace(
-            go.Scatter(x=ohlcv["date"], y=series, name=label, mode="lines", line=dict(width=1.4))
+            go.Scatter(
+                x=ohlcv["date"],
+                y=series,
+                name=label,
+                mode="lines",
+                line=dict(width=1.4, color=_ACCENT, dash=dashes[index % len(dashes)]),
+                opacity=1.0 if index == 0 else 0.75,
+            )
         )
     if levels is not None and not levels.empty:
         for row in levels.itertuples(index=False):
