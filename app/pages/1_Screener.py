@@ -172,7 +172,7 @@ def main() -> None:
     st.caption(
         f"Ranking as of **{rows['date'].iloc[0]}** · {len(rows)} symbols scored. "
         "Ratings are *relative* — the top decile is Strong Buy however the market as a "
-        "whole looks (Section 22)."
+        "whole looks."
     )
 
     with st.sidebar:
@@ -221,7 +221,7 @@ def main() -> None:
         )
         st.caption(
             "**Relative** always names a top decile Strong Buy, however the whole "
-            "market looks — that is Section 22's warning, not a bug. **Absolute** "
+            "market looks — a known limitation of ranking, not a bug. **Absolute** "
             "measures every category against a fixed bar instead, so a broadly "
             "falling market genuinely produces fewer Strong Buys (and can produce "
             "none). Needs the stored raw category values; rows written before those "
@@ -388,7 +388,7 @@ def main() -> None:
 
     st.divider()
     st.subheader("Compare")
-    st.caption("Pick 2–4 tickers to see every sub-score side by side (Section 12).")
+    st.caption("Pick 2–4 tickers to see every sub-score side by side.")
     universe_for_labels = filtered[["symbol", "name"]]
     picks = st.multiselect(
         "Tickers",
