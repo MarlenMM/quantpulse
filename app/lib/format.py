@@ -20,6 +20,7 @@ functions rather than left to each page's discretion:
 from __future__ import annotations
 
 import math
+import re
 from datetime import date
 
 __all__ = [
@@ -38,6 +39,8 @@ __all__ = [
     "format_score",
     "format_ratio",
     "freshness_label",
+    "is_behind",
+    "STALE_AFTER_DAYS",
     "confidence_label",
     "humanize",
 ]
@@ -63,9 +66,65 @@ ACTION_DISPLAY: dict[str, tuple[str, str, str]] = {
 }
 
 
+#: How old each source may be before its age is worth marking, in days.
+#:
+#: Per source, not one number for all eight. The daily jobs and the weekly ones
+#: are not behind at the same age -- fundamentals are filed quarterly, so a
+#: 30-day-old fundamentals row is the freshest that has ever existed, and a
+#: single 8-day threshold marked it in red on every screenshot the project has
+#: ever taken. A badge that is always on is not a badge.
+#:
+#: Roughly twice the cadence, so an ordinary late run is not an alarm and a
+#: genuinely skipped cycle is.
+STALE_AFTER_DAYS: dict[str, int] = {
+    "prices": 4,
+    "composite_scores": 4,
+    "market_regime": 4,
+    "forecasts": 10,
+    "sentiment": 10,
+    "backtest": 16,
+    "analyst_consensus": 16,
+    "fundamentals": 100,
+}
+
+#: Anything not named above. Weekly-ish, which is this pipeline's slowest
+#: routine cadence.
+DEFAULT_STALE_AFTER_DAYS = 16
+
+
+def is_behind(source: str, label: str) -> bool:
+    """Whether a freshness label is old enough to be worth marking.
+
+    Takes the rendered label rather than the date because that is what both
+    front ends already have in hand, and because "never run" is a state the
+    date alone cannot express.
+    """
+    if label == "never run":
+        return True
+    match = re.fullmatch(r"(\d+) days ago", label)
+    if match is None:
+        return False
+    limit = STALE_AFTER_DAYS.get(source, DEFAULT_STALE_AFTER_DAYS)
+    return int(match.group(1)) > limit
+
+
 def humanize(label: str | None) -> str:
-    """`strong_buy` -> `Strong Buy`; `None`/empty -> an em dash."""
-    if not label:
+    """`strong_buy` -> `Strong Buy`; a missing label -> an em dash.
+
+    **`not label` is not enough**, and the reason is the one `is_missing`
+    documents at length for numbers: pandas decides how a SQL NULL arrives from
+    the *whole column's* dtype. An all-NULL text column stays `object` and hands
+    back a clean `None`, which `not label` catches -- but one real value in the
+    column promotes it, and then its NULLs arrive as `float("nan")`, which is
+    truthy, and `.replace` on a float raises `AttributeError`.
+
+    That is not hypothetical. `matched_theme` is NULL for every Tier-3 macro
+    story, so a feed of only macro stories renders fine and adding a single
+    themed Tier-2 story to it took the Home page down with "'float' object has
+    no attribute 'replace'". The check is `isinstance` rather than a NaN test so
+    it also holds for whatever else a driver hands back.
+    """
+    if not isinstance(label, str) or not label:
         return "—"
     return label.replace("_", " ").title()
 

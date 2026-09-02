@@ -18,25 +18,14 @@ import {
   formatSignedPercent,
   freshnessLabel,
   humanize,
+  isBehind,
 } from "../lib/format";
 import { useThemeTokens, withAlpha } from "../lib/theme";
 import { useApi } from "../lib/useApi";
 
-/**
- * How old a source is allowed to be before its age is worth colouring.
- *
- * The label already says "8 days ago"; this only decides whether that reads as
- * ordinary or as something to look at. Prices refresh daily and fundamentals
- * weekly, so a single threshold would flag half the strip permanently — a week
- * is the point past which every source in this pipeline is genuinely behind.
- */
-const STALE_AFTER_DAYS = 8;
-
-function freshnessTone(label: string): string {
+function freshnessTone(source: string, label: string): string {
   if (label === "never run") return "f-age is-never";
-  const days = /^(\d+) days ago$/.exec(label);
-  if (days && Number(days[1]) > STALE_AFTER_DAYS) return "f-age is-stale";
-  return "f-age";
+  return isBehind(source, label) ? "f-age is-stale" : "f-age";
 }
 
 /**
@@ -61,7 +50,7 @@ function Freshness({ freshness }: { freshness: Record<string, string | null> }) 
           return (
             <li key={name}>
               <span className="f-name">{humanize(name)}</span>
-              <span className={freshnessTone(label)}>{label}</span>
+              <span className={freshnessTone(name, label)}>{label}</span>
             </li>
           );
         })}

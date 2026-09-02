@@ -103,6 +103,44 @@ export function freshnessLabel(isoDate: string | null | undefined): string {
   return `${days} days ago`;
 }
 
+/**
+ * How old each source may be before its age is worth marking, in days.
+ *
+ * The TypeScript half of `app/lib/format.py`'s `STALE_AFTER_DAYS`, and per
+ * source rather than one number for all eight for the reason given there: the
+ * daily jobs and the quarterly ones are not behind at the same age. A 30-day-old
+ * fundamentals row is the freshest that has ever existed, and a single 8-day
+ * threshold marked it in red on every screenshot this project has ever taken.
+ * A badge that is always on is not a badge.
+ */
+export const STALE_AFTER_DAYS: Record<string, number> = {
+  prices: 4,
+  composite_scores: 4,
+  market_regime: 4,
+  forecasts: 10,
+  sentiment: 10,
+  backtest: 16,
+  analyst_consensus: 16,
+  fundamentals: 100,
+};
+
+/** Anything not named above. Weekly-ish, this pipeline's slowest routine cadence. */
+export const DEFAULT_STALE_AFTER_DAYS = 16;
+
+/**
+ * Whether a freshness label is old enough to be worth marking.
+ *
+ * Takes the rendered label rather than the date, matching `is_behind` in
+ * `app/lib/format.py` — both front ends already have the label in hand, and
+ * "never run" is a state a date cannot express.
+ */
+export function isBehind(source: string, label: string): boolean {
+  if (label === "never run") return true;
+  const match = /^(\d+) days ago$/.exec(label);
+  if (match === null) return false;
+  return Number(match[1]) > (STALE_AFTER_DAYS[source] ?? DEFAULT_STALE_AFTER_DAYS);
+}
+
 export function confidenceLabel(value: number | null | undefined): string {
   if (value === null || value === undefined) return "coverage unknown";
   if (value >= 80) return `good coverage (${value.toFixed(0)}%)`;

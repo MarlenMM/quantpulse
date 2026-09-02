@@ -15,6 +15,7 @@ from lib.format import (
     format_score,
     freshness_label,
     humanize,
+    is_behind,
     rating_label,
 )
 from lib.glossary import tip
@@ -85,12 +86,6 @@ def render_empty_state() -> None:
     )
 
 
-#: How old a source may be before its age is worth colouring. Prices refresh
-#: daily and fundamentals weekly, so a single lower threshold would flag half
-#: the strip permanently; a week is where every source here is genuinely behind.
-STALE_AFTER_DAYS = 8
-
-
 def render_freshness(freshness: dict[str, object]) -> None:
     """When each source last ran, as a strip rather than a sentence.
 
@@ -110,13 +105,10 @@ def render_freshness(freshness: dict[str, object]) -> None:
         columns = st.columns(4)
         for column, (name, value) in zip(columns, items[start : start + 4], strict=False):
             label = freshness_label(value)
-            behind = label == "never run" or (
-                label.endswith("days ago") and int(label.split()[0]) > STALE_AFTER_DAYS
-            )
             # `:red[]` / `:gray[]` resolve to the theme's own colours, so a stale
             # source is marked in the same red the ratings use rather than in a
             # hardcoded hex that would be wrong in one of the two schemes.
-            marked = f":red[{label}]" if behind else label
+            marked = f":red[{label}]" if is_behind(name, label) else label
             column.markdown(f"**{humanize(name)}**  \n{marked}")
 
 
