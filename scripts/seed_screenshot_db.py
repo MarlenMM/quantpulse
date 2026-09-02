@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from quantpulse.analysis import macro  # noqa: E402
 from quantpulse.ingestion import fred_client  # noqa: E402
+from quantpulse.ingestion import historical_constituents_client as hist  # noqa: E402
 from quantpulse.news_intelligence import market_regime  # noqa: E402
 from quantpulse.storage import persistence  # noqa: E402
 from quantpulse.storage.models import (  # noqa: E402
@@ -137,9 +138,15 @@ def seed_universe(session: Session, today: date) -> None:
         # The backtest is survivorship-aware and asks which symbols were in the
         # index on each rebalance date, so an unpopulated membership table
         # leaves it with an empty universe and nothing to trade.
+        #
+        # `hist.INDEX_NAME` rather than the string: it is "S&P 500", and the
+        # plausible-looking "SP500" wrote fifteen rows the backtest could not
+        # find, so the stage logged "no index_membership_history rows" and
+        # skipped -- a Track Record page with nothing on it and no error
+        # anywhere. A constant cannot be spelled wrong.
         session.add(
             IndexMembershipHistory(
-                index_name="SP500",
+                index_name=hist.INDEX_NAME,
                 symbol=symbol,
                 added_date=today - timedelta(days=TRADING_DAYS * 2),
                 removed_date=None,
@@ -168,15 +175,24 @@ def seed_prices(session: Session, today: date, rng: np.random.Generator) -> dict
         shocks = 0.65 * market + 0.75 * rng.normal(0.0, daily_vol, size=len(days))
         level = 40.0 + rng.uniform(0.0, 220.0)
         for day, shock in zip(days, shocks, strict=True):
+            previous = level
             level *= float(np.exp(daily_drift - 0.5 * daily_vol**2 + shock))
-            intraday = abs(float(rng.normal(0.0, daily_vol))) * level
+            # `open` is the previous close, not an offset from today's. The
+            # first version subtracted a fixed fraction of the day's range from
+            # the close, which made `close > open` on *every* bar -- so every
+            # candle in every chart rendered green, in a picture whose whole
+            # point is that green and red mean direction. A bar's colour has to
+            # come from the move it actually describes.
+            body_high = max(previous, level)
+            body_low = min(previous, level)
+            wick = abs(float(rng.normal(0.0, daily_vol))) * level
             session.add(
                 PriceHistory(
                     symbol=symbol,
                     date=day,
-                    open=level - intraday * 0.3,
-                    high=level + intraday,
-                    low=level - intraday,
+                    open=previous,
+                    high=body_high + wick,
+                    low=body_low - wick,
                     close=level,
                     adj_close=level,
                     volume=int(rng.uniform(2e6, 4e7)),
