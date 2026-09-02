@@ -47,15 +47,21 @@ export default function Glossary() {
         same definitions back the ⓘ hints beside the figures, so a term cannot mean one thing
         in a tooltip and another here.
       </p>
-      <label>
-        Search
-        <input
-          type="search"
-          value={query}
-          placeholder="e.g. sharpe, beta, drawdown, FIFO…"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
+      {/* Wrapped in `.controls` like every other control on the site: a bare
+          label stretches its input to the full 1240px column, which for a
+          one-word search box reads as a mistake. */}
+      <div className="controls">
+        <label>
+          Search
+          <input
+            type="search"
+            value={query}
+            placeholder="e.g. sharpe, beta, drawdown, FIFO…"
+            size={34}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+      </div>
 
       {grouped.length === 0 ? (
         <p className="muted" style={{ marginTop: "var(--s4)" }}>
