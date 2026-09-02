@@ -94,7 +94,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
           />
         </div>
       ) : (
-        <p className="muted">This symbol is tracked but has no composite score yet.</p>
+        <p className="muted">
+          This symbol is in the universe but has never been scored. That happens to a
+          recent index addition: the composite needs enough price history to compute the
+          technical and momentum categories before it will rank a name at all.
+        </p>
       )}
 
       {/* The price history is the one thing a reader opening a stock page came
@@ -123,7 +127,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             layout={{ xaxis: { rangeslider: { visible: false } } }}
           />
         ) : (
-          <p className="muted">No price history stored for this symbol yet.</p>
+          <p className="muted">
+            No price history is stored for this symbol. Prices come in on the daily
+            refresh; a name added to the index today has none until it next runs.
+          </p>
         )}
       </section>
 
@@ -148,7 +155,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               layout={{ polar: { radialaxis: { visible: true, range: [0, 100] } } }}
             />
           ) : (
-            <p className="muted">Not enough scored categories to plot a radar.</p>
+            <p className="muted">
+              Fewer than three categories have data, and a radar over two axes is a line.
+              The Coverage figure above is the same fact as a number.
+            </p>
           )}
           <p className="muted small">
             Categories with no data are omitted rather than plotted at zero — a missing
@@ -182,7 +192,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               </table>
             </div>
           ) : (
-            <p className="muted">No patterns detected recently.</p>
+            <p className="muted">
+              The detector found none of the four pattern families in this stock&apos;s recent
+              price action. That is the ordinary case, and it is not a bearish signal — the
+              absence of a pattern says nothing about direction.
+            </p>
           )}
         </div>
       </section>
@@ -261,7 +275,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             </p>
           </>
         ) : (
-          <p className="muted">No forecasts generated for this symbol yet.</p>
+          <p className="muted">
+            No forecasts are stored for this symbol. All three models need a couple of
+            years of history before they will produce one.
+          </p>
         )}
       </section>
 
