@@ -37,15 +37,23 @@ FRAMES = ("dashboard.png", "screener.png", "stock_detail.png", "backtest.png")
 #: read the headline and the first few table rows.
 HOLD_MS = 2_600
 
-#: Intermediate frames in each dissolve, and how long each is shown. Eight steps
-#: at 60ms is a ~half-second fade: fast enough not to feel like a slideshow,
-#: slow enough that it reads as a transition rather than a cut.
-FADE_STEPS = 8
-FADE_MS = 60
+#: Intermediate frames in each dissolve, and how long each is shown. Five steps
+#: at 90ms is a ~half-second fade: fast enough not to feel like a slideshow,
+#: slow enough to read as a transition rather than a cut. Every extra step is a
+#: whole extra frame in the file, and a blended frame of a UI screenshot
+#: compresses far worse than either end of the blend -- it is a gradient where
+#: the originals are flat colour.
+FADE_STEPS = 5
+FADE_MS = 90
 
-#: Half width, which is the retina screenshot at its intended size. A 2880px-wide
-#: GIF is a 12MB file that GitHub scales down anyway.
+#: Half of the captured 1440x900. GitHub renders a README image at about 800px
+#: wide, so full size would be a much larger file for pixels nobody sees.
 SCALE = 0.5
+
+#: Palette size. A UI screenshot is flat colour and a handful of accents; the
+#: last hundred entries of a 256-colour palette go to chart antialiasing that
+#: nobody is reading at this size.
+COLORS = 128
 
 
 def build(source: Path, target: Path) -> Path:
@@ -74,11 +82,20 @@ def build(source: Path, target: Path) -> Path:
 
     # One adaptive palette for the whole animation rather than per frame: a
     # per-frame palette makes the dissolve shimmer, because the colours shift
-    # under the blend as well as the blend itself.
-    palette = sequence[0].quantize(colors=255, method=Quantize.MEDIANCUT)
-    quantized = [
-        image.quantize(palette=palette, dither=Dither.FLOYDSTEINBERG) for image in sequence
-    ]
+    # under the blend as well as the blend itself. Built from a montage of all
+    # four pages so no page's colours are chosen at another's expense.
+    montage = Image.new("RGB", (size[0], size[1] * len(scaled)))
+    for index, frame in enumerate(scaled):
+        montage.paste(frame, (0, size[1] * index))
+    palette = montage.quantize(colors=COLORS, method=Quantize.MEDIANCUT)
+
+    # No dithering, which for this content is both smaller *and* cleaner.
+    # Floyd-Steinberg scatters per-pixel noise through large flat regions to
+    # approximate colours the palette lacks; a UI screenshot is mostly large
+    # flat regions, and that noise is exactly what GIF's run-length coding
+    # cannot compress. Dithered, this file was four times the size and visibly
+    # grainy across every panel.
+    quantized = [image.quantize(palette=palette, dither=Dither.NONE) for image in sequence]
 
     target.parent.mkdir(parents=True, exist_ok=True)
     quantized[0].save(
