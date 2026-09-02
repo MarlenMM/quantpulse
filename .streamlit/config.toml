@@ -28,8 +28,11 @@ headingFont = '"Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
 codeFont = 'ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
 
 # A real scale with real contrast, rather than six sizes a quarter-rem apart.
-# h1 is the page; h2 is a section; everything below is a label.
-headingFontSizes = ["2.35rem", "1.4rem", "1.05rem", "0.95rem", "0.85rem", "0.78rem"]
+# `st.title` is h1 and is the page; `st.header` is h2 and marks the one section
+# that *is* the page; `st.subheader` is h3 and is everything else. Two section
+# levels is what lets a page have a subject — one level for every section is how
+# a page ends up with none.
+headingFontSizes = ["2.35rem", "1.5rem", "1.2rem", "1rem", "0.875rem", "0.8rem"]
 headingFontWeights = [600, 600, 600, 600, 600, 600]
 baseFontSize = 15
 
@@ -104,3 +107,16 @@ fileWatcherType = "auto"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# "viewer", not the "auto" default: on localhost, auto adds Streamlit's own
+# Deploy button and developer menu to the top right of every page, so the first
+# thing in the corner of every screenshot is the framework rather than the app.
+# A deployed viewer never sees those anyway — this only makes the local run look
+# like what is actually shipped. The viewer options that matter, including the
+# light/dark toggle both themes above are written for, stay.
+#
+# The cost is the developer's own Rerun and Clear cache menu items. Both have
+# keyboard shortcuts ("R" and "C"), and the Settings page clears the data caches
+# itself whenever a refresh finishes.
+toolbarMode = "viewer"
