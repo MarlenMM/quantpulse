@@ -104,8 +104,14 @@ export function LoadingChart({ what = "the chart" }: { what?: string }) {
 export function ErrorBox({ error }: { error: Error }) {
   return (
     <div className="callout callout-error" role="alert">
-      <strong>This section didn't load.</strong> {error.message} Everything else on the page
-      is unaffected — the sections fetch independently.
+      <p>
+        <strong>This section didn't load.</strong> Everything else on the page is unaffected —
+        each section fetches on its own.
+      </p>
+      {/* The message on its own line rather than run into the sentence above it:
+          it comes from the network layer, has no terminating punctuation, and
+          reads as part of the previous clause when it is inlined. */}
+      <p className="small muted">{error.message}</p>
     </div>
   );
 }
