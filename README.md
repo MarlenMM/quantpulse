@@ -1,8 +1,8 @@
 # QuantPulse
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
-[![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-1a7f37.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-1%2C466-1a7f37.svg)](tests/)
+[![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
+[![Tests](https://img.shields.io/badge/tests-1%2C466-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
