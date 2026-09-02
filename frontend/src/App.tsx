@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Disclaimer } from "./components/Common";
+import { Mark } from "./components/Mark";
 import { Link, navigate, useMatch, usePath } from "./lib/router";
 import Dashboard from "./pages/Dashboard";
 import Screener from "./pages/Screener";
@@ -36,7 +37,17 @@ function Routes() {
     case "/glossary":
       return <Glossary />;
     default:
-      return <p className="muted">Page not found.</p>;
+      // Say what is missing and offer the way out. "Page not found." is the
+      // placeholder voice the rest of this app does not use anywhere else.
+      return (
+        <>
+          <h1>No such page</h1>
+          <p className="standfirst">
+            There is nothing at <code>{path}</code>. The four pages are in the bar above;{" "}
+            <Link to="/screener">the Screener</Link> is where most routes lead.
+          </p>
+        </>
+      );
   }
 }
 
@@ -45,9 +56,10 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <span aria-hidden="true">📈</span> QuantPulse
-        </div>
+        <Link to="/dashboard" className="brand">
+          <Mark />
+          QuantPulse
+        </Link>
         <nav aria-label="Main">
           {NAV.map((item) => (
             <Link

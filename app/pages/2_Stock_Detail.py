@@ -31,6 +31,7 @@ import pandas as pd
 import streamlit as st
 
 from lib import charts, data
+from lib.brand import PAGE_ICON
 from lib.format import (
     confidence_label,
     format_percent,
@@ -50,7 +51,7 @@ from quantpulse.llm import chatbot
 from quantpulse.llm import narrative as llm_narrative
 from quantpulse.llm.providers import get_provider
 
-st.set_page_config(page_title="QuantPulse — Stock Detail", page_icon="🔬", layout="wide")
+st.set_page_config(page_title="QuantPulse — Stock Detail", page_icon=PAGE_ICON, layout="wide")
 
 SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
 
@@ -669,7 +670,7 @@ def render_on_demand(symbol: str, catalogue: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    st.title("🔬 Stock Detail")
+    st.title("Stock Detail")
     rows = data.screener_rows()
     if rows.empty:
         st.info("No scored symbols yet — run `scripts/refresh_data.py` first.")

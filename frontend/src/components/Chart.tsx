@@ -12,12 +12,19 @@
  *
  * Transparent backgrounds so the figure inherits the page theme, matching the
  * Streamlit charts rather than hardcoding a palette that would drift from the
- * other front end.
+ * other front end. Everything Plotly *does* need as a literal — axis text,
+ * gridlines, the default trace colour — is read from the page's own CSS custom
+ * properties by `useThemeTokens`, because a literal here can only be right in
+ * one of the two themes. It used to be `#c9d1d9` on `rgba(255,255,255,0.08)`,
+ * which on the light theme was unreadable grey on white over invisible
+ * gridlines. See `lib/theme.ts`.
  */
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useMemo } from "react";
 import type { ComponentType } from "react";
 import type { Data, Layout } from "plotly.js";
 import type { PlotParams } from "react-plotly.js";
+import { useThemeTokens } from "../lib/theme";
+import { LoadingChart } from "./Common";
 
 /**
  * Resolving `react-plotly.js`'s component has broken twice, in two different
@@ -67,15 +74,25 @@ const Plot = lazy(async () => {
   return { default: component as ComponentType<PlotParams> };
 });
 
-const BASE_LAYOUT: Partial<Layout> = {
-  paper_bgcolor: "rgba(0,0,0,0)",
-  plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "#c9d1d9" },
-  margin: { l: 48, r: 16, t: 24, b: 40 },
-  legend: { orientation: "h", y: 1.08, x: 0 },
-  xaxis: { gridcolor: "rgba(255,255,255,0.08)" },
-  yaxis: { gridcolor: "rgba(255,255,255,0.08)" },
-};
+function baseLayout(ink: string, grid: string): Partial<Layout> {
+  return {
+    paper_bgcolor: "rgba(0,0,0,0)",
+    plot_bgcolor: "rgba(0,0,0,0)",
+    // The figures sit inside a page set in three faces; matching the UI stack
+    // keeps an axis label from being the one piece of Helvetica on screen.
+    font: {
+      color: ink,
+      family:
+        'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      size: 12,
+    },
+    margin: { l: 52, r: 16, t: 24, b: 40 },
+    legend: { orientation: "h", y: 1.1, x: 0 },
+    xaxis: { gridcolor: grid, zerolinecolor: grid, linecolor: grid },
+    yaxis: { gridcolor: grid, zerolinecolor: grid, linecolor: grid },
+    hoverlabel: { font: { family: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' } },
+  };
+}
 
 export function Chart({
   data,
@@ -88,14 +105,19 @@ export function Chart({
   height?: number;
   ariaLabel: string;
 }) {
+  const { ink, grid } = useThemeTokens();
+  const base = useMemo(() => baseLayout(ink, grid), [ink, grid]);
   return (
     // Plotly renders to canvas/SVG with no inherent description, so without
     // this the whole figure is invisible to a screen reader.
     <div role="img" aria-label={ariaLabel} style={{ minHeight: height }}>
-      <Suspense fallback={<p className="muted" role="status">Loading chart…</p>}>
+      {/* Plotly is a separate chunk, so this fallback is on screen for as long
+          as that chunk takes to arrive. A placeholder the size of the figure
+          keeps the page from collapsing and then jumping when it lands. */}
+      <Suspense fallback={<LoadingChart />}>
         <Plot
           data={data}
-          layout={{ ...BASE_LAYOUT, ...layout, height, autosize: true }}
+          layout={{ ...base, ...layout, height, autosize: true }}
           config={{
             // The mode bar used to be off entirely, and that made every chart a
             // one-way trip: dragging a box on a Plotly figure zooms in, but the

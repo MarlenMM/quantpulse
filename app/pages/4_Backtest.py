@@ -17,11 +17,12 @@ import pandas as pd
 import streamlit as st
 
 from lib import data
+from lib.brand import PAGE_ICON
 from lib.format import format_percent, format_ratio
 from lib.glossary import tip
 from quantpulse.portfolio.optimization import kelly_position_fraction
 
-st.set_page_config(page_title="QuantPulse — Track Record", page_icon="📊", layout="wide")
+st.set_page_config(page_title="QuantPulse — Track Record", page_icon=PAGE_ICON, layout="wide")
 
 
 def interval_caption(low: float | None, high: float | None, level: float | None) -> str:
@@ -84,7 +85,7 @@ def render_position_sizing(latest: pd.Series) -> None:
 
 
 def main() -> None:
-    st.title("📊 Backtest / Track Record")
+    st.title("Backtest / Track Record")
     runs = data.backtest_history(limit=20)
     if runs.empty:
         st.info(

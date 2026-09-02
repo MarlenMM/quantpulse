@@ -38,10 +38,18 @@ __all__ = [
     "sector_bar",
 ]
 
-# One neutral accent used wherever a series has no semantic color of its own.
-_ACCENT = "#3b82f6"
-_MUTED = "#6e7781"
-_BAND = "rgba(59, 130, 246, 0.18)"
+# One accent, used wherever a series has no semantic color of its own — the same
+# ink blue the two front ends use for every interactive affordance.
+#
+# It is a mid-tone rather than either theme's own accent because a Plotly trace
+# takes a literal: the figure has to stay legible on the warm paper of the light
+# theme and the warm slate of the dark one, and `.streamlit/config.toml` cannot
+# vary a series colour per scheme. Everything Streamlit *can* theme per scheme —
+# axis text, gridlines, the paper — it does, because the figures below set
+# transparent backgrounds and let it through.
+_ACCENT = "#3a72b8"
+_MUTED = "#7a756b"
+_BAND = "rgba(58, 114, 184, 0.18)"
 
 
 def _base_layout(fig: go.Figure, *, height: int = 340, title: str | None = None) -> go.Figure:

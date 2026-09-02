@@ -26,6 +26,7 @@ __all__ = [
     "RATING_ORDER",
     "RATING_DISPLAY",
     "ACTION_DISPLAY",
+    "NEUTRAL_COLOR",
     "rating_label",
     "rating_color",
     "action_label",
@@ -46,18 +47,18 @@ RATING_ORDER = ("strong_buy", "buy", "hold", "sell", "strong_sell")
 # icon + word + color. The icon and word carry the meaning; the color is
 # decoration on top of them, never the sole channel (Section 12).
 RATING_DISPLAY: dict[str, tuple[str, str, str]] = {
-    "strong_buy": ("▲▲", "Strong Buy", "#1a7f37"),
-    "buy": ("▲", "Buy", "#2da44e"),
-    "hold": ("■", "Hold", "#9a6700"),
-    "sell": ("▼", "Sell", "#cf222e"),
-    "strong_sell": ("▼▼", "Strong Sell", "#a40e26"),
+    "strong_buy": ("▲▲", "Strong Buy", "#0f7a44"),
+    "buy": ("▲", "Buy", "#2c9c5f"),
+    "hold": ("■", "Hold", "#a07c22"),
+    "sell": ("▼", "Sell", "#cf4436"),
+    "strong_sell": ("▼▼", "Strong Sell", "#9e2419"),
 }
 
 # Section 9's per-holding guidance vocabulary, same icon+word discipline.
 ACTION_DISPLAY: dict[str, tuple[str, str, str]] = {
-    "add": ("▲", "Add", "#2da44e"),
-    "hold": ("■", "Hold", "#9a6700"),
-    "trim": ("▼", "Trim", "#cf222e"),
+    "add": ("▲", "Add", "#2c9c5f"),
+    "hold": ("■", "Hold", "#a07c22"),
+    "trim": ("▼", "Trim", "#cf4436"),
     "sell": ("▼▼", "Sell", "#a40e26"),
 }
 
@@ -77,10 +78,15 @@ def rating_label(rating: str | None) -> str:
     return f"{icon} {text}".strip()
 
 
+#: An unknown or absent rating. Warm grey, mixed toward the paper the themes are
+#: built on rather than a neutral #808080.
+NEUTRAL_COLOR = "#7a756b"
+
+
 def rating_color(rating: str | None) -> str:
     """The decorative color for a rating; always paired with `rating_label`'s text."""
     if not rating or rating not in RATING_DISPLAY:
-        return "#6e7781"
+        return NEUTRAL_COLOR
     return RATING_DISPLAY[rating][2]
 
 

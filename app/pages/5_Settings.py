@@ -21,11 +21,12 @@ from datetime import datetime
 import streamlit as st
 
 from lib import data, refresh
+from lib.brand import PAGE_ICON
 from lib.format import freshness_label, humanize
 from quantpulse.config import get_settings
 from quantpulse.llm.providers import get_provider
 
-st.set_page_config(page_title="QuantPulse — Settings", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="QuantPulse — Settings", page_icon=PAGE_ICON, layout="wide")
 
 
 def render_freshness() -> None:
@@ -151,7 +152,7 @@ def render_manual_refresh() -> None:
             "\u201cit is Saturday\u201d is not a reason to do nothing."
         ),
     )
-    if st.button("🔄 Refresh now", type="primary"):
+    if st.button("Refresh now", type="primary", icon=":material/refresh:"):
         if runner.start(weekly=weekly, ignore_market_calendar=ignore_calendar):
             st.rerun()
         else:
@@ -222,7 +223,7 @@ def render_configuration() -> None:
         "GROQ_API_KEY": settings.groq_api_key,
     }
     st.dataframe(
-        [{"Secret": name, "Set": "✅" if value else "—"} for name, value in secrets.items()],
+        [{"Secret": name, "Set": "Yes" if value else "—"} for name, value in secrets.items()],
         hide_index=True,
         width="stretch",
     )
@@ -260,7 +261,7 @@ def render_methodology() -> None:
 
 
 def main() -> None:
-    st.title("⚙️ Settings & About")
+    st.title("Settings & About")
     render_freshness()
     st.divider()
     render_manual_refresh()

@@ -15,6 +15,7 @@ import pytest
 
 from lib import charts
 from lib.format import (
+    NEUTRAL_COLOR,
     RATING_DISPLAY,
     RATING_ORDER,
     action_label,
@@ -54,8 +55,11 @@ class TestRatingDisplay:
 
     def test_color_is_decoration_with_a_neutral_fallback(self) -> None:
         assert rating_color("buy").startswith("#")
-        assert rating_color(None) == "#6e7781"
-        assert rating_color("nonsense") == "#6e7781"
+        assert rating_color(None) == NEUTRAL_COLOR
+        assert rating_color("nonsense") == NEUTRAL_COLOR
+        # The fallback must be distinguishable from every real verdict, or an
+        # unrated row would silently read as one of them.
+        assert NEUTRAL_COLOR not in {color for _, _, color in RATING_DISPLAY.values()}
 
     def test_action_labels_pair_icon_and_word(self) -> None:
         for action in ("add", "hold", "trim", "sell"):
