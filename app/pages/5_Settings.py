@@ -254,10 +254,12 @@ def render_methodology() -> None:
         - **Point-in-time storage** — scores are append-only and never rewritten, so
           "what did the algorithm say on June 3rd" always returns what it actually said.
 
-        **Known limitations, stated rather than hidden:** beta is measured against an
-        equal-weight universe proxy (no S&P 500 price series is ingested); news models
-        are English-language and Western-media weighted; free data sources are
-        best-effort and can be stale or incomplete.
+        **Known limitations, stated rather than hidden:** news models are
+        English-language and Western-media weighted; free data sources are
+        best-effort and can be stale or incomplete. Beta is regressed against the
+        S&P 500 (`^GSPC`) itself, but falls back to an equal-weight universe proxy
+        on a database that has not backfilled the index yet — each page says which
+        one it used.
         """
     )
 

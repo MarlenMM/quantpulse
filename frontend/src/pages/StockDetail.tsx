@@ -326,9 +326,10 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                  noisier than either number alone, so they are left blank rather than shown as
                  noise. `
               : ""}
-            {data.risk.beta !== null && data.risk.beta_r_squared !== null
-              ? `Beta is against an equal-weight proxy for the market (no S&P 500 series is
-                 ingested), R² = ${data.risk.beta_r_squared.toFixed(2)}.`
+            {data.risk.beta !== null &&
+            data.risk.beta_r_squared !== null &&
+            data.risk.beta_benchmark !== null
+              ? `Beta is measured against ${data.risk.beta_benchmark}, R² = ${data.risk.beta_r_squared.toFixed(2)}.`
               : ""}
           </p>
         </section>

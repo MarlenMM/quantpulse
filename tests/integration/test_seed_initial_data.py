@@ -10,6 +10,7 @@ from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import seed_initial_data as seed
+from quantpulse.analysis import risk
 from quantpulse.storage.models import Base, IndexMembershipHistory, PriceHistory, RefreshLog, Ticker
 
 
@@ -258,9 +259,26 @@ def test_run_end_to_end_historical_mode(factory: sessionmaker) -> None:
         seed.run(period="max", session_factory=_session_factory(factory))
 
     with factory() as session:
-        assert session.scalar(select(func.count()).select_from(Ticker)) == 2
+        # Two constituents plus the market index, which a cold start backfills
+        # alongside them so a fresh database comes up with a beta benchmark as
+        # deep as the history it will be regressed against.
+        assert session.scalar(select(func.count()).select_from(Ticker)) == 3
         assert session.scalar(select(func.count()).select_from(IndexMembershipHistory)) == 2
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 6
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 9
+        benchmark = session.get(Ticker, risk.MARKET_INDEX_SYMBOL)
+        assert benchmark is not None
+        # The two flags that keep it out of the screener, the search catalogue
+        # and every scoring read. A seeded index without them is a 501st stock.
+        assert benchmark.asset_type == "index"
+        assert benchmark.is_active is False
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(PriceHistory)
+                .where(PriceHistory.symbol == risk.MARKET_INDEX_SYMBOL)
+            )
+            == 3
+        )
         logs = session.scalars(select(RefreshLog)).all()
     assert len(logs) == 1
     assert logs[0].status == "success"

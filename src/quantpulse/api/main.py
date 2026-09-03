@@ -79,9 +79,10 @@ from quantpulse.storage.db import get_session
 # rather than "*" so this never becomes a wide-open API by default.
 _DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 
-# Trailing window for the equal-weight market proxy that beta regresses against
-# (no S&P 500 series is ingested anywhere), and for the commodity/currency
-# series behind the Section 28 overlay's "last ~3 months" reading.
+# Trailing window for the market series beta regresses against (the stored
+# `^GSPC` index, or the equal-weight proxy where it has not been backfilled --
+# `risk.resolve_market_returns` decides), and for the commodity/currency series
+# behind the Section 28 overlay's "last ~3 months" reading.
 #
 # Read from `risk` rather than redeclared: this page and the Streamlit Stock
 # Detail page must regress against the same window or they publish different
@@ -316,11 +317,18 @@ def stock_detail(
     empty lists, because "we track this but haven't computed it yet" and "this
     company does not exist" are different answers and the client should be able
     to say which one it got.
+
+    The market index is the one row that is in `tickers` and is nonetheless not
+    a subject here: it exists so `price_history` has somewhere to put `^GSPC`
+    for the beta regression, and a "stock page" for it would be a company
+    profile of an index -- no score, no fundamentals, no analyst coverage, and
+    a sector of `None`. Nothing links to it, but reachable-by-URL and
+    intentional are different things.
     """
     ticker = symbol.strip().upper()
     universe_frame = persistence.read_ticker_universe(session, active_only=False)
     match = universe_frame[universe_frame["symbol"] == ticker]
-    if match.empty:
+    if match.empty or str(match.iloc[0]["asset_type"]) == "index":
         raise HTTPException(status_code=404, detail=f"Unknown symbol: {ticker}")
 
     scores = persistence.read_screener_rows(session)
@@ -388,10 +396,19 @@ def _risk_profile(session: Session, symbol: str, bars: pd.DataFrame) -> RiskProf
     if returns.empty:
         return None
 
-    panel = persistence.read_adj_close_panel(
-        session, start=date.today() - timedelta(days=_RISK_PANEL_DAYS), end=date.today()
+    # Same two-step the Streamlit pages take through `app/lib/data.market_series`:
+    # one window (`_RISK_PANEL_DAYS` is `risk.MARKET_PANEL_DAYS`) and one
+    # resolver deciding *which* market. Both halves have to be shared — the
+    # window alone was, and the two front ends still published different betas,
+    # because each built its own market series underneath it.
+    start = date.today() - timedelta(days=_RISK_PANEL_DAYS)
+    market_series = risk.resolve_market_returns(
+        persistence.read_benchmark_closes(
+            session, symbol=risk.MARKET_INDEX_SYMBOL, start=start, end=date.today()
+        ),
+        persistence.read_adj_close_panel(session, start=start, end=date.today()),
     )
-    market = risk.equal_weight_market_returns(panel) if not panel.empty else pd.Series(dtype=float)
+    market = market_series.returns
     options = persistence.read_latest_options(session, as_of=date.today())
     implied = None
     if not options.empty:
@@ -411,6 +428,7 @@ def _risk_profile(session: Session, symbol: str, bars: pd.DataFrame) -> RiskProf
         implied_premium=profile.volatility.implied_premium,
         beta=profile.beta.beta if profile.beta else None,
         beta_r_squared=profile.beta.r_squared if profile.beta else None,
+        beta_benchmark=market_series.label if profile.beta else None,
         sharpe=profile.sharpe,
         sortino=profile.sortino,
         max_drawdown=profile.max_drawdown,
@@ -482,10 +500,12 @@ def sector_rotation(
 ) -> list[SectorStrength]:
     """Which sectors money has rotated into over the lookback window (Section 7.1).
 
-    Measured against an equal-weight proxy for the market, because no S&P 500
-    price series is ingested anywhere -- the same honest stand-in the beta
-    calculation and the backtest benchmark already use. Sorted strongest first,
-    so the top row is where money has been going.
+    Measured against an **equal-weight** proxy for the market, deliberately: each
+    sector's strength here is an equal-weight average of its members, so an
+    equal-weight market keeps both sides of "relative to the market" on one
+    weighting scheme. (Beta is the opposite case and regresses against the
+    stored `^GSPC` index.) Sorted strongest first, so the top row is where money
+    has been going.
     """
     panel = persistence.read_adj_close_panel(
         session,

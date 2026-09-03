@@ -14,6 +14,12 @@ universe. An R-squared of exactly 1 against "the market" is not a number any
 real regression produces, which is what makes this checkable rather than a
 matter of taste.
 
+This fixture deliberately stores no `^GSPC`, so the page resolves to the
+equal-weight fallback -- which is the path this test is about. The index path
+(and the fact that both front ends pick the same one) is covered separately in
+`test_beta_agrees_across_front_ends.py`; keeping the two apart is what lets this
+one still fail if the *proxy* is ever rebuilt from the holdings again.
+
 The scenario below separates the two readings by construction: the portfolio
 holds three names driven by one random factor, while the universe contains six
 more driven by an independent one. Against its own holdings the portfolio is

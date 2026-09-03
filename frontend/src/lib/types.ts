@@ -190,6 +190,13 @@ export interface RiskProfile {
   implied_premium: number | null;
   beta: number | null;
   beta_r_squared: number | null;
+  /**
+   * What the beta was regressed against, phrased to drop into a sentence
+   * ("the S&P 500 (^GSPC)"). Sent by the server rather than written here: the
+   * caption is a claim about the number next to it, and a client that composes
+   * its own version of that sentence can outlive the benchmark it describes.
+   */
+  beta_benchmark: string | null;
   sharpe: number | null;
   sortino: number | null;
   max_drawdown: number | null;

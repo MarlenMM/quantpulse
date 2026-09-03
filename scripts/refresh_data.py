@@ -40,6 +40,7 @@ from quantpulse.analysis import (
     fundamental,
     macro,
     patterns,
+    risk,
     scoring,
     smart_money,
 )
@@ -723,6 +724,36 @@ def _active_universe(session: Session) -> pd.DataFrame:
         )
     ).all()
     return pd.DataFrame(rows, columns=["symbol", "name", "sector"])
+
+
+def refresh_benchmark_prices(session: Session, today: date) -> int:
+    """Ingest the S&P 500 index level into `price_history` (Section 7.7's beta benchmark).
+
+    Daily, and cheap -- one symbol through the same incremental
+    `_last_price_date` / `_incremental_period` path every constituent uses, so a
+    nightly run fetches five days and a database that has been idle for a month
+    fetches a month.
+
+    This is what makes a published beta mean what a reader thinks it means. Until
+    it existed, `risk.equal_weight_market_returns` stood in for the index, and an
+    equal-weight basket of the same 500 names is not the market: NVDA read beta
+    0.78 (R^2 0.06) against the proxy and 1.92 (R^2 0.42) against `^GSPC` over
+    the identical window. `risk.resolve_market_returns` still falls back to the
+    proxy when this step has never run, and says so in the caption it hands the
+    UI -- a missing benchmark degrades the sentence, not the page.
+    """
+    symbol = risk.MARKET_INDEX_SYMBOL
+    persistence.upsert_benchmark_ticker(session, symbol=symbol, name=risk.MARKET_INDEX_NAME)
+    period = _incremental_period(_last_price_date(session, symbol), today=today)
+    try:
+        prices = yfinance_client.fetch_price_history(symbol, period=period)
+    except Exception:
+        logger.exception("Failed to fetch benchmark index %s", symbol)
+        return 0
+    if prices.empty:
+        logger.warning("Benchmark index %s returned no bars for period %s", symbol, period)
+        return 0
+    return _upsert_price_history(session, prices)
 
 
 def refresh_cross_asset_macro(session: Session, today: date) -> int:
@@ -1780,6 +1811,15 @@ def run(
         rows_updated += step(
             "cross_asset_macro",
             lambda: _in_session(lambda s: refresh_cross_asset_macro(s, today)),
+        )
+
+        # One symbol, daily: the index every published beta is regressed against.
+        # Not a critical step -- `risk.resolve_market_returns` falls back to the
+        # equal-weight proxy and relabels itself, so a failure here costs
+        # precision in one sentence rather than a blank page.
+        rows_updated += step(
+            "benchmark_prices",
+            lambda: _in_session(lambda s: refresh_benchmark_prices(s, today)),
         )
 
         if is_weekly:

@@ -159,9 +159,14 @@ def render_sector_rotation() -> None:
     table cannot: whether the leaders are concentrated in one corner of the
     market.
 
-    Measured against an equal-weight proxy for the market, because no S&P 500
-    price series is ingested anywhere -- the same honest stand-in the beta
-    calculation and the backtest benchmark already use.
+    Measured against an **equal-weight** proxy for the market, deliberately and
+    not for want of an index series (`^GSPC` is ingested; see
+    `risk.MARKET_INDEX_SYMBOL`). Each sector's own strength here is an
+    equal-weight average of its members, so an equal-weight market keeps both
+    sides of "relative to the market" on one weighting scheme; comparing an
+    equal-weight sector against a cap-weighted index would report the
+    size-tilt difference as rotation. Beta is the opposite case and uses the
+    index -- there, the cap-weighted market is the thing being measured against.
     """
     panel = data.universe_panel()
     if panel.empty or panel.shape[1] < 2:

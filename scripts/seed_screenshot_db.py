@@ -49,7 +49,7 @@ if str(REPO / "scripts") not in sys.path:
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
-from quantpulse.analysis import macro  # noqa: E402
+from quantpulse.analysis import macro, risk  # noqa: E402
 from quantpulse.ingestion import fred_client  # noqa: E402
 from quantpulse.ingestion import historical_constituents_client as hist  # noqa: E402
 from quantpulse.news_intelligence import market_regime  # noqa: E402
@@ -162,10 +162,36 @@ def seed_prices(session: Session, today: date, rng: np.random.Generator) -> dict
     fifteen independent random walks, every beta is zero and every sector's
     relative strength is a coin flip. Correlation is the part of a real market
     those views are actually reading.
+
+    That same factor is also stored as the market index itself, so the beta on
+    the Stock Detail page is regressed against `^GSPC` exactly as it is on the
+    real database. Without it the page falls back to the equal-weight proxy and
+    captions itself "the index series is not stored yet" -- true, and a
+    misleading thing for a screenshot of the shipped product to say.
     """
     days = _trading_days(today, TRADING_DAYS)
     market = rng.normal(0.0, 0.008, size=len(days))
     closes: dict[str, float] = {}
+
+    persistence.upsert_benchmark_ticker(
+        session, symbol=risk.MARKET_INDEX_SYMBOL, name=risk.MARKET_INDEX_NAME
+    )
+    index_level = 4200.0
+    for day, shock in zip(days, market, strict=True):
+        previous = index_level
+        index_level *= float(np.exp(0.00025 + shock))
+        session.add(
+            PriceHistory(
+                symbol=risk.MARKET_INDEX_SYMBOL,
+                date=day,
+                open=previous,
+                high=max(previous, index_level),
+                low=min(previous, index_level),
+                close=index_level,
+                adj_close=index_level,
+                volume=0,
+            )
+        )
 
     for symbol, _, _, drift, vol in TICKERS:
         daily_drift = drift / 252.0

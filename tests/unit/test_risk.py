@@ -60,6 +60,54 @@ class TestReturns:
         assert len(risk.equal_weight_market_returns(panel, min_names=1)) == 3
 
 
+class TestResolveMarketReturns:
+    """Which market a beta is regressed against, and what the page is told to call it."""
+
+    @staticmethod
+    def _index(n: int) -> pd.Series:
+        rng = np.random.default_rng(11)
+        level = 4000.0 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, n)))
+        return pd.Series(level, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+
+    def test_prefers_the_index_when_it_has_enough_history(self) -> None:
+        resolved = risk.resolve_market_returns(self._index(300), _panel({"A": [1.0, 2.0]}))
+        assert resolved.source == "index"
+        assert resolved.is_index
+        assert risk.MARKET_INDEX_SYMBOL in resolved.label
+        assert len(resolved.returns) == 299
+
+    def test_falls_back_to_the_proxy_when_the_index_is_too_short(self) -> None:
+        # One bar under `beta`'s own floor, so the resolver never hands back a
+        # series `beta` would then refuse -- the two thresholds are the same one.
+        panel = _panel({"A": [100.0, 110.0], "B": [50.0, 50.0]})
+        resolved = risk.resolve_market_returns(self._index(60), panel)
+        assert resolved.source == "equal_weight"
+        assert not resolved.is_index
+        assert list(resolved.returns) == pytest.approx([0.05])
+
+    def test_falls_back_when_the_index_is_absent_entirely(self) -> None:
+        panel = _panel({"A": [100.0, 110.0], "B": [50.0, 50.0]})
+        for missing in (None, pd.Series(dtype=float)):
+            resolved = risk.resolve_market_returns(missing, panel)
+            assert resolved.source == "equal_weight"
+            assert list(resolved.returns) == pytest.approx([0.05])
+
+    def test_the_fallback_label_says_it_is_a_fallback(self) -> None:
+        """A page that silently prints the index's caption over the proxy's number
+        is the failure this dataclass exists to prevent, so the two labels must
+        be distinguishable rather than both reading like "the market"."""
+        index_label = risk.resolve_market_returns(self._index(300)).label
+        proxy_label = risk.resolve_market_returns(None, _panel({"A": [1.0, 1.1]})).label
+        assert index_label != proxy_label
+        assert risk.MARKET_INDEX_SYMBOL not in proxy_label
+        assert "proxy" in proxy_label
+
+    def test_degrades_to_an_empty_series_when_nothing_is_available(self) -> None:
+        resolved = risk.resolve_market_returns(None, None)
+        assert resolved.returns.empty
+        assert resolved.source == "equal_weight"
+
+
 # --------------------------------------------------------------------------- #
 # Volatility (Section 7.7: historical & implied)
 # --------------------------------------------------------------------------- #
