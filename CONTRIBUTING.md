@@ -83,6 +83,44 @@ one; this project is consistent about naming and structure on purpose.
   silent normalization bugs are the two easiest ways to quietly corrupt this
   project's actual output.
 
+## Design
+
+Both front ends share one system: the tokens live in
+`frontend/src/styles.css` and are said again in Streamlit's vocabulary in
+`.streamlit/config.toml`. Read the header comment in the first before changing
+anything visual — it explains why each decision is what it is.
+
+The short version, as constraints. These are the defaults the project has
+already been through once and does not want back:
+
+- **No gradients, glows, or glass panels.** Not in a hero, not behind a card,
+  not as decoration on a status.
+- **One accent, and it means "interactive".** Green, amber and red are the
+  rating and severity vocabulary and are never used for anything else — not for
+  a chart series, not for a nice-looking border. A moving average once came out
+  green on a candlestick chart for exactly this reason.
+- **Never colour alone.** Every rating and status carries a glyph and a word;
+  colour is the third, redundant channel. Series in a figure are separated by
+  dash pattern before hue.
+- **Three type roles, not one.** Serif for display, the UI sans for chrome,
+  monospace with `tabular-nums` for every figure. A sentence that merely
+  contains a number is not a figure.
+- **One dominant section per page.** In React that is a single `.card` with an
+  `h2.h-lede`; in Streamlit it is the page's single `st.header`, with every
+  other section an `st.subheader`. A page where every section takes the same
+  heading weight has no subject.
+- **Remove a layer before adding one.** A `.card` never contains another
+  `.card` — the stylesheet flattens it if you try.
+- **Emoji are not an icon set.** The one mark is `app/assets/mark.svg`, drawn
+  by hand and shared by both front ends.
+- **Motion only reports state.** The loading skeleton's sweep is the only
+  animation in the app, and it stops under `prefers-reduced-motion`.
+
+Copy is held to the same bar as the code. Write what the thing does, not that it
+is powerful: a sentence that would fit another product unchanged is not doing
+any work. Section numbers from `PROJECT_PLAN.md` belong in comments and
+docstrings, never in a caption — a reader has not got that document.
+
 ## Reporting a bug
 
 Open an issue with: what you expected, what happened, and — if it's a

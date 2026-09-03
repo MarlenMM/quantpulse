@@ -715,6 +715,12 @@ def main() -> None:
         if not bars.empty and len(bars) >= 30
         else None
     )
+    # `st.header`, and the only one on this page. Fifteen sections all introduced
+    # by the same `st.subheader` is a stack with no first item -- and the price
+    # history, which is what a reader opening a stock page came for, was the one
+    # section with no heading at all. It matches the React page, where Price is
+    # the single raised card and everything after it is a plain section.
+    st.header("Price")
     st.plotly_chart(charts.price_chart(bars, overlays=overlays, levels=levels), width="stretch")
     if levels is not None and not levels.empty:
         st.caption(

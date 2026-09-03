@@ -226,6 +226,11 @@ def render_positions(state: holdings_lib.PortfolioState) -> pd.DataFrame:
         )
     frame = pd.DataFrame(records)
 
+    # `st.header`, and the only one on this page. What you actually hold is the
+    # subject; the risk, allocation and recommendation sections below are all
+    # readings *of* it, and giving all five the same heading weight left the
+    # page with no first item. It also had no heading at all before this.
+    st.header("What you hold")
     st.dataframe(
         frame.style.format(
             {
