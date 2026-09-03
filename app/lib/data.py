@@ -28,6 +28,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from quantpulse.analysis import risk
 from quantpulse.config import get_settings
 from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
@@ -215,6 +216,42 @@ def universe_panel(lookback_days: int = 150) -> pd.DataFrame:
         return persistence.read_adj_close_panel(
             session, start=end - _timedelta(days=lookback_days), end=end, symbols=symbols
         )
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def benchmark_closes(lookback_days: int) -> pd.Series:
+    """The market index's stored adjusted closes over the trailing window.
+
+    Its own reader rather than a column pulled out of `universe_panel`: the
+    index is deliberately not in the universe (see
+    `persistence.upsert_benchmark_ticker`), so no panel this app builds
+    contains it.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    end = _date.today()
+    with get_session() as session:
+        return persistence.read_benchmark_closes(
+            session,
+            symbol=risk.MARKET_INDEX_SYMBOL,
+            start=end - _timedelta(days=lookback_days),
+            end=end,
+        )
+
+
+def market_series(lookback_days: int = risk.MARKET_PANEL_DAYS) -> risk.MarketSeries:
+    """The market return series every Streamlit beta is regressed against.
+
+    Deliberately **not** cached itself — both of its inputs are, and a
+    `MarketSeries` wraps a Series that `st.cache_data` would have to pickle for
+    no gain. What matters is that the Stock Detail page and the Portfolio page
+    call *this*, not two hand-rolled equivalents: those two, plus the API, are
+    the three copies that once published three different betas.
+    """
+    return risk.resolve_market_returns(
+        benchmark_closes(lookback_days), universe_panel(lookback_days)
+    )
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)

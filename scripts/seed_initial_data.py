@@ -34,10 +34,12 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from quantpulse.analysis import risk
 from quantpulse.config import get_settings
 from quantpulse.ingestion import historical_constituents_client as hist
 from quantpulse.ingestion import wikipedia_client, yfinance_client
 from quantpulse.ingestion.historical_constituents_client import HistoricalMembershipUnavailable
+from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
 from quantpulse.storage.models import IndexMembershipHistory, PriceHistory, RefreshLog, Ticker
 from quantpulse.utils.log import configure_logging
@@ -305,6 +307,16 @@ def run(
 
         if not skip_prices:
             targets = _select_symbols(membership, symbols, limit)
+            # The market index rides the same backfill as every constituent, so
+            # a cold start comes up with a beta benchmark already as deep as the
+            # price history it will be regressed against. Prepended rather than
+            # appended: it is one symbol, and a run that is interrupted partway
+            # through 1,200 names should still have left the benchmark behind.
+            with session_factory() as session:
+                persistence.upsert_benchmark_ticker(
+                    session, symbol=risk.MARKET_INDEX_SYMBOL, name=risk.MARKET_INDEX_NAME
+                )
+            targets = [risk.MARKET_INDEX_SYMBOL, *targets]
             logger.info(
                 "Backfilling price history for %d symbols (period=%s)", len(targets), period
             )

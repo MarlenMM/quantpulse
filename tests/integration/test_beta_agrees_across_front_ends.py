@@ -5,8 +5,7 @@ They did not. The Streamlit Stock Detail page borrowed
 Dashboard's one-month sector-rotation read (its own docstring says as much),
 while the API used its own `_RISK_PANEL_DAYS = 420`. Reading the committed demo
 database on the same day, the two pages reported AIZ at **beta 0.46, R² 0.06
-over 103 shared bars** and **beta 0.57, R² 0.07 over 288** respectively -- both
-captioned "against an equal-weight proxy for the market".
+over 103 shared bars** and **beta 0.57, R² 0.07 over 288** respectively.
 
 Neither number was arithmetically wrong, which is why every existing gate
 passed: it was a third copy of a constant that had quietly drifted. The window
@@ -14,6 +13,16 @@ now lives once, in `risk.MARKET_PANEL_DAYS`, and this test asserts the property
 that actually matters -- the two front ends agree on the number -- rather than
 asserting the constant is shared, which a future refactor could satisfy while
 still disagreeing.
+
+**A window is only half of "the same beta".** The other half is *which market*,
+and that is a second thing three surfaces could each decide for themselves. So
+the fixture stores a real index series (`risk.MARKET_INDEX_SYMBOL`) and this
+test pins the benchmark too: the Streamlit caption and the API's
+`beta_benchmark` must name the same series. Without the index row the fixture
+would silently exercise only `resolve_market_returns`' fallback, and a
+regression in which one surface regressed against the index while the other
+used the proxy would pass -- which is the same shape of bug as the original,
+one level along.
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ from streamlit.testing.v1 import AppTest
 
 from quantpulse.analysis import risk
 from quantpulse.analysis.investor_profiles import CATEGORIES
+from quantpulse.storage import persistence
 from quantpulse.storage.models import Base, CompositeScore, PriceHistory, Ticker
 
 APP_DIR = Path(__file__).resolve().parents[2] / "app"
@@ -55,6 +65,30 @@ BETA_OLDER = 0.1
 def _seed(session: Session) -> None:
     rng = np.random.default_rng(3)
     market = rng.normal(0.0004, 0.010, DAYS)
+
+    # The index itself, from the same return draws every stock is built from --
+    # so `BETA_RECENT`/`BETA_OLDER` are the stock's *true* betas against the
+    # series both front ends are supposed to regress against, not an
+    # approximation of it.
+    persistence.upsert_benchmark_ticker(
+        session, symbol=risk.MARKET_INDEX_SYMBOL, name=risk.MARKET_INDEX_NAME
+    )
+    index_level = 4000.0
+    for offset, m in zip(range(DAYS, 0, -1), market, strict=True):
+        index_level *= float(np.exp(m))
+        session.add(
+            PriceHistory(
+                symbol=risk.MARKET_INDEX_SYMBOL,
+                date=date(2026, 7, 27) - timedelta(days=offset),
+                open=index_level,
+                high=index_level * 1.01,
+                low=index_level * 0.99,
+                close=index_level,
+                adj_close=index_level,
+                volume=0,
+            )
+        )
+
     for index, symbol in enumerate(SYMBOLS):
         session.add(
             Ticker(
@@ -141,7 +175,7 @@ def _streamlit_wired(eng: Engine) -> Iterator[None]:
         yield
 
 
-def _streamlit_beta(eng: Engine) -> tuple[str, str, float]:
+def _streamlit_beta(eng: Engine) -> tuple[str, str, float, str]:
     """The symbol the page chose, the Beta it printed, and its R².
 
     Reading the symbol back off the page rather than assuming one matters: the
@@ -161,14 +195,23 @@ def _streamlit_beta(eng: Engine) -> tuple[str, str, float]:
     assert betas, f"the page showed no Beta metric; metrics were {[m.label for m in at.metric]}"
 
     captions = [str(element.value) for element in at.caption]
-    matches = [c for c in captions if "R² =" in c and "equal-weight proxy" in c]
+    # Matched on the phrase that is *structural* rather than on the benchmark's
+    # name: an assertion that hunted for "equal-weight proxy" would have gone on
+    # passing after the index landed, by silently matching the fallback wording.
+    matches = [c for c in captions if "R² =" in c and "Beta is measured against" in c]
     assert matches, f"the page reported no beta caption; captions were {captions}"
-    return symbol, betas[0], float(matches[0].split("R² = ")[1].split()[0].rstrip("."))
+    caption = matches[0]
+    benchmark = caption.split("Beta is measured against ")[1].split(", R² =")[0]
+    return (
+        symbol,
+        betas[0],
+        float(caption.split("R² = ")[1].split()[0].rstrip(".")),
+        benchmark,
+    )
 
 
-def _api_beta(eng: Engine, symbol: str) -> tuple[float, float]:
+def _api_beta(eng: Engine, symbol: str) -> tuple[float, float, str]:
     from quantpulse.api import main as api_main
-    from quantpulse.storage import persistence
 
     factory = sessionmaker(bind=eng)
     with factory() as session:
@@ -176,7 +219,11 @@ def _api_beta(eng: Engine, symbol: str) -> tuple[float, float]:
         bars = persistence.read_symbol_ohlcv(session, symbol, lookback_days=400)
         profile = api_main._risk_profile(session, symbol, bars)
     assert profile is not None and profile.beta is not None
-    return float(profile.beta), float(profile.beta_r_squared or 0.0)
+    return (
+        float(profile.beta),
+        float(profile.beta_r_squared or 0.0),
+        str(profile.beta_benchmark),
+    )
 
 
 def test_both_front_ends_regress_beta_over_the_same_window(engine: Engine) -> None:
@@ -192,8 +239,8 @@ def test_streamlit_and_api_report_the_same_beta(engine: Engine) -> None:
     Both surfaces print to two decimals, so the comparison is made there -- far
     tighter than the 0.46-vs-0.57 gap the drifted windows produced on real data.
     """
-    symbol, page_beta, page_r2 = _streamlit_beta(engine)
-    api_beta, api_r2 = _api_beta(engine, symbol)
+    symbol, page_beta, page_r2, page_benchmark = _streamlit_beta(engine)
+    api_beta, api_r2, api_benchmark = _api_beta(engine, symbol)
 
     assert page_beta == f"{api_beta:.2f}", (
         f"Stock Detail shows beta {page_beta} but the API reports {api_beta:.4f} for "
@@ -202,6 +249,74 @@ def test_streamlit_and_api_report_the_same_beta(engine: Engine) -> None:
     assert page_r2 == pytest.approx(round(api_r2, 2), abs=0.005), (
         f"Stock Detail shows R² {page_r2} but the API reports {api_r2:.4f} for {symbol}"
     )
+    assert page_benchmark == api_benchmark, (
+        f"Stock Detail says beta is measured against {page_benchmark!r} but the API "
+        f"reports {api_benchmark!r} -- the same number described as two different markets"
+    )
+    # And it must be the real index, not the fallback: the fixture stores one,
+    # so a run that lands on the proxy means the resolver stopped finding it.
+    assert risk.MARKET_INDEX_SYMBOL in page_benchmark, (
+        f"both front ends agree, but on the equal-weight fallback ({page_benchmark!r}) "
+        f"even though the fixture seeded {risk.MARKET_INDEX_SYMBOL}"
+    )
+
+
+def test_beta_is_measured_against_the_index_not_the_universe(engine: Engine) -> None:
+    """The fix itself: the stock's true beta is recovered, which the proxy could not do.
+
+    `_seed` builds TARGET with a true beta of `BETA_RECENT` against the index
+    series it also stores, so this asserts against a known answer rather than
+    against whatever the code currently prints. Regressed on an equal-weight
+    basket of the six fixture names instead, the same stock reads far lower --
+    the synthetic version of NVDA reading 0.70 against the proxy and 1.86
+    against `^GSPC` on the real database.
+    """
+    factory = sessionmaker(bind=engine)
+    end = date.today()
+    start = end - timedelta(days=risk.MARKET_PANEL_DAYS)
+    with factory() as session:
+        index = persistence.read_benchmark_closes(
+            session, symbol=risk.MARKET_INDEX_SYMBOL, start=start, end=end
+        )
+        panel = persistence.read_adj_close_panel(session, start=start, end=end)
+        target = risk.to_returns(panel[TARGET])
+
+    resolved = risk.resolve_market_returns(index, panel)
+    assert resolved.source == "index"
+    assert risk.MARKET_INDEX_SYMBOL not in panel.columns, (
+        "the index leaked into the universe panel; it must stay out of every "
+        "screener, search and scoring read (see persistence.upsert_benchmark_ticker)"
+    )
+
+    proxy = risk.equal_weight_market_returns(panel)
+
+    # Over the recent regime alone the fixture's true beta is exactly
+    # `BETA_RECENT`, so this is a known answer rather than a snapshot of what
+    # the code happens to print. Over the full 420-day window it would be a
+    # blend of the two regimes -- which is correct, and untestable against a
+    # constant, which is why the slice is taken.
+    recent = target.tail(RECENT_DAYS - 10)
+    against_index = risk.beta(recent, resolved.returns)
+    against_proxy = risk.beta(recent, proxy)
+    assert against_index is not None and against_proxy is not None
+    assert against_index.beta == pytest.approx(BETA_RECENT, rel=0.15), (
+        f"beta against the index came out at {against_index.beta:.2f}, but over this "
+        f"window the fixture built this stock with a true beta of {BETA_RECENT}"
+    )
+    assert abs(against_proxy.beta - BETA_RECENT) > abs(against_index.beta - BETA_RECENT), (
+        f"the equal-weight proxy recovered the true beta as well as the index did "
+        f"({against_proxy.beta:.2f} vs {against_index.beta:.2f}) -- if that is really "
+        f"true, this test is not exercising the difference the fix exists for"
+    )
+    # Deliberately NOT asserted here: that the index also wins on R². It does on
+    # real data by a wide margin (NVDA 0.42 vs 0.05 on the committed demo
+    # database), but it does not on this fixture, and the reason is the
+    # fixture's own construction rather than the code's: all six names are
+    # `beta_i * market + independent noise`, so averaging them cancels ~1/sqrt(6)
+    # of the noise and yields a *cleaner* market factor than the index series
+    # itself carries. Asserting it anyway would mean tuning the fixture until a
+    # real-data property held in a synthetic world -- which is how a test ends up
+    # measuring its own setup. The beta comparison above is the real claim.
 
 
 def test_stock_detail_shows_sharpe_beside_sortino(engine: Engine) -> None:

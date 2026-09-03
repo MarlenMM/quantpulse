@@ -69,11 +69,15 @@ __all__ = [
     "TRADING_DAYS_PER_YEAR",
     "DEFAULT_VAR_CONFIDENCE",
     "MARKET_PANEL_DAYS",
+    "MARKET_INDEX_SYMBOL",
+    "MARKET_INDEX_NAME",
     "sharpe_ratio",
     "max_drawdown",
     "to_returns",
     "returns_panel",
     "equal_weight_market_returns",
+    "MarketSeries",
+    "resolve_market_returns",
     "historical_volatility",
     "VolatilityProfile",
     "volatility_profile",
@@ -110,6 +114,25 @@ DEFAULT_VAR_CONFIDENCE = 0.95
 # 420-day window and reported 0.57 over 288 -- the same stock, the same
 # database, the same day, two different published numbers.
 MARKET_PANEL_DAYS = 420
+
+# The market a beta is measured against (Section 7.7's "beta vs the S&P 500").
+#
+# `^GSPC` is the index level itself rather than an ETF tracking it: SPY's price
+# is net of a 0.09% expense ratio and its own dividend schedule, which is noise
+# in a benchmark that exists to define "the market". It is free and keyless from
+# the same yfinance client that already ingests `^VIX`, `CL=F`, `GC=F` and
+# `DX-Y.NYB`, and it lands in `price_history` like any other symbol -- carried by
+# a `tickers` row with `asset_type="index"` and `is_active=False`, which is what
+# keeps it out of the Screener, the search catalogue, the scoring universe and
+# the nightly per-ticker loop (each of those already filters on one or both).
+#
+# One constant, exported, for the same reason `MARKET_PANEL_DAYS` is one
+# constant: a second copy of this string in the API or a page is how the two
+# front ends end up regressing against two different markets.
+MARKET_INDEX_SYMBOL = "^GSPC"
+
+#: The name its `tickers` row carries, for the few surfaces that read one.
+MARKET_INDEX_NAME = "S&P 500 Index"
 
 # Minimum observations before an estimator will speak at all. A month of bars is
 # the floor for a volatility/Sortino estimate; a beta regressed on fewer than a
@@ -198,13 +221,21 @@ def returns_panel(price_panel: pd.DataFrame) -> pd.DataFrame:
 def equal_weight_market_returns(price_panel: pd.DataFrame, *, min_names: int = 2) -> pd.Series:
     """A daily-rebalanced equal-weight market-proxy return series from a price panel.
 
-    Section 7.7 asks for "beta vs S&P 500", but no S&P 500 price series is
-    ingested anywhere in the pipeline (Section 5 lists the index only as a
-    *constituent list*). Two honest options follow: ingest an index series and
-    pass its returns to `beta` directly, or -- until then -- regress against the
-    universe itself, which is what this builds. Dates with fewer than
-    `min_names` priced constituents are dropped rather than letting one or two
-    survivors stand in for "the market".
+    This is what a beta was regressed against before the index series existed,
+    and it remains the right series for two jobs: the **fallback** when the index
+    has too little stored history to regress against (`resolve_market_returns`),
+    and the Dashboard's **sector-rotation** read, where each sector's strength is
+    itself measured equal-weight, so an equal-weight market keeps that comparison
+    on one weighting scheme. Dates with fewer than `min_names` priced
+    constituents are dropped rather than letting one or two survivors stand in
+    for "the market".
+
+    What it is *not* good enough for is a published beta. An equal-weight basket
+    of the same 500 names is a poor stand-in for the cap-weighted index: measured
+    on the real database, NVDA came out at beta 0.78 with an R^2 of 0.06 against
+    this proxy, and 1.92 with an R^2 of 0.42 against `^GSPC` over the same
+    window -- not merely imprecise but pointing the wrong way for the market's
+    best-known high-beta name.
 
     This is the return-space sibling of the backtest's buy-and-hold
     `_equal_weight_benchmark` level series; they differ in rebalancing (constant
@@ -217,6 +248,68 @@ def equal_weight_market_returns(price_panel: pd.DataFrame, *, min_names: int = 2
         return pd.Series(dtype=float)
     usable = returns[returns.notna().sum(axis=1) >= min_names]
     return usable.mean(axis=1, skipna=True).dropna()
+
+
+@dataclass(frozen=True)
+class MarketSeries:
+    """The market return series a beta was regressed against, and what to call it.
+
+    The label travels with the numbers on purpose. Every surface that prints a
+    beta also prints a sentence naming what it is a beta *against*, and those
+    two facts have to be decided together -- a page that regresses against the
+    index while its caption still says "an equal-weight proxy" is wrong in the
+    way that is hardest to notice, because both halves look fine on their own.
+    """
+
+    returns: pd.Series
+    #: ``"index"`` or ``"equal_weight"`` -- machine-readable, for tests and the API.
+    source: str
+    #: How to name this series mid-sentence, e.g. "the S&P 500 (^GSPC)".
+    label: str
+
+    @property
+    def is_index(self) -> bool:
+        return self.source == "index"
+
+
+def resolve_market_returns(
+    index_prices: pd.Series | None,
+    universe_panel: pd.DataFrame | None = None,
+    *,
+    min_obs: int = _MIN_BETA_OBS,
+) -> MarketSeries:
+    """Pick the market series to regress against: the real index, else the proxy.
+
+    Section 7.7 asks for "beta vs S&P 500", and `^GSPC` is now ingested into
+    `price_history` like any other symbol (keyless, from the same yfinance
+    client that already pulls `^VIX`). So the index wins whenever it has enough
+    stored history to support a regression at all -- `min_obs` is deliberately
+    the same floor `beta()` applies, so this function never hands back a series
+    that `beta()` would then refuse.
+
+    It falls back rather than failing because a database can legitimately be
+    younger than the index series: a fresh clone mid-backfill, or a test
+    fixture. In that case the caller gets the equal-weight proxy *and a label
+    that says so*, which is the whole reason the two travel together.
+
+    **One resolver, called by every surface.** The Streamlit Stock Detail page,
+    the Streamlit Portfolio page and the read API each used to build their own
+    market series inline, and that is exactly how the two front ends came to
+    publish different betas for the same stock on the same day. `MARKET_PANEL_DAYS`
+    fixed the window; this fixes the series.
+    """
+    prices = pd.Series(dtype=float) if index_prices is None else index_prices
+    index_returns = to_returns(prices)
+    if len(index_returns) >= min_obs:
+        return MarketSeries(
+            returns=index_returns, source="index", label=f"the S&P 500 ({MARKET_INDEX_SYMBOL})"
+        )
+    panel = pd.DataFrame() if universe_panel is None else universe_panel
+    return MarketSeries(
+        returns=equal_weight_market_returns(panel),
+        source="equal_weight",
+        label="an equal-weight proxy for the market (the index series is not stored yet)",
+    )
 
 
 # --------------------------------------------------------------------------- #

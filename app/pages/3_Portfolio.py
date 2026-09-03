@@ -325,7 +325,13 @@ def render_risk(frame: pd.DataFrame, cash: float) -> pd.DataFrame:
     # demo database: 1.0000 (R^2 1.0000) the old way, 0.448 (R^2 0.238) against
     # the actual universe. Every other statistic here is correctly derived from
     # the holdings' own returns; only the proxy was wrong.
-    market = risk.equal_weight_market_returns(data.universe_panel(risk.MARKET_PANEL_DAYS))
+    #
+    # Which market that is now comes from `data.market_series`, shared with the
+    # Stock Detail page: the stored S&P 500 index where it exists, the
+    # equal-weight proxy where it does not, and in both cases the label printed
+    # in the caption below, so the two can never describe different series.
+    market_series = data.market_series()
+    market = market_series.returns
     summary = risk.portfolio_risk(
         returns,
         usable,
@@ -373,8 +379,8 @@ def render_risk(frame: pd.DataFrame, cash: float) -> pd.DataFrame:
         )
     if summary.beta is not None and summary.beta.r_squared is not None:
         st.caption(
-            f"Beta is measured against an equal-weight proxy for the market "
-            f"(no S&P 500 price series is ingested), R² = {summary.beta.r_squared:.2f} "
+            f"Beta is measured against {market_series.label}, "
+            f"R² = {summary.beta.r_squared:.2f} "
             f"over {summary.beta.n_observations} days."
         )
 
