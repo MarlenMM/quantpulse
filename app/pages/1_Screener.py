@@ -175,8 +175,11 @@ def main() -> None:
         "whole looks."
     )
 
+    # The sidebar is chrome, so its headings sit a level below the page's own.
+    # As `st.header` they rendered at the same weight as the headline the table
+    # belongs to, which puts the loudest type on screen next to the filters.
     with st.sidebar:
-        st.header("Filters")
+        st.subheader("Filters")
         sectors = sorted({s for s in rows["sector"].dropna().unique()})
         chosen_sectors = st.multiselect("Sector", sectors, default=[])
         chosen_ratings = st.multiselect(
@@ -205,7 +208,7 @@ def main() -> None:
             ),
         ).strip()
 
-        st.header("Rating scheme")
+        st.subheader("Rating scheme")
         absolute_mode = (
             st.radio(
                 "How should ratings be decided?",
@@ -228,7 +231,7 @@ def main() -> None:
             "existed fall back to relative."
         )
 
-        st.header("Re-weight categories")
+        st.subheader("Re-weight categories")
         st.caption(
             "Score **and rating** are recomputed instantly from stored sub-scores — "
             "no pipeline re-run, because the stored sub-scores are weight-independent "

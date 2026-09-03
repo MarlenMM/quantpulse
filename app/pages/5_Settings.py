@@ -110,7 +110,9 @@ def render_last_run(state: refresh.RefreshState) -> None:
 
 
 def render_manual_refresh() -> None:
-    st.subheader("Run a refresh")
+    # The one thing anyone comes to this page to *do*; the other four sections
+    # report state.
+    st.header("Run a refresh")
     if not get_settings().manual_refresh_allowed():
         st.caption(
             "Refreshing from the UI is turned off here (`MANUAL_REFRESH_ENABLED`), which is "
