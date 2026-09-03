@@ -244,6 +244,12 @@ class RiskProfileModel(BaseModel):
     block rather than fabricated numbers. `ratio_min_observations` is sent so the
     client can explain *why* Sharpe and Sortino are absent instead of rendering
     two unexplained dashes.
+
+    `beta_benchmark` names the series the beta was regressed against, and is
+    sent rather than hardcoded in the client for the same reason the window is
+    one shared constant: the caption under this block is a claim about the
+    number beside it, and a client that writes its own version of that sentence
+    is one deploy away from describing a benchmark the server stopped using.
     """
 
     historical_volatility: float | None = None
@@ -251,6 +257,8 @@ class RiskProfileModel(BaseModel):
     implied_premium: float | None = None
     beta: float | None = None
     beta_r_squared: float | None = None
+    #: How to name the market series mid-sentence, from `risk.MarketSeries.label`.
+    beta_benchmark: str | None = None
     sharpe: float | None = None
     sortino: float | None = None
     max_drawdown: float | None = None

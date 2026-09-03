@@ -166,9 +166,12 @@ export default function TrackRecord() {
           <Metric label="Benchmark Sharpe" value={formatScore(latest.benchmark_sharpe, 2)} />
         </div>
         <p className="note">
-          The benchmark is an equal-weight proxy for the market, because no S&amp;P 500 price
-          series is ingested anywhere in this project — the same honest stand-in the beta
-          calculation uses.
+          The benchmark is the <strong>equal-weight</strong> universe held buy-and-hold, which
+          is the comparison that isolates the signal: this strategy equal-weights the names it
+          picks, so measuring it against an equal-weight version of the whole universe asks{" "}
+          <em>did ranking help</em>, with the weighting scheme held fixed. Against the
+          cap-weighted index it would be measuring the ranking and the equal-weight tilt
+          together, as one number.
         </p>
       </section>
 

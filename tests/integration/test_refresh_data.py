@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
 from quantpulse.analysis import backtest as bt
+from quantpulse.analysis import risk
 from quantpulse.storage.models import (
     AnalystConsensus,
     Base,
@@ -883,6 +884,13 @@ def test_ticker_fetches_run_concurrently_and_survive_one_failure(engine: Engine)
             "refresh_data.gdelt_client.fetch_tone_timeline",
             return_value=_empty_df(["date", "tone", "query"]),
         ),
+        # The benchmark step calls the yfinance client directly rather than
+        # going through `fetch_ticker_data`, so the patch above does not cover
+        # it and an unpatched run reaches the network.
+        patch(
+            "refresh_data.yfinance_client.fetch_price_history",
+            side_effect=lambda symbol, period="5y": _price_df(symbol, rows=3),
+        ),
     ):
         refresh_data.run(job_name="test_run_concurrency")
 
@@ -898,7 +906,12 @@ def test_ticker_fetches_run_concurrently_and_survive_one_failure(engine: Engine)
 
     # SYM3's simulated failure didn't stop the other 5 tickers from being
     # fetched and written -- one bad future doesn't take the run down.
-    written_symbols = {p.symbol for p in prices}
+    #
+    # The market index is written by its own step, not by the per-ticker pool
+    # this test is about, so it is removed rather than added to the expectation:
+    # the claim is still "exactly the five surviving constituents", not "at
+    # least them".
+    written_symbols = {p.symbol for p in prices} - {risk.MARKET_INDEX_SYMBOL}
     assert written_symbols == set(symbols) - {"SYM3"}
     assert len(logs) == 1
     assert logs[0].status == "partial"  # downgraded, not aborted (Section 6.12)

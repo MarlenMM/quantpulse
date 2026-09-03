@@ -206,7 +206,14 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
     # 420-day window -- reported 0.57 (R² 0.07) for the same stock on the same
     # day. Two front ends must not publish different betas, so both now use the
     # longer window, which is also the one the Portfolio page already used.
-    market = risk.equal_weight_market_returns(data.universe_panel(risk.MARKET_PANEL_DAYS))
+    #
+    # `data.market_series` is the second half of that same rule: it resolves
+    # *which* market — the stored S&P 500 index, or the equal-weight proxy when
+    # the index has not been backfilled — in one place shared with the Portfolio
+    # page, and hands back the label this page prints below, so the number and
+    # the sentence describing it cannot disagree.
+    market_series = data.market_series()
+    market = market_series.returns
     stored_iv = data.options_signals(symbol)
     profile = risk.stock_risk_profile(
         returns,
@@ -255,8 +262,7 @@ def render_risk_profile(symbol: str, bars: pd.DataFrame) -> None:
         )
     if profile.beta is not None and profile.beta.r_squared is not None:
         notes.append(
-            f"Beta is against an equal-weight proxy for the market (no S&P 500 price series "
-            f"is ingested), R² = {profile.beta.r_squared:.2f}."
+            f"Beta is measured against {market_series.label}, R² = {profile.beta.r_squared:.2f}."
         )
     if profile.volatility.implied_premium is not None:
         direction = "more" if profile.volatility.implied_premium > 0 else "less"

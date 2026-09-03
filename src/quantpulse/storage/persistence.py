@@ -580,6 +580,80 @@ def read_membership_intervals(session: Session, index_name: str) -> pd.DataFrame
     return pd.DataFrame(rows, columns=["symbol", "added_date", "removed_date"])
 
 
+def upsert_benchmark_ticker(session: Session, *, symbol: str, name: str) -> None:
+    """Give the market index the `tickers` row `price_history`'s foreign key requires.
+
+    `asset_type="index"` and `is_active=False` are the two flags that keep it
+    invisible everywhere it should be, and each is already load-bearing for some
+    other reader rather than newly invented here: `read_ticker_universe` and the
+    refresh job's `_active_universe` filter on `is_active`;
+    `read_searchable_catalogue` defaults to `asset_types=("equity",)`; the
+    scored-universe reads join on `asset_type == "equity"`; and `sync_universe`
+    only deactivates rows that are *already* equities, so it leaves this one
+    alone. The index is therefore a price series and nothing else -- it cannot be
+    screened, searched, scored, forecast or held.
+
+    Existing rows are repaired rather than skipped: a row written before this
+    function existed (or by hand) must still carry both flags, or it leaks into
+    all of the above.
+    """
+    existing = session.get(Ticker, symbol)
+    if existing is not None:
+        existing.asset_type = "index"
+        existing.is_active = False
+        return
+    session.add(
+        Ticker(
+            symbol=symbol,
+            name=name,
+            sector=None,
+            industry=None,
+            exchange=None,
+            asset_type="index",
+            is_active=False,
+            coverage=Ticker.CATALOGUE,
+        )
+    )
+    session.flush()
+
+
+def read_benchmark_closes(session: Session, *, symbol: str, start: date, end: date) -> pd.Series:
+    """One symbol's adjusted closes as a date-indexed Series over `[start, end]`.
+
+    Exists for the market index a beta is regressed against
+    (`risk.MARKET_INDEX_SYMBOL`), which lives in `price_history` like any other
+    symbol but is never wanted as a *column of a panel* -- every panel reader
+    here is driven by a universe or a holdings list, and the index is in
+    neither. Taking the symbol as an argument rather than defaulting it keeps
+    the ticker string defined in exactly one place (`analysis/risk.py`);
+    `storage/` does not import `analysis/`.
+
+    Applies the same `adj_close > 0` guard `read_adj_close_panel` does, and
+    returns an empty Series rather than raising when nothing is stored -- a
+    database that has not backfilled the index yet is a supported state, not an
+    error (see `risk.resolve_market_returns`, which falls back).
+    """
+    stmt = (
+        select(PriceHistory.date, PriceHistory.adj_close)
+        .where(
+            PriceHistory.symbol == symbol,
+            PriceHistory.date >= start,
+            PriceHistory.date <= end,
+            PriceHistory.adj_close > 0,
+        )
+        .order_by(PriceHistory.date)
+    )
+    rows = session.execute(stmt).all()
+    if not rows:
+        return pd.Series(dtype=float)
+    frame = pd.DataFrame(rows, columns=["date", "adj_close"])
+    return pd.Series(
+        frame["adj_close"].to_numpy(dtype=float),
+        index=pd.DatetimeIndex(pd.to_datetime(frame["date"])),
+        name=symbol,
+    )
+
+
 def read_adj_close_panel(
     session: Session, *, start: date, end: date, symbols: Sequence[str] | None = None
 ) -> pd.DataFrame:
@@ -590,6 +664,15 @@ def read_adj_close_panel(
     today's survivors (Section 22). `symbols`, if given, restricts the columns
     (e.g. to a single index's ever-members). An empty result yields an empty
     frame rather than raising.
+
+    It **does** exclude `asset_type="index"` rows, always. A market index lives
+    in `price_history` like any other symbol (see `upsert_benchmark_ticker`) but
+    is never a constituent of anything: left in, `^GSPC` became a seventh
+    "stock" in the equal-weight market proxy, a column in the sector-rotation
+    panel, and a name the survivorship backtest could rank and buy. Excluded
+    here rather than in each caller for the same reason the `adj_close > 0`
+    guard is here -- one read boundary, so a new caller cannot forget it.
+    `read_benchmark_closes` is the dedicated way to ask for the index.
     """
     # A non-positive adjusted close is not a price. Free sources emit them for
     # some delisted names (a real example: DEC carries 732 bars with
@@ -605,6 +688,7 @@ def read_adj_close_panel(
         PriceHistory.date >= start,
         PriceHistory.date <= end,
         PriceHistory.adj_close > 0,
+        PriceHistory.symbol.not_in(select(Ticker.symbol).where(Ticker.asset_type == "index")),
     ]
     if symbols is not None:
         conditions.append(PriceHistory.symbol.in_(list(symbols)))

@@ -15,7 +15,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from quantpulse.analysis import risk
 from quantpulse.api.main import app, db_session
+from quantpulse.storage import persistence
 from quantpulse.storage.models import (
     AnalystConsensus,
     BacktestResult,
@@ -534,3 +536,58 @@ class TestParitySurface:
         paths = client.get("/openapi.json").json()["paths"]
         for path, methods in paths.items():
             assert set(methods) <= {"get"}, f"{path} exposes a non-GET method"
+
+
+class TestMarketIndexIsNotATradableSymbol:
+    """`^GSPC` is stored in `price_history`, and must be a price series only.
+
+    It needs a `tickers` row because `price_history.symbol` is a foreign key.
+    That row is the one thing standing between "a benchmark the beta regression
+    can read" and "a 504th stock in the universe" -- so every surface that
+    enumerates symbols is checked here, in one place, rather than trusting each
+    reader's own filter to keep holding.
+    """
+
+    @pytest.fixture
+    def index_client(self, tmp_path) -> Iterator[TestClient]:
+        def _seed_index(session: Session) -> None:
+            persistence.upsert_benchmark_ticker(
+                session, symbol=risk.MARKET_INDEX_SYMBOL, name=risk.MARKET_INDEX_NAME
+            )
+            for offset in range(120):
+                level = 4000.0 * (1.0005**offset)
+                session.add(
+                    PriceHistory(
+                        symbol=risk.MARKET_INDEX_SYMBOL,
+                        date=TODAY - timedelta(days=120 - offset),
+                        open=level,
+                        high=level,
+                        low=level,
+                        close=level,
+                        adj_close=level,
+                        volume=0,
+                    )
+                )
+            session.commit()
+
+        yield from _client(tmp_path, extra=_seed_index)
+
+    def test_it_is_not_in_the_universe(self, index_client: TestClient) -> None:
+        symbols = {row["symbol"] for row in index_client.get("/api/universe").json()}
+        assert risk.MARKET_INDEX_SYMBOL not in symbols
+        assert symbols, "the fixture's real tickers vanished too -- the filter is too broad"
+
+    def test_it_is_not_in_the_screener(self, index_client: TestClient) -> None:
+        body = index_client.get("/api/screener").json()
+        assert risk.MARKET_INDEX_SYMBOL not in {row["symbol"] for row in body["rows"]}
+
+    def test_it_has_no_stock_page(self, index_client: TestClient) -> None:
+        """404, not a company profile of an index with every field empty."""
+        assert index_client.get(f"/api/stocks/{risk.MARKET_INDEX_SYMBOL}").status_code == 404
+        # The guard is about this row's asset_type, not about the symbol being
+        # unusual -- an ordinary ticker in the same fixture still resolves.
+        assert index_client.get("/api/stocks/AAPL").status_code == 200
+
+    def test_it_does_not_become_a_sector(self, index_client: TestClient) -> None:
+        rotation = index_client.get("/api/sectors/rotation").json()
+        assert all(row["sector"] for row in rotation)

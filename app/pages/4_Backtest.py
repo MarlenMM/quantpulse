@@ -189,8 +189,12 @@ def main() -> None:
     )
     st.caption(
         f"Transaction cost assumed: **{format_percent(latest['assumed_txn_cost'], digits=2)}** "
-        "per unit of turnover — a conservative bid-ask stand-in. The benchmark is an "
-        "equal-weight universe proxy (no S&P 500 price series is ingested)."
+        "per unit of turnover — a conservative bid-ask stand-in. The benchmark is the "
+        "**equal-weight** universe held buy-and-hold, which is the comparison that isolates "
+        "the signal: this strategy equal-weights the names it picks, so measuring it against "
+        "an equal-weight version of the whole universe asks *did ranking help*, with the "
+        "weighting scheme held fixed. Against the cap-weighted index it would instead be "
+        "measuring the ranking and the equal-weight tilt together, as one number."
     )
 
     render_position_sizing(latest)
