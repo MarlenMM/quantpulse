@@ -8,7 +8,7 @@
 
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
-**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
+**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys, and it holds its shape on a phone. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
 
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 

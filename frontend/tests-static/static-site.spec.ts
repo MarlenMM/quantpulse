@@ -141,3 +141,61 @@ test("the glossary serves its terms", async ({ page }) => {
 
   expect(errors).toEqual([]);
 });
+
+
+/**
+ * No page may scroll sideways on a phone.
+ *
+ * Section 31 asks for "a quick mobile-viewing pass", on the grounds that a
+ * recruiter is at least as likely to open the demo on a phone as on a laptop.
+ * It had never been done, and the Dashboard was **589px wide in a 375px
+ * viewport** -- the whole document drifting horizontally under the thumb, not
+ * one wide table inside its own scroller.
+ *
+ * The cause is a CSS default that is easy to reintroduce: a grid item's
+ * `min-width` is `auto`, so a wide table refuses to shrink below its
+ * min-content width and pushes a bare `1fr` track past the viewport, and the
+ * `overflow-x: auto` on `.tablewrap` never gets the chance to engage. The
+ * desktop overrides of `.split` and `.split-even` already carried the
+ * `minmax(0, …)` guard; their mobile base rules did not.
+ *
+ * Asserted per page rather than once, because it was true of two pages and
+ * false of three -- a single spot check would have called it fixed. Wide
+ * content is still allowed to scroll *inside its own container*; what is
+ * forbidden is the document doing it.
+ */
+test.describe("mobile layout", () => {
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  for (const [name, path] of [
+    ["dashboard", ""],
+    ["screener", "screener"],
+    ["track record", "track-record"],
+    ["stock detail", "stocks/AIZ"],
+    ["glossary", "glossary"],
+  ] as const) {
+    test(`the ${name} does not scroll sideways at 375px`, async ({ page }) => {
+      await page.goto(path);
+      // The charts settle asynchronously and resize their SVG as they do, so a
+      // measurement taken before that lands is a different page's width.
+      await page.waitForLoadState("networkidle");
+
+      const { scrollWidth, clientWidth, worst } = await page.evaluate(() => {
+        const de = document.documentElement;
+        const worst = [...document.querySelectorAll("*")]
+          .map((el) => ({ el, right: el.getBoundingClientRect().right }))
+          .filter((e) => e.right > de.clientWidth + 1)
+          .sort((a, b) => b.right - a.right)
+          .slice(0, 3)
+          .map((e) => `${e.el.tagName}.${e.el.className} → ${Math.round(e.right)}px`);
+        return { scrollWidth: de.scrollWidth, clientWidth: de.clientWidth, worst };
+      });
+
+      expect(
+        scrollWidth,
+        `the document is ${scrollWidth}px wide in a ${clientWidth}px viewport, so the ` +
+          `page scrolls sideways. Widest offenders: ${worst.join("; ") || "none"}`,
+      ).toBeLessThanOrEqual(clientWidth + 1);
+    });
+  }
+});

@@ -408,10 +408,25 @@ p:last-child { margin-bottom: 0; }
 
 .stack > * + * { margin-top: var(--s4); }
 
-.split { display: grid; grid-template-columns: 1fr; gap: var(--s5); }
+/* `minmax(0, 1fr)`, never a bare `1fr`, in the base rule as well as the
+   overrides.
+
+   A grid item's `min-width` is `auto`, which means "do not shrink me below my
+   min-content width". A table's min-content width is as wide as its columns
+   need, so a bare `1fr` track grows to fit the table instead of the viewport,
+   and the `overflow-x: auto` on `.tablewrap` never gets a chance to engage --
+   there is nothing left for it to clip. The result is the *document* scrolling
+   sideways rather than one table scrolling inside itself.
+
+   Both media queries below already carried the guard; only the single-column
+   base rules were missing it, so the bug appeared on phones and nowhere else.
+   Measured before the fix, at a 375px viewport: the Dashboard's document was
+   619px wide and the Stock Detail's 385px. Section 31's "quick mobile-viewing
+   pass", found and pinned by `tests-static/static-site.spec.ts`. */
+.split { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
 @media (min-width: 940px) { .split { grid-template-columns: minmax(0, 2.15fr) minmax(0, 1fr); } }
 
-.split-even { display: grid; grid-template-columns: 1fr; gap: var(--s5); }
+.split-even { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
 @media (min-width: 860px) { .split-even { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* ===========================================================================
