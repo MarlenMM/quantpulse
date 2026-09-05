@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
 [![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-1%2C500-0f7a44.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1%2C511-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
@@ -34,7 +34,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,500** (unit, integration, and property-based via Hypothesis) |
+| Automated tests | **1,511** (unit, integration, and property-based via Hypothesis) |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **12 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |

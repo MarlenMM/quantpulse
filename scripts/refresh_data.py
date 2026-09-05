@@ -184,6 +184,14 @@ _NEWS_REFRESH_ON_WEEKLY_ONLY = True
 # -- comfortably inside the 90-minute step budget below.
 _MAX_SENTIMENT_ARTICLES = 7_000
 _MAX_CLASSIFIED_ARTICLES = 1_500
+
+# Tier-2 articles per basket that go through the BART event classifier. The rest
+# are still sentiment-scored -- see `refresh_tier2_news` for the measured
+# reasoning (192 ms/article to classify vs 21 ms to score, and `event_type` is
+# read only by the Dashboard's 8 most recent stories, while `sentiment_score`
+# feeds every stock's industry tilt). 40 leaves a wide margin over those 8 even
+# if several baskets publish at once.
+_MAX_CLASSIFIED_TIER2_PER_BASKET = 40
 # Time held back from the classifier's deadline so the rows it *did* produce
 # still get written. A step that spends its whole budget classifying and is then
 # killed before persisting has done the expensive part for nothing.
@@ -808,10 +816,25 @@ def refresh_cross_asset_macro(session: Session, today: date) -> int:
 
 
 def refresh_static_config(session: Session, today: date) -> int:
-    """Refresh the config-derived tables (thematic baskets + economic calendar)."""
+    """Refresh the config-derived tables (thematic baskets + economic calendar).
+
+    Basket membership is curated themes **plus one basket per GICS sector**,
+    built from the live universe. The curated set alone reached 24 of ~500
+    names, so `industry_macro` -- a category weighted 8-10% in every investor
+    profile -- had a value for 4.8% of the universe and was renormalized away
+    for the rest: the advertised seven-category composite was a six-category
+    composite for almost every stock. Sector baskets are dynamic rather than
+    curated so a new index constituent is covered the night it is added.
+    """
+    universe = _active_universe(session)
     basket_records = [
         {"theme_name": theme, "symbol": symbol}
         for theme, symbol in thematic_mapping.iter_basket_membership()
+    ]
+    basket_records += [
+        {"theme_name": basket.name, "symbol": symbol}
+        for basket in thematic_mapping.sector_baskets(universe)
+        for symbol in sorted(basket.members)
     ]
     rows = persistence.replace_thematic_baskets(session, basket_records)
 
@@ -1625,13 +1648,38 @@ def process_tier1_news(
 def refresh_tier2_news(session: Session, today: date) -> int:
     """Ingest Tier-2 industry/thematic news from GDELT into `news_events` (Section 7.3).
 
-    One GDELT query per curated thematic basket, each article classified and
-    sentiment-scored and stored with its `matched_theme`. Phase 6 reads these
-    (with `thematic_baskets`) to propagate a basket-level move to its members;
-    the propagation math itself stays in `thematic_mapping`.
+    One GDELT query per basket -- curated themes **and one per GICS sector** --
+    each article sentiment-scored and stored with its `matched_theme`. Phase 6
+    reads these (with `thematic_baskets`) to propagate a basket-level move to its
+    members; the propagation math itself stays in `thematic_mapping`.
+
+    **Sector baskets are what give `industry_macro` a universe.** Membership
+    alone would not: a basket only produces a tilt for its members if Tier-2
+    articles are tagged to it, and until now only the six curated themes were
+    ever queried, so 95% of the index sat in no basket that had any news.
+
+    **Classification is capped per basket; sentiment is not.** The two are not
+    equally valuable here and are nothing like equally expensive. Measured on
+    real Tier-2 articles: BART event classification runs **192 ms/article**
+    against FinBERT sentiment's **21 ms** -- 9.2x. And `sentiment_score` is what
+    every stock's industry tilt is built from, while `event_type` is read by
+    exactly one surface, the Dashboard's panel of the **8 most recent** Tier-2/3
+    stories. Classifying all ~1,900 articles so that eight could show a label was
+    most of the weekly news budget.
+
+    So articles are sorted newest-first and only the leading
+    `_MAX_CLASSIFIED_TIER2_PER_BASKET` of each basket go through the classifier;
+    the rest store `event_type=None`, which both front ends already render as
+    "unclassified". The Dashboard's eight are drawn from the newest of all, so
+    they fall inside that head by construction. Net effect, at measured rates:
+    ~1,900 articles across 6 baskets costing ~6.7 min becomes ~6,000 across 17
+    costing ~4.1 min -- three times the news and a fifth of the cost per article,
+    which is what makes sector coverage affordable rather than a budget fight.
     """
     records: list[dict[str, Any]] = []
-    for basket in thematic_mapping.THEMATIC_BASKETS:
+    universe = _active_universe(session)
+    baskets = (*thematic_mapping.THEMATIC_BASKETS, *thematic_mapping.sector_baskets(universe))
+    for basket in baskets:
         if not basket.keywords:
             continue
         query = "(" + " OR ".join(f'"{keyword}"' for keyword in basket.keywords) + ")"
@@ -1642,9 +1690,31 @@ def refresh_tier2_news(session: Session, today: date) -> int:
             continue
         if articles.empty:
             continue
-        classifications = event_classifier.classify_articles(articles)
+        # Newest-first before the head() below, so the cap spends the expensive
+        # model on exactly the articles the Dashboard can display.
+        articles = articles.sort_values(
+            "published_at", ascending=False, na_position="last"
+        ).reset_index(drop=True)
+        to_classify = articles.head(_MAX_CLASSIFIED_TIER2_PER_BASKET)
+        classifications = (
+            event_classifier.classify_articles(to_classify) if not to_classify.empty else None
+        )
         sentiments = sentiment.score_articles(articles)
+        if len(articles) > len(to_classify):
+            logger.info(
+                "Tier-2 %s: scored %d articles, classified the newest %d "
+                "(event_type is read only by the Dashboard's 8 newest stories)",
+                basket.name,
+                len(articles),
+                len(to_classify),
+            )
         for position, row in enumerate(articles.itertuples()):
+            # Written as an explicit narrowing rather than a boolean flag so the
+            # type checker can see that `classifications` is not None wherever
+            # it is indexed.
+            event_type: str | None = None
+            if classifications is not None and position < len(classifications):
+                event_type = str(classifications.iloc[position].event_type)
             records.append(
                 {
                     "article_id": persistence.article_id_for(row.url, fallback=str(row.title)),
@@ -1653,7 +1723,7 @@ def refresh_tier2_news(session: Session, today: date) -> int:
                     "published_at": row.published_at if pd.notna(row.published_at) else None,
                     "matched_symbols": None,
                     "matched_theme": basket.name,
-                    "event_type": str(classifications.iloc[position].event_type),
+                    "event_type": event_type,
                     "sentiment_score": sentiments.iloc[position].polarity,
                     "source": "gdelt",
                     "source_url": row.url,

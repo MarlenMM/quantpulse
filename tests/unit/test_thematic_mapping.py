@@ -88,6 +88,91 @@ def test_build_sector_baskets_skips_rows_without_sector() -> None:
     assert "XYZ" not in {s for members in baskets.values() for s in members}
 
 
+class TestSectorBaskets:
+    """Sectors as first-class baskets -- the half that gives `industry_macro` a universe.
+
+    The curated themes reach 24 of ~500 names, so a category weighted 8-10% in
+    every investor profile had a value for 4.8% of the universe and was
+    renormalized away for the rest. `build_sector_baskets` was written and tested
+    for exactly this and never called by anything.
+    """
+
+    @staticmethod
+    def _universe() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "symbol": ["JPM", "BAC", "AAPL", "XOM", "ZZZ"],
+                "sector": [
+                    "Financials",
+                    "Financials",
+                    "Information Technology",
+                    "Energy",
+                    None,
+                ],
+            }
+        )
+
+    def test_every_sector_in_the_universe_becomes_a_basket_with_triggers(self) -> None:
+        baskets = {b.name: b for b in tm.sector_baskets(self._universe())}
+        assert set(baskets) == {"Financials", "Information Technology", "Energy"}
+        assert baskets["Financials"].members == frozenset({"JPM", "BAC"})
+        # Keywords are what make a basket reachable by `refresh_tier2_news`.
+        # Members without them would cover every symbol with a basket that can
+        # never have any news in it -- which is the 4.8% bug with more rows.
+        assert all(b.keywords for b in baskets.values())
+
+    def test_a_sector_with_no_members_here_is_skipped(self) -> None:
+        """A memberless basket would spend a GDELT query and a model pass for nothing."""
+        names = {b.name for b in tm.sector_baskets(self._universe())}
+        assert "Utilities" in tm.SECTOR_KEYWORDS
+        assert "Utilities" not in names
+
+    def test_members_are_dynamic_so_a_new_constituent_is_covered_at_once(self) -> None:
+        """Curated lists go stale; a universe read does not."""
+        universe = self._universe()
+        assert "NEWCO" not in {s for b in tm.sector_baskets(universe) for s in b.members}
+        grown = pd.concat(
+            [universe, pd.DataFrame({"symbol": ["NEWCO"], "sector": ["Energy"]})],
+            ignore_index=True,
+        )
+        energy = next(b for b in tm.sector_baskets(grown) if b.name == "Energy")
+        assert energy.members == frozenset({"XOM", "NEWCO"})
+
+    def test_sector_triggers_name_industries_not_macro_conditions(self) -> None:
+        """Tier-3 macro acts on the rating step; Tier-2 is industry news.
+
+        A bare macro phrase here would fire on a large share of the whole feed
+        and give every name in the sector the same market-wide story as an
+        industry signal -- exactly the over-propagation the module's
+        propagation rule is built to prevent.
+        """
+        banned = {"interest rates", "inflation", "recession", "federal reserve", "gdp", "tariffs"}
+        for sector, keywords in tm.SECTOR_KEYWORDS.items():
+            overlap = banned & {k.lower() for k in keywords}
+            assert not overlap, f"{sector} carries macro trigger(s) {overlap}"
+
+    def test_sector_names_match_the_gics_sectors_the_universe_uses(self) -> None:
+        """A typo here is silent: the basket simply never matches a symbol.
+
+        Pinned against the sector strings the committed demo database actually
+        stores, so a rename on either side fails loudly rather than quietly
+        dropping a sector's worth of coverage.
+        """
+        assert set(tm.SECTOR_KEYWORDS) == {
+            "Energy",
+            "Materials",
+            "Industrials",
+            "Consumer Discretionary",
+            "Consumer Staples",
+            "Health Care",
+            "Financials",
+            "Information Technology",
+            "Communication Services",
+            "Utilities",
+            "Real Estate",
+        }
+
+
 # --- propagate: the core judgment --------------------------------------------
 
 

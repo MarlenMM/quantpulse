@@ -36,9 +36,22 @@ _ARTICLE_COLUMNS = [
 ]
 _TONE_COLUMNS = ["date", "tone", "query"]
 
-# Section 5: free, no key, "generous fair-use" with no published per-minute
-# number -- the same conservative min-interval treatment as SEC EDGAR (Section 19).
-_rate_limiter = SimpleRateLimiter(min_interval_seconds=1.0)
+# Section 5 called this "generous fair-use with no published per-minute number"
+# and gave it the same 1s min-interval as SEC EDGAR. **GDELT publishes a number,
+# and it is 5 seconds.** Its own 429 body says so verbatim: "Please limit
+# requests to one every 5 seconds or contact [...] for larger queries."
+#
+# At 1s every request was being 429ed and rescued by `_request_with_retries`'
+# backoff, so the step worked and simply took several times longer than it
+# looked -- invisible while six baskets were queried per run, and not invisible
+# at seventeen: a local run spent fifteen minutes to cache one response. Backing
+# off is the retry layer doing its job, not licence to keep tripping it, and
+# Section 19 is explicit that polite behaviour toward a free source is a
+# requirement rather than a courtesy.
+#
+# Seventeen baskets at 5s is ~85s of pacing per weekly run, against a 30-minute
+# step budget.
+_rate_limiter = SimpleRateLimiter(min_interval_seconds=5.0)
 
 # GDELT's article `seendate` looks like "20260722T120000Z"; timeline `date`
 # points have been observed both with and without that trailing "Z" -- try
