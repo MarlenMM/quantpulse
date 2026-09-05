@@ -4,6 +4,7 @@ import pytest
 
 from quantpulse.analysis import backtest as bt
 from quantpulse.analysis.forecasting import Forecast, baseline_forecast
+from quantpulse.portfolio.optimization import kelly_position_fraction
 
 
 def _prices(closes: list[float] | np.ndarray, start: str = "2021-01-01") -> pd.DataFrame:
@@ -658,3 +659,99 @@ class TestMostlyCashRuns:
         assert result is not None
         assert result.invested_periods == 0
         assert result.invested_fraction == 0.0
+
+
+class TestExcessReturnKellyInputs:
+    """Win rate and payoff against the benchmark — what a position size needs.
+
+    Kelly maximizes the growth rate of whatever is being bet, and an active
+    strategy bets the *tilt away from* the benchmark: holding the benchmark was
+    free. Sized on absolute returns, the Track Record page recommended betting
+    6.2% of capital on a run whose CAGR trailed its own buy-and-hold benchmark
+    (20.8% vs 28.6%) — it was measuring the market's return and reporting it as
+    the strategy's edge.
+    """
+
+    @staticmethod
+    def _panel(strategy_leg: list[float], other_leg: list[float]) -> pd.DataFrame:
+        """Two names, so top_fraction=0.5 picks exactly the first one."""
+        dates = pd.date_range("2024-01-31", periods=len(strategy_leg), freq="ME")
+        return pd.DataFrame({"WIN": strategy_leg, "LOSE": other_leg}, index=dates)
+
+    def test_excess_metrics_are_measured_against_the_benchmark(self) -> None:
+        # A strategy that rises 1%/period against a benchmark rising 3%/period:
+        # every period is a *win* in absolute terms and a *loss* against the
+        # benchmark. The two pairs of numbers must disagree, or the excess
+        # measure is not measuring anything the absolute one does not.
+        periods = 12
+        panel = self._panel(
+            [100.0 * 1.01**i for i in range(periods)],
+            [100.0 * 1.01**i for i in range(periods)],
+        )
+        benchmark = pd.Series(
+            [100.0 * 1.03**i for i in range(periods)], index=panel.index, dtype=float
+        )
+        result = bt.backtest_strategy(
+            panel,
+            signal_fn=lambda as_of, p: {"WIN": 1.0, "LOSE": 0.0},
+            cadence="monthly",
+            top_fraction=0.5,
+            transaction_cost=0.0,
+            benchmark=benchmark,
+        )
+        assert result is not None
+        assert result.win_rate == pytest.approx(1.0), "every period was up in absolute terms"
+        assert result.excess_win_rate == pytest.approx(0.0), (
+            "no period beat the benchmark, so the excess win rate must be zero -- "
+            "if it tracks the absolute one, Kelly is being fed the market's return"
+        )
+
+    def test_a_strategy_that_trails_its_benchmark_gets_no_position(self) -> None:
+        """The regression, end to end: absolute Kelly says bet, excess Kelly says don't.
+
+        The strategy alternates +3% and -1%, so it has genuine losing periods and
+        a well-defined absolute payoff ratio (the all-up fixture above has none,
+        and Kelly correctly declines to size a bet that never loses). Its ~1%
+        per period still trails a steady 2% benchmark.
+        """
+        periods = 13
+        leg = [100.0]
+        for i in range(periods - 1):
+            leg.append(leg[-1] * (1.03 if i % 2 == 0 else 0.99))
+        panel = self._panel(leg, list(leg))
+        benchmark = pd.Series(
+            [100.0 * 1.02**i for i in range(periods)], index=panel.index, dtype=float
+        )
+        result = bt.backtest_strategy(
+            panel,
+            signal_fn=lambda as_of, p: {"WIN": 1.0, "LOSE": 0.0},
+            cadence="monthly",
+            top_fraction=0.5,
+            transaction_cost=0.0,
+            benchmark=benchmark,
+        )
+        assert result is not None
+        absolute = kelly_position_fraction(result.win_rate, result.payoff_ratio)
+        excess = kelly_position_fraction(result.excess_win_rate, result.excess_payoff_ratio)
+        assert absolute is not None and absolute > 0, (
+            "the old basis has to actually recommend a bet here, or this test proves nothing"
+        )
+        assert excess is None or excess <= 0, (
+            f"a strategy that lost to its benchmark in every single period was sized at "
+            f"{excess} -- Kelly is still being fed absolute returns"
+        )
+
+    def test_excess_metrics_are_none_without_a_benchmark(self) -> None:
+        """No benchmark, no excess: `None`, never a silent comparison against zero."""
+        panel = self._panel([100.0 * 1.01**i for i in range(12)], [100.0] * 12)
+        result = bt.backtest_strategy(
+            panel,
+            signal_fn=lambda as_of, p: {"WIN": 1.0, "LOSE": 0.0},
+            cadence="monthly",
+            top_fraction=0.5,
+            transaction_cost=0.0,
+        )
+        assert result is not None
+        assert result.excess_win_rate is None
+        assert result.excess_payoff_ratio is None
+        assert result.win_rate is not None, "the absolute measures still work without one"

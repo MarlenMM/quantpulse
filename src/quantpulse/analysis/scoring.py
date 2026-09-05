@@ -98,7 +98,12 @@ _MAX_REGIME_STRONG_BUY_LIFT = 5.0
 _REGIME_NEUTRAL = 50.0
 
 # Trailing windows (trading days) for the derived technical/momentum scorers.
-_MOMENTUM_WINDOW = 126  # ~6 months of risk-adjusted trailing return
+#
+# Public rather than private because `refresh_data`'s backtest ranking signal
+# calls `score_momentum` and has to size its own warm-up from the same numbers.
+# A second copy over there is precisely how `MARKET_PANEL_DAYS` came to have
+# three, and two front ends came to publish two different betas.
+MOMENTUM_WINDOW = 126  # ~6 months of risk-adjusted trailing return
 # Minimum trailing bars before a risk-adjusted momentum reading is reported at
 # all. Raised from 21 (~1 month) to ~3 months, because 21 was low enough to
 # produce a confident-looking number out of noise.
@@ -116,7 +121,7 @@ _MOMENTUM_WINDOW = 126  # ~6 months of risk-adjusted trailing return
 # which correlated 0.96 with the technical score, i.e. one short-term price
 # signal counted twice. 63 bars still errs generous against a 126-bar window,
 # but it is past the point where the estimate is dominated by its own noise.
-_MIN_MOMENTUM_BARS = 63
+MIN_MOMENTUM_BARS = 63
 
 # Technical-signal saturation bands: a move of this size reads as a maxed-out
 # (+/-1) signal before averaging the component tilts.
@@ -192,10 +197,10 @@ def score_momentum(prices: pd.DataFrame, *, prefer_low_volatility: bool = False)
     if "close" not in prices.columns:
         raise ValueError("prices is missing required column: 'close'")
     closes = prices["close"].dropna()
-    if len(closes) <= _MIN_MOMENTUM_BARS:
+    if len(closes) <= MIN_MOMENTUM_BARS:
         return None
-    returns = closes.pct_change().dropna().iloc[-_MOMENTUM_WINDOW:]
-    if len(returns) < _MIN_MOMENTUM_BARS:
+    returns = closes.pct_change().dropna().iloc[-MOMENTUM_WINDOW:]
+    if len(returns) < MIN_MOMENTUM_BARS:
         return None
     volatility = float(returns.std())
     if prefer_low_volatility:

@@ -159,6 +159,17 @@ def backtest_history(limit: int = 20) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def composite_history_days() -> int:
+    """How many distinct dates of composite scores exist — the Track Record page.
+
+    The honest answer to "why does the backtest not rank on the rating?" is a
+    number, not a principle.
+    """
+    with get_session() as session:
+        return persistence.count_composite_score_dates(session)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
 def refresh_log(limit: int = 20) -> pd.DataFrame:
     with get_session() as session:
         return persistence.read_refresh_log(session, limit=limit)

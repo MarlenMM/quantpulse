@@ -2,6 +2,7 @@ import { ErrorBox, LoadingMetrics, LoadingTable, Metric } from "../components/Co
 import { IntervalWhisker } from "../components/IntervalWhisker";
 import { api } from "../lib/api";
 import { formatPercent, formatScore } from "../lib/format";
+import type { BacktestRun } from "../lib/types";
 import { useApi } from "../lib/useApi";
 
 /**
@@ -66,6 +67,58 @@ function EstimateWithInterval({
   );
 }
 
+/** What each stored `signal_name` ranked, in the reader's terms. */
+const SIGNAL_LABELS: Record<string, string> = {
+  momentum_category: "the momentum category of the composite score",
+};
+
+/**
+ * Name the signal, and say what it is not.
+ *
+ * The correction this page most needed. It called itself a "followed the
+ * algorithm's ratings" track record while every stored run was ranked by a
+ * hand-rolled trailing return, and nothing on screen said otherwise — the
+ * project's most load-bearing page quietly testing something other than the
+ * thing the project publishes. The wording is kept in step with the Streamlit
+ * page deliberately: two front ends describing one limitation differently is
+ * how a limitation stops being one.
+ */
+function WhatWasRanked({ run }: { run: BacktestRun }) {
+  const label = run.signal_name === null ? null : SIGNAL_LABELS[run.signal_name];
+  if (!label) {
+    return (
+      <p className="callout callout-warn">
+        <strong>This run does not record what it ranked.</strong> It was stored before the
+        signal was written down with the result, so treat its numbers as uninterpretable
+        rather than as a track record of anything in particular. The next weekly run
+        replaces it with one that says.
+      </p>
+    );
+  }
+  return (
+    <div className="callout">
+      <p>
+        <strong>What was ranked: {label}</strong> — <code>scoring.score_momentum</code>, the
+        same function the nightly composite calls, over survivorship-aware point-in-time
+        prices.
+      </p>
+      <p>
+        <strong>This is not the full Buy/Sell rating</strong>, and it cannot honestly be
+        yet. Five of the seven categories — fundamental, analyst, sentiment, industry/macro
+        and smart money — have only weeks of stored history, so ranking a 2023 rebalance by
+        them would mean using 2026 data to pick 2023 stocks. Technical is left out for a
+        narrower reason: it reads OHLC, and only the closing price is split-adjusted, so
+        over a multi-year window a stock split would read to every indicator as a crash.
+      </p>
+      <p>
+        The rating itself becomes testable once the stored composite history spans the
+        window. It holds <strong>{run.composite_history_days} day(s)</strong> so far,
+        growing by one per refresh, against the years this backtest covers.
+      </p>
+    </div>
+  );
+}
+
 export default function TrackRecord() {
   const { data, error, loading } = useApi(() => api.backtest(20), []);
 
@@ -107,6 +160,8 @@ export default function TrackRecord() {
         Most recent run <strong>{latest.run_date}</strong>, covering {latest.period_start} →{" "}
         {latest.period_end} · {latest.cadence} rebalancing · {latest.n_periods} periods
       </p>
+
+      <WhatWasRanked run={latest} />
 
       {/* The subject of the page: four estimates, each with its interval drawn
           against zero. This is the one thing here worth looking at first. */}
@@ -175,7 +230,7 @@ export default function TrackRecord() {
         </p>
       </section>
 
-      {latest.kelly_fraction !== null && latest.payoff_ratio !== null && (
+      {latest.kelly_fraction !== null && latest.excess_payoff_ratio !== null && (
         <section className="block">
           <h2>How much to bet</h2>
           <div className="metrics">
@@ -184,24 +239,32 @@ export default function TrackRecord() {
               value={formatPercent(latest.kelly_fraction)}
               term="Kelly fraction"
             />
-            <Metric label="Win rate used" value={formatPercent(latest.win_rate)} />
-            <Metric label="Payoff ratio used" value={formatScore(latest.payoff_ratio, 2)} />
+            <Metric
+              label="Periods beating benchmark"
+              value={formatPercent(latest.excess_win_rate)}
+            />
+            <Metric
+              label="Excess payoff ratio"
+              value={formatScore(latest.excess_payoff_ratio, 2)}
+            />
           </div>
           {latest.kelly_fraction <= 0 ? (
             <p className="callout callout-warn">
-              The Kelly criterion says <strong>do not take this bet at all</strong> — at this
-              win rate and payoff ratio the strategy has no positive edge to size, so any
-              position is a losing proposition on average.
+              The Kelly criterion says <strong>do not take this bet at all</strong> — over
+              this run the strategy had no edge on the benchmark, so tilting away from
+              simply holding the benchmark is a losing proposition on average. That is a
+              real result, not a missing number.
             </p>
           ) : (
             <p className="note">
-              A <strong>quarter-Kelly</strong> size: the growth-optimal bet given this run's
-              own {formatPercent(latest.win_rate)} win rate and{" "}
-              {formatScore(latest.payoff_ratio, 2)} payoff ratio, then cut to a quarter
-              because full Kelly is famously too volatile to live with and is exquisitely
-              sensitive to an over-estimated edge. Treat it as an upper bound, not a
-              recommendation — it assumes the future resembles this backtest, which is
-              exactly the assumption the intervals above tell you to doubt.
+              A <strong>quarter-Kelly</strong> size: the growth-optimal tilt away from the
+              benchmark, given that this run beat it in{" "}
+              {formatPercent(latest.excess_win_rate)} of periods at a{" "}
+              {formatScore(latest.excess_payoff_ratio, 2)} excess payoff ratio, then cut to
+              a quarter because full Kelly is famously too volatile to live with and is
+              exquisitely sensitive to an over-estimated edge. Treat it as an upper bound,
+              not a recommendation — it assumes the future resembles this backtest, which
+              is exactly the assumption the intervals above tell you to doubt.
             </p>
           )}
         </section>

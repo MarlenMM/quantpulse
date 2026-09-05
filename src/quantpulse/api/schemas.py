@@ -391,3 +391,22 @@ class BacktestRun(BaseModel):
     # cannot lose) or when there is no positive edge to size.
     payoff_ratio: float | None = None
     kelly_fraction: float | None = None
+    # Sized on return **above the benchmark**, which is what an active strategy
+    # is actually betting: on absolute returns the block reported a confident
+    # position for a run that trailed its own buy-and-hold benchmark. `None` on
+    # runs stored before this was measured -- back-filling it would invent a
+    # number nobody computed.
+    excess_win_rate: float | None = None
+    excess_payoff_ratio: float | None = None
+    #: What this run actually ranked, e.g. "momentum_category". `None` on runs
+    #: stored before the signal was recorded with the result, which the client
+    #: must be able to distinguish from a known signal -- the page described
+    #: itself as a "followed the algorithm's ratings" track record for the whole
+    #: time it was ranking something else.
+    signal_name: str | None = None
+    #: Distinct dates of stored composite history, which is the measured answer
+    #: to "why does this not rank on the Buy/Sell rating?". Deliberately the
+    #: same value on every row of one response rather than a second endpoint:
+    #: it is one integer, and both front ends have to say the same sentence
+    #: about it or they disagree about the app's own limitation.
+    composite_history_days: int = 0

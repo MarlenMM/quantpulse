@@ -43,17 +43,34 @@ def render_position_sizing(latest: pd.Series) -> None:
 
     The rest of this page answers "did the strategy work?". This answers "how
     much would it have been rational to bet on it?", which is the question a
-    track record is actually *for*. Both inputs come from the same stored run --
-    its realized win rate and payoff ratio -- so the number cannot be more
-    confident than the history behind it.
+    track record is actually *for*.
 
-    Shown only when the backtest genuinely supports it: a run with no losing
-    periods has an undefined payoff ratio, and Kelly on an apparently
-    can't-lose bet would return a maximal position.
+    **Sized on return above the benchmark, not on raw return.** Kelly maximizes
+    the growth rate of whatever is being bet, and for an active strategy the
+    thing being bet is the tilt away from the benchmark -- you could have held
+    the benchmark for free. Fed absolute returns instead, this block sized a
+    confident position for a run whose CAGR trailed its own buy-and-hold
+    benchmark (20.8% against 28.6%): it was measuring the market's return and
+    reporting it as the strategy's edge. On excess returns the same arithmetic
+    reaches the honest answer by itself, because a strategy with no edge
+    produces a non-positive fraction and `kelly_position_fraction` already
+    reports that as "do not take this bet at all".
+
+    Shown only when the run supports it: a run with no losing periods has an
+    undefined payoff ratio, and a run stored before this was measured carries
+    nulls rather than a back-filled guess.
     """
-    hit_rate = latest.get("win_rate")
-    payoff = latest.get("payoff_ratio")
-    if pd.isna(hit_rate) or pd.isna(payoff):
+    hit_rate = latest.get("excess_win_rate")
+    payoff = latest.get("excess_payoff_ratio")
+    if hit_rate is None or payoff is None or pd.isna(hit_rate) or pd.isna(payoff):
+        st.divider()
+        st.subheader("How much to bet", help=tip("Kelly fraction"))
+        st.caption(
+            "Not shown for this run. A position size is only meaningful against the "
+            "alternative of holding the benchmark, so it needs this strategy's win rate "
+            "and payoff **relative to the benchmark** — which runs stored before that was "
+            "measured do not carry, and which a run with no losing periods cannot define."
+        )
         return
 
     fraction = kelly_position_fraction(float(hit_rate), float(payoff))
@@ -64,25 +81,79 @@ def render_position_sizing(latest: pd.Series) -> None:
     st.subheader("How much to bet", help=tip("Kelly fraction"))
     columns = st.columns(3)
     columns[0].metric("Suggested position", format_percent(fraction))
-    columns[1].metric("Win rate used", format_percent(float(hit_rate)))
-    columns[2].metric("Payoff ratio used", format_ratio(float(payoff)))
+    columns[1].metric("Periods beating benchmark", format_percent(float(hit_rate)))
+    columns[2].metric("Excess payoff ratio", format_ratio(float(payoff)))
 
     if fraction <= 0:
         st.info(
-            "The Kelly criterion says **do not take this bet at all** — at this win "
-            "rate and payoff ratio the strategy has no positive edge to size, so any "
-            "position is a losing proposition on average."
+            "The Kelly criterion says **do not take this bet at all** — over this run "
+            "the strategy had no edge on the benchmark, so tilting away from simply "
+            "holding the benchmark is a losing proposition on average. That is a real "
+            "result, not a missing number."
         )
     else:
         st.caption(
-            f"A **quarter-Kelly** size: the growth-optimal bet given this run's own "
-            f"{format_percent(float(hit_rate))} win rate and "
-            f"{format_ratio(float(payoff))} payoff ratio, then cut to a quarter because "
-            "full Kelly is famously too volatile to live with and is exquisitely "
-            "sensitive to an over-estimated edge. Treat it as an upper bound, not a "
-            "recommendation — it assumes the future resembles this backtest, which is "
-            "exactly the assumption the confidence intervals above tell you to doubt."
+            f"A **quarter-Kelly** size: the growth-optimal tilt away from the benchmark "
+            f"given that this run beat it in {format_percent(float(hit_rate))} of periods "
+            f"at a {format_ratio(float(payoff))} excess payoff ratio, then cut to a "
+            "quarter because full Kelly is famously too volatile to live with and is "
+            "exquisitely sensitive to an over-estimated edge. Treat it as an upper "
+            "bound, not a recommendation — it assumes the future resembles this "
+            "backtest, which is exactly the assumption the confidence intervals above "
+            "tell you to doubt."
         )
+
+
+#: What each stored `signal_name` ranked, in the reader's terms. Deliberately
+#: free of markdown: it is interpolated inside an already-bold sentence, and a
+#: nested `**` renders as literal asterisks. Kept in step with `SIGNAL_LABELS`
+#: in `frontend/src/pages/TrackRecord.tsx` -- two front ends describing one
+#: limitation differently is how a limitation stops being one.
+_SIGNAL_LABELS: dict[str, str] = {
+    "momentum_category": "the momentum category of the composite score",
+}
+
+
+def render_what_was_ranked(latest: pd.Series) -> None:
+    """Name the signal, and say what it is not.
+
+    This is the correction the page most needed. It described itself as a
+    "followed the algorithm's ratings" track record while every stored run was
+    ranked by a hand-rolled trailing return, and nothing on screen said
+    otherwise — the single most load-bearing page in the project quietly
+    testing something other than the thing the project publishes.
+
+    So the signal is named, the gap to the full rating is stated, and the reason
+    for the gap is a measured number rather than a principle: the count of days
+    of stored composite history, next to the years the window needs.
+    """
+    signal = latest.get("signal_name")
+    label = _SIGNAL_LABELS.get(str(signal), None)
+    stored_days = data.composite_history_days()
+
+    if label is None:
+        st.warning(
+            "**This run does not record what it ranked.** It was stored before the "
+            "signal was written down with the result, so treat its numbers as "
+            "uninterpretable rather than as a track record of anything in particular. "
+            "The next weekly run replaces it with one that says."
+        )
+        return
+
+    st.info(
+        f"**What was ranked: {label}** — `scoring.score_momentum`, the same function "
+        "the nightly composite calls, over survivorship-aware point-in-time prices.\n\n"
+        "**This is not the full Buy/Sell rating**, and it cannot honestly be yet. Five "
+        "of the seven categories — fundamental, analyst, sentiment, industry/macro and "
+        "smart money — have only weeks of stored history, so ranking a 2023 rebalance "
+        "by them would mean using 2026 data to pick 2023 stocks. Technical is left out "
+        "for a narrower reason: it reads OHLC, and only the closing price is "
+        "split-adjusted, so over a multi-year window a stock split would read to every "
+        "indicator as a crash.\n\n"
+        f"The rating itself becomes testable once the stored composite history spans "
+        f"the window. It holds **{stored_days} day(s)** so far, growing by one per "
+        "refresh, against the years this backtest covers."
+    )
 
 
 def _render_interval(
@@ -117,7 +188,8 @@ def main() -> None:
             """
             When it does run, this page shows what Section 7.6 asks for:
 
-            - A "followed the algorithm's ratings" strategy vs a buy-and-hold benchmark
+            - A ranked strategy vs a buy-and-hold benchmark, with the ranking
+              signal named
             - Sharpe, CAGR and max drawdown **with bootstrap confidence intervals**
             - The assumed transaction cost and rebalance cadence, stated explicitly
             """
@@ -130,6 +202,7 @@ def main() -> None:
         f"{latest['period_start']} → {latest['period_end']} · "
         f"{latest['cadence']} rebalancing · {int(latest['n_periods'])} periods"
     )
+    render_what_was_ranked(latest)
 
     # `st.header`, not another subheader: the estimate and its interval are the
     # page, and everything below is supporting material for reading them.
