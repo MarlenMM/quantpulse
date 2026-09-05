@@ -275,6 +275,30 @@ export interface BacktestRun {
   // than each deriving one.
   payoff_ratio: number | null;
   kelly_fraction: number | null;
+  /**
+   * Win rate and payoff measured against the benchmark rather than against
+   * zero — what `kelly_fraction` is built from. An active strategy bets the
+   * tilt away from the benchmark, not the whole position; on absolute returns
+   * the block sized a confident bet on a run that trailed buy-and-hold. Null on
+   * runs stored before this was measured.
+   */
+  excess_win_rate: number | null;
+  excess_payoff_ratio: number | null;
+  /**
+   * What the run actually ranked, e.g. "momentum_category". Null on runs stored
+   * before the signal was recorded alongside the result — a state the page has
+   * to render differently, because it described itself as a "followed the
+   * algorithm's ratings" track record throughout the time it ranked something
+   * else.
+   */
+  signal_name: string | null;
+  /**
+   * Distinct dates of stored composite history — the measured answer to "why
+   * does this not rank on the Buy/Sell rating?". The same value on every row of
+   * one response by design: both front ends must say the same sentence about
+   * the app's own limitation.
+   */
+  composite_history_days: number;
   assumed_txn_cost: number;
 }
 

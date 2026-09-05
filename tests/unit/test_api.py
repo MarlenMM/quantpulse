@@ -151,6 +151,13 @@ def _seed(session: Session) -> None:
             assumed_txn_cost=0.001,
             win_rate=0.6,
             payoff_ratio=1.5,
+            # Deliberately contradictory: healthy in absolute terms, no edge at
+            # all against the benchmark. A Kelly built from the first pair sizes
+            # a confident bet; one built from the second declines. That is what
+            # makes `TestKellyIsSizedOnExcessReturn` able to tell them apart.
+            excess_win_rate=0.25,
+            excess_payoff_ratio=0.5,
+            signal_name="momentum_category",
         )
     )
     session.commit()
@@ -525,11 +532,16 @@ class TestParitySurface:
 
         `payoff_ratio` was stored on every run and exposed by no route, which is
         why the React Track Record had no position-sizing section at all.
+
+        The arithmetic below moved once, deliberately: the fraction is now built
+        from the **excess** metrics rather than the absolute ones. On p=0.6,
+        b=1.5 it was a confident quarter-Kelly 8.3%; on this run's edge over the
+        benchmark (p=0.25, b=0.5) full Kelly is negative, which in a long-only
+        tool is reported as 0.0 -- "do not take this bet".
         """
         run = client.get("/api/backtest").json()[0]
-        assert run["payoff_ratio"] == pytest.approx(1.5)
-        # Quarter-Kelly on p=0.6, b=1.5: (1.5*0.6 - 0.4) / 1.5 = 1/3, quartered.
-        assert run["kelly_fraction"] == pytest.approx(0.25 * (1.0 / 3.0))
+        assert run["payoff_ratio"] == pytest.approx(1.5), "the absolute figure is still served"
+        assert run["kelly_fraction"] == pytest.approx(0.0)
 
     def test_every_new_route_is_still_a_GET(self, client: TestClient) -> None:
         """The read-only guarantee has to survive each addition, not just the first."""
@@ -591,3 +603,40 @@ class TestMarketIndexIsNotATradableSymbol:
     def test_it_does_not_become_a_sector(self, index_client: TestClient) -> None:
         rotation = index_client.get("/api/sectors/rotation").json()
         assert all(row["sector"] for row in rotation)
+
+
+class TestKellyIsSizedOnExcessReturn:
+    """The position size must come from the edge over the benchmark, not raw return.
+
+    On absolute returns the Track Record page recommended betting 6.2% of
+    capital on a run whose CAGR trailed its own buy-and-hold benchmark: it was
+    measuring the market's return and reporting it as the strategy's edge. The
+    server computes the fraction (one implementation for both front ends), so
+    the assertion belongs here.
+    """
+
+    def test_the_fraction_uses_the_excess_metrics(self, client: TestClient) -> None:
+        run = client.get("/api/backtest").json()[0]
+        from quantpulse.portfolio.optimization import kelly_position_fraction
+
+        on_excess = kelly_position_fraction(run["excess_win_rate"], run["excess_payoff_ratio"])
+        on_absolute = kelly_position_fraction(run["win_rate"], run["payoff_ratio"])
+        assert on_absolute is not None and on_absolute > 0, (
+            "the fixture must recommend a bet on the old basis, or this proves nothing"
+        )
+        assert run["kelly_fraction"] == pytest.approx(on_excess)
+        assert run["kelly_fraction"] != pytest.approx(on_absolute)
+
+    def test_a_run_with_no_edge_is_sized_at_zero_or_less(self, client: TestClient) -> None:
+        run = client.get("/api/backtest").json()[0]
+        assert run["kelly_fraction"] is not None
+        assert run["kelly_fraction"] <= 0, (
+            "a strategy beating its benchmark in a quarter of periods at a payoff below "
+            "1.0 was handed a positive position size"
+        )
+
+    def test_the_run_says_what_it_ranked(self, client: TestClient) -> None:
+        """The page cannot name the signal if the row does not carry it."""
+        run = client.get("/api/backtest").json()[0]
+        assert run["signal_name"] == "momentum_category"
+        assert run["composite_history_days"] >= 0

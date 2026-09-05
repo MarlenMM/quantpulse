@@ -118,6 +118,11 @@ def seeded_engine(tmp_path: Path) -> Engine:
                 max_drawdown=-0.34,
                 win_rate=0.58,
                 payoff_ratio=1.6,
+                # The Kelly block sizes on the edge over the benchmark, so a run
+                # has to carry those two for the section to render at all.
+                excess_win_rate=0.55,
+                excess_payoff_ratio=1.4,
+                signal_name="momentum_category",
                 benchmark_cagr=0.11,
                 benchmark_sharpe=0.65,
                 avg_turnover=0.67,
@@ -224,15 +229,27 @@ class TestKellySizingIsVisible:
 
     def test_it_states_the_inputs_it_used(self, seeded_engine: Engine) -> None:
         # A position size is only as good as the track record behind it, so the
-        # page must show which win rate and payoff ratio produced it.
+        # page must show which win rate and payoff ratio produced it -- and
+        # which ones those are is the point: **against the benchmark**, not
+        # against zero. Labelled so a reader can see that from the page alone,
+        # since the two bases give very different numbers on the same run.
         at = _run(BACKTEST_PAGE, seeded_engine)
         labels = [metric.label for metric in at.metric]
-        assert "Win rate used" in labels
-        assert "Payoff ratio used" in labels
+        assert "Periods beating benchmark" in labels
+        assert "Excess payoff ratio" in labels
+        assert "Win rate used" not in labels, (
+            "the old absolute-return labels are still on the page, so a reader "
+            "cannot tell which basis produced the position size"
+        )
 
-    def test_absent_when_the_run_has_no_payoff_ratio(self, tmp_path: Path) -> None:
-        # A run with no losing period has an undefined payoff ratio; Kelly must
-        # not be shown rather than sized off a bet that looks unlosable.
+    def test_explained_rather_than_hidden_when_the_run_cannot_be_sized(
+        self, tmp_path: Path
+    ) -> None:
+        # A run with no losing period has an undefined payoff ratio, and a run
+        # stored before the excess metrics existed carries nulls. Neither can be
+        # sized -- but a section that silently vanishes reads as a bug, so the
+        # heading stays and says why, the way the absent Sharpe/Sortino and the
+        # dashed VaR already do on the other pages.
         engine = create_engine(f"sqlite:///{tmp_path / 'nopayoff.db'}")
         Base.metadata.create_all(engine)
         factory = sessionmaker(bind=engine)
@@ -259,7 +276,14 @@ class TestKellySizingIsVisible:
 
         at = _run(BACKTEST_PAGE, engine)
         assert not at.exception
-        assert "How much to bet" not in [element.value for element in at.subheader]
+        assert "How much to bet" in [element.value for element in at.subheader]
+        assert "Suggested position" not in [metric.label for metric in at.metric], (
+            "a run that cannot be sized was given a position size anyway"
+        )
+        captions = " ".join(str(element.value) for element in at.caption)
+        assert "relative to the benchmark" in captions, (
+            f"the section vanished without explaining itself; captions were {captions[:400]}"
+        )
 
 
 class TestDetectedPatternsAreVisible:

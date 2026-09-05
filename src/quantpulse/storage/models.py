@@ -536,6 +536,22 @@ class BacktestResult(Base):
     `max_drawdown` deliberately has no interval -- it is a path-dependent
     extremum, so a bootstrap over reshuffled return paths would describe a
     drawdown nobody actually lived through (see `backtest.StrategySignificance`).
+
+    `signal_name` records **what was actually ranked**, and exists because the
+    page built on this table did not say. It described itself as a
+    "followed the algorithm's ratings" track record while the stored runs were
+    ranked by a hand-rolled trailing return, and nothing in the row could have
+    told a reader otherwise. Stored per run rather than assumed, so a row stays
+    interpretable after the signal changes -- which it now has once, and will
+    again when `composite_scores` has the years of history the rating itself
+    would need.
+
+    `excess_win_rate`/`excess_payoff_ratio` are `win_rate`/`payoff_ratio`
+    measured against the benchmark instead of against zero. They are what the
+    Kelly position size on the Track Record page is built from: sizing on
+    absolute returns hands back a confident positive fraction for a strategy
+    that trailed buy-and-hold, because it is measuring the market's return and
+    calling it the strategy's edge.
     """
 
     __tablename__ = "backtest_results"
@@ -556,6 +572,9 @@ class BacktestResult(Base):
     max_drawdown: Mapped[float | None] = mapped_column(Float)
     win_rate: Mapped[float | None] = mapped_column(Float)
     payoff_ratio: Mapped[float | None] = mapped_column(Float)
+    excess_win_rate: Mapped[float | None] = mapped_column(Float)
+    excess_payoff_ratio: Mapped[float | None] = mapped_column(Float)
+    signal_name: Mapped[str | None] = mapped_column(String(50))
     benchmark_cagr: Mapped[float | None] = mapped_column(Float)
     benchmark_sharpe: Mapped[float | None] = mapped_column(Float)
     avg_turnover: Mapped[float | None] = mapped_column(Float)

@@ -1004,6 +1004,19 @@ def read_latest_analyst_consensus(session: Session, symbol: str) -> dict[str, An
     }
 
 
+def count_composite_score_dates(session: Session) -> int:
+    """How many distinct dates `composite_scores` holds.
+
+    The Track Record page reports it, because the honest answer to "why does
+    this backtest not rank on the composite rating?" is a number rather than a
+    principle: the rating is stored append-only from the day the pipeline first
+    ran, and until that history spans the backtest window there is nothing to
+    rank a 2023 rebalance with except look-ahead. Showing the count lets a
+    reader see the gap closing instead of taking the limitation on trust.
+    """
+    return int(session.scalar(select(func.count(func.distinct(CompositeScore.date)))) or 0)
+
+
 def read_backtest_history(session: Session, *, limit: int = 20) -> pd.DataFrame:
     """Stored strategy backtest runs, newest first — the Track Record page."""
     stmt = select(BacktestResult).order_by(BacktestResult.run_date.desc()).limit(limit)
@@ -1026,6 +1039,9 @@ def read_backtest_history(session: Session, *, limit: int = 20) -> pd.DataFrame:
                 "max_drawdown": row.max_drawdown,
                 "win_rate": row.win_rate,
                 "payoff_ratio": row.payoff_ratio,
+                "excess_win_rate": row.excess_win_rate,
+                "excess_payoff_ratio": row.excess_payoff_ratio,
+                "signal_name": row.signal_name,
                 "benchmark_cagr": row.benchmark_cagr,
                 "benchmark_sharpe": row.benchmark_sharpe,
                 "avg_turnover": row.avg_turnover,
