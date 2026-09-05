@@ -190,6 +190,13 @@ class ForecastRow(BaseModel):
     historical_hit_rate: float | None = None
     baseline_hit_rate: float | None = None
     hit_rate_windows: int | None = None
+    #: Whether this row has a measured out-of-sample accuracy at all, from
+    #: `forecasting.is_graded`. Sent rather than re-derived in the client: it
+    #: decides how prominently a number is displayed, and a null check written
+    #: separately in Python and TypeScript is how two front ends come to grade
+    #: the same forecast differently. `False` means *never measured* -- never
+    #: "measured and poor".
+    is_graded: bool = False
     generated_date: date
 
 

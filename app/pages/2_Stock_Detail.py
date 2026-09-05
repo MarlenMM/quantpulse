@@ -27,6 +27,8 @@ Three deliberate choices:
   different numbers for the same stock on the same screen.
 """
 
+from typing import Any
+
 import pandas as pd
 import streamlit as st
 
@@ -45,7 +47,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice, search_symbols
-from quantpulse.analysis import forecasting, macro, risk, smart_money, technical
+from quantpulse.analysis import backtest, forecasting, macro, risk, smart_money, technical
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import chatbot
 from quantpulse.llm import narrative as llm_narrative
@@ -143,6 +145,111 @@ def render_short_interest(symbol: str) -> None:
             "Short interest is not elevated. Shown as context only — it is "
             "deliberately excluded from the Smart Money score, since the same "
             "figure can be read as bearish conviction or as squeeze potential."
+        )
+
+
+#: Columns of the forecast table, in the order both front ends render them.
+_FORECAST_COLUMNS = [
+    "horizon_days",
+    "Return",
+    "point_price",
+    "lower_price",
+    "upper_price",
+    "Hit rate",
+    "vs naive",
+    "Windows",
+]
+_FORECAST_RENAMES = {
+    "horizon_days": "Horizon (days)",
+    "point_price": "Target",
+    "lower_price": "Low",
+    "upper_price": "High",
+}
+
+
+def _forecast_frame(rows: pd.DataFrame) -> Any:
+    """The shared Styler for a forecast table.
+
+    These three are dollar prices and must be printed like every other price in
+    either front end -- `format_price` here, `formatPrice` in React. Without
+    this they render as raw float64 (282.7719 beside 287.08, since Streamlit
+    drops trailing zeros): four decimals of precision a forecast does not have,
+    ragged column alignment, no currency marker, and a visible disagreement with
+    the React page showing "$282.77" for the very same stored row.
+    """
+    return (
+        rows[_FORECAST_COLUMNS]
+        .rename(columns=_FORECAST_RENAMES)
+        .style.format({"Target": "${:,.2f}", "Low": "${:,.2f}", "High": "${:,.2f}"}, na_rep="—")
+    )
+
+
+_FORECAST_COLUMN_CONFIG = {
+    "Hit rate": st.column_config.TextColumn("Hit rate", help=tip("Hit rate")),
+    "Low": st.column_config.NumberColumn(
+        "Low", help="Lower bound of the forecast range, not a floor."
+    ),
+    "High": st.column_config.NumberColumn(
+        "High", help="Upper bound of the forecast range, not a target."
+    ),
+    "Windows": st.column_config.TextColumn(
+        "Windows",
+        help="How many distinct out-of-sample periods the two hit rates were "
+        "measured over. More is better; a rate from a handful of windows is "
+        "an anecdote, not a track record.",
+    ),
+}
+
+
+def render_forecast_table(rows: pd.DataFrame) -> None:
+    """The horizons that carry a measured accuracy — the default view."""
+    if rows.empty:
+        st.caption(
+            "No horizon for this model has been graded yet, so nothing here has a "
+            "measured accuracy. The ungraded forecasts are below."
+        )
+        return
+    st.dataframe(
+        _forecast_frame(rows),
+        hide_index=True,
+        width="stretch",
+        column_config=_FORECAST_COLUMN_CONFIG,
+    )
+
+
+def render_ungraded_forecasts(rows: pd.DataFrame) -> None:
+    """The horizons with no measured accuracy, deliberately behind a disclosure.
+
+    They were previously in the same table as the graded ones, differing only by
+    three dashes -- and they are precisely the rows carrying the largest numbers.
+    On the real universe every 63- and 252-day forecast is ungraded, the 252-day
+    ones average +16% and reach +231%, and a reader skimming the table saw
+    "+82.2%, target $379.77" set exactly like a figure standing on 154 measured
+    windows. The page's own rule (Section 7.6: "a forecast without its own track
+    record next to it invites more confidence than it's earned") was satisfied to
+    the letter by the dashes and defeated by the typography.
+
+    They are disclosed rather than deleted: the forecast is real, it is the
+    model's honest output, and hiding a one-year number a reader came looking for
+    would be its own kind of dishonesty. What changes is that it no longer
+    borrows the credibility of the rows above it.
+    """
+    horizons = ", ".join(f"{int(h)}-day" for h in sorted(rows["horizon_days"]))
+    with st.expander(f"Show {len(rows)} ungraded horizon(s) — {horizons}", expanded=False):
+        st.warning(
+            "**These horizons have no measured accuracy at all.** Not a low hit rate — "
+            "no hit rate: the model has never been graded over enough independent "
+            f"periods at these horizons for a number to mean anything ("
+            f"{backtest.MIN_GRADED_WINDOWS} distinct windows are required). A one-year "
+            "horizon needs roughly independent *years* to test against, and three years "
+            "of stored history does not contain many. Treat what follows as the model "
+            "talking, not as a track record."
+        )
+        st.dataframe(
+            _forecast_frame(rows),
+            hide_index=True,
+            width="stretch",
+            column_config=_FORECAST_COLUMN_CONFIG,
         )
 
 
@@ -818,64 +925,20 @@ def main() -> None:
         table["Windows"] = table.get(
             "hit_rate_windows", pd.Series(index=table.index, dtype="float")
         ).map(lambda v: "—" if pd.isna(v) else f"{int(v)}")
-        st.dataframe(
-            table[
-                [
-                    "horizon_days",
-                    "Return",
-                    "point_price",
-                    "lower_price",
-                    "upper_price",
-                    "Hit rate",
-                    "vs naive",
-                    "Windows",
-                ]
-            ]
-            .rename(
-                columns={
-                    "horizon_days": "Horizon (days)",
-                    "point_price": "Target",
-                    "lower_price": "Low",
-                    "upper_price": "High",
-                }
+        graded_mask = table["historical_hit_rate"].map(forecasting.is_graded)
+        render_forecast_table(table[graded_mask])
+        ungraded = table[~graded_mask]
+        if not ungraded.empty:
+            render_ungraded_forecasts(ungraded)
+        if graded_mask.any():
+            st.caption(
+                "**Hit rate** is this model's own out-of-sample directional accuracy at "
+                "that horizon — shown next to the forecast, not hidden on another page. "
+                "**vs naive** is the same measure for a naive random-walk forecast over "
+                "the same periods; a model at or below it has demonstrated no skill. "
+                "**Windows** is how many separate historical periods those rates were "
+                "measured over."
             )
-            # These three are dollar prices and must be printed like every other
-            # price in either front end -- `format_price` here, `formatPrice` in
-            # React. Without this they render as raw float64 (282.7719 beside
-            # 287.08, since Streamlit drops trailing zeros), which is four
-            # decimals of precision a forecast does not have, ragged column
-            # alignment, no currency marker, and a visible disagreement with the
-            # React page showing "$282.77" for the very same stored row.
-            .style.format(
-                {"Target": "${:,.2f}", "Low": "${:,.2f}", "High": "${:,.2f}"}, na_rep="—"
-            ),
-            hide_index=True,
-            width="stretch",
-            column_config={
-                "Hit rate": st.column_config.TextColumn("Hit rate", help=tip("Hit rate")),
-                "Low": st.column_config.NumberColumn(
-                    "Low", help="Lower bound of the forecast range, not a floor."
-                ),
-                "High": st.column_config.NumberColumn(
-                    "High", help="Upper bound of the forecast range, not a target."
-                ),
-                "Windows": st.column_config.TextColumn(
-                    "Windows",
-                    help="How many distinct out-of-sample periods the two hit rates were "
-                    "measured over. More is better; a rate from a handful of windows is "
-                    "an anecdote, not a track record.",
-                ),
-            },
-        )
-        st.caption(
-            "**Hit rate** is this model's own out-of-sample directional accuracy at that "
-            "horizon — shown next to the forecast, not hidden on another page. "
-            "**Windows** is how many separate historical periods it was measured over. A "
-            "dash means the model has not been graded over enough distinct windows for a "
-            "rate to mean anything, so none is shown rather than a flattering one: at the "
-            "one-year horizon in particular there simply are not many independent years to "
-            "test against."
-        )
 
     render_monte_carlo(symbol, bars)
 

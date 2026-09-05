@@ -640,3 +640,52 @@ class TestKellyIsSizedOnExcessReturn:
         run = client.get("/api/backtest").json()[0]
         assert run["signal_name"] == "momentum_category"
         assert run["composite_history_days"] >= 0
+
+
+class TestForecastGradingReachesTheClient:
+    """React splits its forecast table on `is_graded`, so the server must send it.
+
+    The rule lives in `forecasting.is_graded` and is sent rather than re-derived
+    in TypeScript: it decides how prominently a number is displayed, and a null
+    check written separately on each surface is how two front ends come to grade
+    the same forecast differently.
+    """
+
+    def test_a_graded_row_is_flagged_graded(self, client: TestClient) -> None:
+        rows = client.get("/api/stocks/AAPL").json()["forecasts"]
+        graded = [r for r in rows if r["historical_hit_rate"] is not None]
+        assert graded, "the fixture has no graded forecast to assert on"
+        assert all(r["is_graded"] for r in graded)
+
+    def test_an_ungraded_row_is_flagged_ungraded(self, tmp_path) -> None:
+        def _seed_ungraded(session: Session) -> None:
+            session.add(
+                Forecast(
+                    symbol="AAPL",
+                    generated_date=TODAY,
+                    horizon_days=252,
+                    model_name="baseline",
+                    point_return=0.822,
+                    point_price=379.77,
+                    lower_price=180.53,
+                    upper_price=798.91,
+                    historical_hit_rate=None,
+                    baseline_hit_rate=None,
+                    hit_rate_windows=None,
+                )
+            )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_ungraded):
+            rows = c.get("/api/stocks/AAPL").json()["forecasts"]
+            long_horizon = [r for r in rows if r["horizon_days"] == 252]
+            assert long_horizon, "the fixture stored no 252-day forecast"
+            assert long_horizon[0]["is_graded"] is False, (
+                "a one-year forecast with no measured accuracy was sent to the client "
+                "flagged as graded -- React would render it in the default table"
+            )
+            # The point of the split: it is also the biggest number in the set.
+            assert long_horizon[0]["point_return"] > max(
+                r["point_return"] for r in rows if r["is_graded"]
+            )
+            break

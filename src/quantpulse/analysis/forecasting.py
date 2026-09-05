@@ -77,12 +77,38 @@ __all__ = [
     "MonteCarloFanChart",
     "simulate_gbm_paths",
     "monte_carlo_fan_chart",
+    "is_graded",
 ]
 
 # Horizons in *trading* days: ~1 week, 1 month, 1 quarter, 1 year (Section 7.6
 # forecasts "5-day, 20-day" and the longer 3-month/1-year emphasis shift).
 DEFAULT_HORIZONS: tuple[int, ...] = (5, 20, 63, 252)
 DEFAULT_CONFIDENCE = 0.90
+
+
+def is_graded(historical_hit_rate: float | None) -> bool:
+    """Whether a stored forecast row has a measured out-of-sample accuracy.
+
+    One predicate, called by the Streamlit page and by the read API (which sends
+    the answer on to React), because "is this forecast graded?" decides how
+    prominently a number is displayed and three surfaces each deciding it from
+    their own null check is how they come to disagree.
+
+    A row is graded only if `historical_hit_rate` survived
+    `backtest.MIN_GRADED_WINDOWS`. Below that the refresh job stores `None`
+    rather than a rate measured over a handful of overlapping windows -- so a
+    null here means "never measured", never "measured at zero".
+
+    On the real universe this splits cleanly by horizon: 5- and 20-day rows are
+    graded, 63- and 252-day rows are **entirely** ungraded, because a year-long
+    horizon has barely any independent years to test against in three years of
+    stored history. Those are also the rows carrying the largest numbers -- the
+    252-day forecasts on the demo database average +16% and reach +231% -- which
+    is exactly why they must not be displayed as though they were as
+    well-evidenced as the short ones.
+    """
+    return historical_hit_rate is not None and not pd.isna(historical_hit_rate)
+
 
 # Multi-lookback momentum/volatility windows (trading days). These are the
 # lookback-gated technical features -- a 1-year momentum feature has no business

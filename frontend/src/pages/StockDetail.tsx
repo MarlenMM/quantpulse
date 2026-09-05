@@ -10,6 +10,7 @@ import {
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
+import type { ForecastRow } from "../lib/types";
 import { CATEGORIES, SUBSCORE_KEYS } from "../lib/types";
 import {
   confidenceLabel,
@@ -21,6 +22,105 @@ import {
 } from "../lib/format";
 import { useThemeTokens } from "../lib/theme";
 import { useApi } from "../lib/useApi";
+
+/** The forecast table's columns, shared by the graded and ungraded renders. */
+function ForecastTable({ rows }: { rows: ForecastRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <p className="muted">
+        No horizon for this model has been graded yet, so nothing here has a measured
+        accuracy. The ungraded forecasts are below.
+      </p>
+    );
+  }
+  return (
+    <div className="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" className="num">Horizon (days)</th>
+            <th scope="col" className="num">Return</th>
+            <th scope="col" className="num">Target</th>
+            <th scope="col" className="num">Low</th>
+            <th scope="col" className="num">High</th>
+            <th scope="col" className="num">
+              Hit rate
+              <Tip term="Hit rate" />
+            </th>
+            <th scope="col" className="num">
+              vs naive
+              <Tip
+                label="the naive comparison"
+                text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
+              />
+            </th>
+            <th scope="col" className="num">
+              Windows
+              <Tip
+                label="windows"
+                text="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record; below the minimum it is suppressed entirely and shows a dash."
+              />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((f) => (
+            <tr key={`${f.model_name}-${f.horizon_days}`}>
+              <td className="num">{f.horizon_days}</td>
+              <td className="num">{formatSignedPercent(f.point_return)}</td>
+              <td className="num">{formatPrice(f.point_price)}</td>
+              <td className="num">{formatPrice(f.lower_price)}</td>
+              <td className="num">{formatPrice(f.upper_price)}</td>
+              <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
+              <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
+              <td className="num">{f.hit_rate_windows ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Horizons with no measured accuracy, deliberately behind a disclosure.
+ *
+ * They used to sit in the same table as the graded rows, differing only by
+ * three dashes — and they are precisely the rows carrying the largest numbers.
+ * On the real universe every 63- and 252-day forecast is ungraded, the 252-day
+ * ones average +16% and reach +231%, and a reader skimming saw "+82.2%, target
+ * $379.77" set exactly like a figure standing on 154 measured windows. Section
+ * 7.6's rule — "a forecast without its own track record next to it invites more
+ * confidence than it's earned" — was satisfied to the letter by the dashes and
+ * defeated by the typography.
+ *
+ * Disclosed rather than deleted: the forecast is the model's honest output, and
+ * hiding a one-year number a reader came looking for would be its own kind of
+ * dishonesty. What changes is that it stops borrowing the credibility of the
+ * rows above it.
+ */
+function UngradedForecasts({ rows }: { rows: ForecastRow[] }) {
+  const horizons = rows
+    .map((f) => f.horizon_days)
+    .sort((a, b) => a - b)
+    .map((h) => `${h}-day`)
+    .join(", ");
+  return (
+    <details>
+      <summary>
+        Show {rows.length} ungraded horizon{rows.length === 1 ? "" : "s"} — {horizons}
+      </summary>
+      <p className="callout callout-warn">
+        <strong>These horizons have no measured accuracy at all.</strong> Not a low hit
+        rate — no hit rate: the model has never been graded over enough independent periods
+        at these horizons for a number to mean anything. A one-year horizon needs roughly
+        independent <em>years</em> to test against, and three years of stored history does
+        not contain many. Treat what follows as the model talking, not as a track record.
+      </p>
+      <ForecastTable rows={rows} />
+    </details>
+  );
+}
 
 export default function StockDetail({ symbol }: { symbol: string }) {
   const { data, error, loading } = useApi(() => api.stock(symbol), [symbol]);
@@ -49,6 +149,11 @@ export default function StockDetail({ symbol }: { symbol: string }) {
   const models = [...new Set(data.forecasts.map((f) => f.model_name))];
   const selectedModel = model ?? models[0] ?? null;
   const forecasts = data.forecasts.filter((f) => f.model_name === selectedModel);
+  // Split by whether the horizon has a measured accuracy at all. `is_graded`
+  // comes from the server so this page and the Streamlit one cannot disagree
+  // about which forecasts have evidence behind them.
+  const graded = forecasts.filter((f) => f.is_graded);
+  const ungraded = forecasts.filter((f) => !f.is_graded);
 
   // A category with no data is omitted from the radar rather than plotted at
   // zero — a missing sentiment score is not a *bad* sentiment score.
@@ -213,51 +318,8 @@ export default function StockDetail({ symbol }: { symbol: string }) {
                 ))}
               </select>
             </label>
-            <div className="tablewrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col" className="num">Horizon (days)</th>
-                    <th scope="col" className="num">Return</th>
-                    <th scope="col" className="num">Target</th>
-                    <th scope="col" className="num">Low</th>
-                    <th scope="col" className="num">High</th>
-                    <th scope="col" className="num">
-                      Hit rate
-                      <Tip term="Hit rate" />
-                    </th>
-                    <th scope="col" className="num">
-                      vs naive
-                      <Tip
-                        label="the naive comparison"
-                        text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
-                      />
-                    </th>
-                    <th scope="col" className="num">
-                      Windows
-                      <Tip
-                        label="windows"
-                        text="How many distinct out-of-sample periods the two hit rates were measured over. A rate from a handful of windows is an anecdote, not a track record; below the minimum it is suppressed entirely and shows a dash."
-                      />
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecasts.map((f) => (
-                    <tr key={`${f.model_name}-${f.horizon_days}`}>
-                      <td className="num">{f.horizon_days}</td>
-                      <td className="num">{formatSignedPercent(f.point_return)}</td>
-                      <td className="num">{formatPrice(f.point_price)}</td>
-                      <td className="num">{formatPrice(f.lower_price)}</td>
-                      <td className="num">{formatPrice(f.upper_price)}</td>
-                      <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
-                      <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
-                      <td className="num">{f.hit_rate_windows ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ForecastTable rows={graded} />
+            {ungraded.length > 0 && <UngradedForecasts rows={ungraded} />}
             <p className="muted small">
               <strong>Hit rate</strong> is this model's own out-of-sample directional
               accuracy at that horizon — shown next to the forecast, not hidden on
