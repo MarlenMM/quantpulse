@@ -80,11 +80,30 @@ test.describe("Stock Detail charts", () => {
     // A blank render still has a <main>, so assert on figures the fixture
     // actually carries. These are the values the Streamlit page shows for the
     // same stored row, which is the agreement the two front ends must keep.
+    //
+    // Recaptured whenever the API's shape changes, never hand-patched: this
+    // fixture predated `is_graded`, so every forecast read as ungraded, the
+    // whole table moved behind the disclosure, and the h=5 target below was
+    // present in the DOM but hidden. A fixture edited to satisfy the client
+    // stops being evidence about the server.
     await expect(page.getByText("AIZ — Assurant")).toBeVisible();
-    await expect(page.getByText("$282.77")).toBeVisible(); // arima h=5 target
+    await expect(page.getByText("$289.16")).toBeVisible(); // arima h=5 target
     await expect(page.getByText("1.78")).toBeVisible(); // Sharpe
-    await expect(page.getByText("2.85")).toBeVisible(); // Sortino
-    await expect(page.getByText("0.57")).toBeVisible(); // beta
+    await expect(page.getByText("2.84")).toBeVisible(); // Sortino
+    await expect(page.getByText("0.23")).toBeVisible(); // beta, vs ^GSPC
+  });
+
+  test("a graded horizon is visible and an ungraded one is not", async ({ page }) => {
+    // The fixture carries both -- 6 graded rows and 6 ungraded -- so this is a
+    // claim about the split, not about the data happening to be one-sided.
+    await stubApi(page);
+    await page.goto("/stocks/AIZ");
+
+    const rows = (horizon: string) =>
+      page.locator(`tbody tr:has(td:nth-child(1):text-is("${horizon}"))`);
+    await expect(rows("5").first()).toBeVisible();
+    await expect(rows("252").first()).not.toBeVisible();
+    await expect(page.locator("details", { hasText: /ungraded horizon/i })).toBeVisible();
   });
 });
 
