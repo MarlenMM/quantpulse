@@ -449,6 +449,18 @@ class StrategyResult:
     # real out-of-sample track record. `None` when the run has no wins or no
     # losses -- a payoff ratio needs both sides to be defined.
     payoff_ratio: float | None
+    # The same two measured on **excess** return over the benchmark, and `None`
+    # when no benchmark was supplied. These are what a position size should be
+    # built from: Kelly maximizes the growth rate of what you bet, and for an
+    # active strategy the thing being bet is the tilt away from the benchmark,
+    # not the whole position. Sized on absolute returns instead, a strategy that
+    # trails a buy-and-hold benchmark still returns a confident positive
+    # fraction -- it is measuring the market's return and calling it the
+    # strategy's edge. On excess returns, "no edge" comes out as a
+    # non-positive fraction, which `kelly_position_fraction` already reports as
+    # "do not take this bet at all".
+    excess_win_rate: float | None
+    excess_payoff_ratio: float | None
     benchmark_return: pd.Series
     benchmark_cagr: float | None
     benchmark_sharpe: float | None
@@ -624,6 +636,9 @@ def backtest_strategy(
         if benchmark is not None
         else pd.Series(dtype=float)
     )
+    # Period-by-period, so a win is "beat the benchmark over the same dates"
+    # rather than "went up in a month when everything went up".
+    excess = returns - bench if benchmark is not None and not bench.empty else None
 
     return StrategyResult(
         period_returns=returns,
@@ -633,6 +648,10 @@ def backtest_strategy(
         max_drawdown=max_drawdown(returns),
         win_rate=float((returns > 0).mean()) if not returns.empty else None,
         payoff_ratio=payoff_ratio(returns),
+        excess_win_rate=(
+            float((excess > 0).mean()) if excess is not None and not excess.empty else None
+        ),
+        excess_payoff_ratio=payoff_ratio(excess) if excess is not None else None,
         benchmark_return=bench,
         benchmark_cagr=cagr(bench, periods_per_year=ppy) if not bench.empty else None,
         benchmark_sharpe=sharpe_ratio(bench, periods_per_year=ppy) if not bench.empty else None,

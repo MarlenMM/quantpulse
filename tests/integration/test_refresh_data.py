@@ -16,10 +16,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
 from quantpulse.analysis import backtest as bt
-from quantpulse.analysis import risk
+from quantpulse.analysis import risk, scoring
+from quantpulse.ingestion import historical_constituents_client as hist
 from quantpulse.storage import persistence
 from quantpulse.storage.models import (
     AnalystConsensus,
+    BacktestResult,
     Base,
     FundamentalsSnapshot,
     IndexMembershipHistory,
@@ -1776,3 +1778,121 @@ class TestIndustryMacroCoversTheUniverse:
             f"themes tagged on articles but absent from thematic_baskets: "
             f"{seen['themes'] - membership_names}"
         )
+
+
+class TestTheBacktestRanksWhatThePageClaims:
+    """The Track Record page said "followed the algorithm's ratings" and did not.
+
+    Every stored run was ranked by a hand-rolled trailing return while the page
+    described itself as a track record of the app's ratings, and nothing in the
+    row or on the screen could have told a reader otherwise. Two things follow:
+    the signal is now the app's own scorer, and the run records which one it was.
+    """
+
+    def test_the_signal_is_the_apps_own_momentum_scorer(self) -> None:
+        """Not a proxy for `score_momentum` — the same function, same answer.
+
+        Asserted against `scoring.score_momentum` itself rather than against a
+        recomputed formula, so the backtest cannot drift away from the scorer the
+        nightly composite calls without this failing.
+        """
+        rng = np.random.default_rng(7)
+        n = scoring.MOMENTUM_WINDOW + 40
+        panel = pd.DataFrame(
+            {
+                "AAA": 100.0 * np.exp(np.cumsum(rng.normal(0.0015, 0.01, n))),
+                "BBB": 100.0 * np.exp(np.cumsum(rng.normal(-0.0005, 0.02, n))),
+            },
+            index=pd.date_range("2024-01-01", periods=n, freq="B"),
+        )
+        signal = refresh_data._momentum_signal(date(2026, 9, 5), panel)
+
+        assert set(signal) == {"AAA", "BBB"}
+        for symbol in ("AAA", "BBB"):
+            expected = scoring.score_momentum(
+                panel[symbol].tail(scoring.MOMENTUM_WINDOW + 1).to_frame(name="close")
+            )
+            assert signal[symbol] == pytest.approx(expected)
+
+    def test_it_is_not_the_old_trailing_return(self) -> None:
+        """A risk-adjusted score ranks differently from a raw return, or nothing changed.
+
+        Two names built so the higher raw return is the *more volatile* one: a
+        trailing-return ranking prefers it, a risk-adjusted one does not. If both
+        rankings agreed here the switch would be cosmetic.
+        """
+        n = scoring.MOMENTUM_WINDOW + 5
+        rng = np.random.default_rng(3)
+        calm = 100.0 * np.exp(np.cumsum(rng.normal(0.0010, 0.004, n)))
+        wild = 100.0 * np.exp(np.cumsum(rng.normal(0.0018, 0.040, n)))
+        panel = pd.DataFrame(
+            {"CALM": calm, "WILD": wild},
+            index=pd.date_range("2024-01-01", periods=n, freq="B"),
+        )
+        signal = refresh_data._momentum_signal(date(2026, 9, 5), panel)
+        raw_return = {s: float(panel[s].iloc[-1] / panel[s].iloc[0] - 1.0) for s in panel.columns}
+
+        assert raw_return["WILD"] > raw_return["CALM"], "fixture: WILD must win on raw return"
+        assert signal["CALM"] > signal["WILD"], (
+            "the risk-adjusted score ranked the same way a raw trailing return does, so "
+            "this fixture cannot tell the two signals apart"
+        )
+
+    def test_it_uses_scorings_own_window_not_a_second_copy(self) -> None:
+        """A shorter frame silently truncates `score_momentum`'s 126-bar window.
+
+        The backtest would then publish a different momentum score than the
+        nightly composite computes for the same prices -- the same shape of bug
+        as the three copies of the beta window.
+        """
+        n = scoring.MOMENTUM_WINDOW + 60
+        rng = np.random.default_rng(11)
+        series = 100.0 * np.exp(np.cumsum(rng.normal(0.001, 0.012, n)))
+        panel = pd.DataFrame(
+            {"AAA": series}, index=pd.date_range("2024-01-01", periods=n, freq="B")
+        )
+        from_backtest = refresh_data._momentum_signal(date(2026, 9, 5), panel)["AAA"]
+        from_scorer = scoring.score_momentum(panel[["AAA"]].rename(columns={"AAA": "close"}))
+        assert from_backtest == pytest.approx(from_scorer)
+
+    def test_a_stored_run_records_which_signal_produced_it(self, engine: Engine) -> None:
+        """Without it a row is uninterpretable after the signal changes -- as it just did."""
+        fake_get_session, factory = _fake_session_factory(engine)
+        rng = np.random.default_rng(5)
+        n = 400
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        with factory() as session:
+            for symbol in ("AAA", "BBB", "CCC"):
+                session.add(Ticker(symbol=symbol, name=symbol, sector="Tech", asset_type="equity"))
+                session.add(
+                    IndexMembershipHistory(
+                        index_name=hist.INDEX_NAME, symbol=symbol, added_date=dates[0].date()
+                    )
+                )
+                level = 100.0
+                for day, shock in zip(dates, rng.normal(0.0005, 0.012, n), strict=True):
+                    level *= float(np.exp(shock))
+                    session.add(
+                        PriceHistory(
+                            symbol=symbol,
+                            date=day.date(),
+                            open=level,
+                            high=level,
+                            low=level,
+                            close=level,
+                            adj_close=level,
+                            volume=1_000_000,
+                        )
+                    )
+            session.commit()
+
+        with patch("refresh_data.get_session", fake_get_session):
+            with factory() as session:
+                refresh_data.refresh_backtest(session, dates[-1].date())
+                session.commit()
+
+        with factory() as session:
+            runs = session.scalars(sa.select(BacktestResult)).all()
+        assert runs, "the fixture produced no stored run to assert on"
+        assert runs[-1].signal_name == refresh_data._BACKTEST_SIGNAL_NAME
+        assert runs[-1].signal_name is not None

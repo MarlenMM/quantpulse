@@ -14,6 +14,7 @@ only add "database is locked" failures without buying any real parallelism.
 
 import argparse
 import logging
+import math
 import signal
 import sys
 import threading
@@ -248,7 +249,17 @@ _BACKTEST_LOOKBACK_DAYS = 1825  # ~5 years
 _BACKTEST_CADENCE = "monthly"
 _BACKTEST_TOP_FRACTION = 0.2
 _BACKTEST_TXN_COST = 0.001  # 0.1% per unit turnover (Section 7.6's bid-ask stand-in)
-_BACKTEST_MOMENTUM_LOOKBACK = 120  # ~6-month trailing return as the ranking signal
+#: Stored on every run, so a row says what it ranked. See `_momentum_signal` for
+#: why this is one category rather than the full composite rating, and
+#: `BacktestResult` for why the answer lives in the row instead of in a comment.
+_BACKTEST_SIGNAL_NAME = "momentum_category"
+# There is deliberately no separate momentum-lookback constant here any more.
+# `_momentum_signal` calls `scoring.score_momentum`, which owns both the window
+# (`scoring.MOMENTUM_WINDOW`) and the floor it refuses to score below
+# (`scoring.MIN_MOMENTUM_BARS`), so the backtest now declines to trade exactly
+# when the scorer declines to score. A second threshold over here is how the
+# backtest and the nightly composite would come to disagree about the same
+# stock's momentum on the same prices.
 
 # The insider/13F table columns populated from their ingestion DataFrames.
 _INSIDER_COLUMNS = (
@@ -1341,21 +1352,57 @@ def _equal_weight_benchmark(panel: pd.DataFrame) -> pd.Series:
 
 
 def _momentum_signal(as_of: date, panel: pd.DataFrame) -> dict[str, float]:
-    """Trailing `_BACKTEST_MOMENTUM_LOOKBACK`-day return per name -- the strategy's ranking.
+    """Rank the universe by the app's own **momentum category score** (Section 7.5).
 
-    Reads only `panel` (already sliced to `<= as_of` by the engine), so it is
-    point-in-time by construction. Names without enough history are simply
-    omitted from the ranking.
+    Calls `scoring.score_momentum` -- the exact function the nightly composite
+    calls -- rather than the hand-rolled trailing return this used to be. The
+    backtest now grades a scorer the app actually ships instead of a proxy for
+    one, which is the difference between a track record of this project and a
+    track record of an idea resembling it.
+
+    **Why momentum alone, and not the composite rating the page is about.** Five
+    of the seven categories cannot be reconstructed at a 2023 rebalance date
+    from anything in this database, and ranking 2023 names on 2026 fundamentals
+    would be exactly the look-ahead bias Section 22 exists to prevent. Measured
+    depth of every scoring input:
+
+        price_history            2021-09 -> 2026-09   1,253 dates
+        insider_transactions     2019-05 -> 2026-08     272 dates
+        composite_scores         2026-07 -> 2026-08      21 dates
+        options_signals          2026-07 -> 2026-08      21 dates
+        fundamentals_snapshot    2026-08 -> 2026-08       4 dates
+        analyst_consensus        2026-08 -> 2026-08       4 dates
+        sentiment_scores         2026-08 -> 2026-08       1 date
+        institutional_ownership  2026-03 -> 2026-03       1 quarter
+
+    **And why not `score_technical` too**, which is price-derived and would
+    otherwise qualify: it needs OHLC, and `price_history`'s OHLC columns are
+    *unadjusted* (only `adj_close` is). Over a multi-year window splits are
+    routine, and a 4:1 split reads to every indicator as a 75% crash. The panel
+    here is adjusted closes, so momentum is computed on a clean series and
+    technical is left out rather than silently corrupted.
+
+    Point-in-time by construction: `panel` is already sliced to `<= as_of` by the
+    engine, and `score_momentum` reads only to the end of the frame it is given.
+    Names without enough history score `None` and drop out of the ranking.
     """
-    if len(panel) <= _BACKTEST_MOMENTUM_LOOKBACK:
-        return {}
-    recent = panel.iloc[-1]
-    past = panel.iloc[-1 - _BACKTEST_MOMENTUM_LOOKBACK]
     signal: dict[str, float] = {}
     for symbol in panel.columns:
-        now, then = recent.get(symbol), past.get(symbol)
-        if pd.notna(now) and pd.notna(then) and then > 0:
-            signal[str(symbol)] = float(now / then - 1.0)
+        # Drop this symbol's missing bars **before** taking the window, not
+        # after. A wide panel's index is the union of every member's calendar,
+        # so a name that listed late or trades thinly carries NaNs on dates that
+        # belong to other symbols. Slicing the panel first and dropping second
+        # counts those blanks against the window and hands `score_momentum` a
+        # short frame, which makes one name's history depend on another name's
+        # -- and quietly drops it from the ranking. One extra bar because a
+        # window of N returns needs N+1 closes; the window length comes from
+        # `scoring`'s own constant rather than a second copy of the number.
+        closes = (
+            pd.to_numeric(panel[symbol], errors="coerce").dropna().tail(scoring.MOMENTUM_WINDOW + 1)
+        )
+        score = scoring.score_momentum(closes.to_frame(name="close"))
+        if score is not None and math.isfinite(score):
+            signal[str(symbol)] = float(score)
     return signal
 
 
@@ -1461,6 +1508,9 @@ def refresh_backtest(session: Session, today: date) -> int:
             "max_drawdown": result.max_drawdown,
             "win_rate": result.win_rate,
             "payoff_ratio": result.payoff_ratio,
+            "excess_win_rate": result.excess_win_rate,
+            "excess_payoff_ratio": result.excess_payoff_ratio,
+            "signal_name": _BACKTEST_SIGNAL_NAME,
             "benchmark_cagr": result.benchmark_cagr,
             "benchmark_sharpe": result.benchmark_sharpe,
             "avg_turnover": result.avg_turnover,

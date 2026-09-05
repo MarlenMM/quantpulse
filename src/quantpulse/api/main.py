@@ -573,16 +573,23 @@ def backtest(
     """Stored strategy backtest runs, newest first, with bootstrap CIs (Section 7.6).
 
     Each run carries its own fractional-Kelly position size, computed here from
-    the run's realized win rate and payoff ratio. Deriving it server-side keeps
-    one implementation of Section 27's sizing rule: the Streamlit Track Record
-    page calls `kelly_position_fraction` directly, and a second copy in
-    TypeScript could quietly disagree about how much to bet.
+    the run's win rate and payoff ratio **against the benchmark**. Deriving it
+    server-side keeps one implementation of Section 27's sizing rule: the
+    Streamlit Track Record page calls `kelly_position_fraction` directly, and a
+    second copy in TypeScript could quietly disagree about how much to bet.
+
+    The excess-return inputs are the point: Kelly sizes the thing being bet, and
+    an active strategy bets the tilt away from the benchmark rather than the
+    whole position. Fed absolute returns it sized a confident bet on a run whose
+    CAGR trailed its own buy-and-hold benchmark.
     """
     frame = persistence.read_backtest_history(session, limit=limit)
+    history_days = persistence.count_composite_score_dates(session)
     runs = []
     for row in _rows(frame):
         run = BacktestRun(**row)
-        run.kelly_fraction = kelly_position_fraction(run.win_rate, run.payoff_ratio)
+        run.kelly_fraction = kelly_position_fraction(run.excess_win_rate, run.excess_payoff_ratio)
+        run.composite_history_days = history_days
         runs.append(run)
     return runs
 

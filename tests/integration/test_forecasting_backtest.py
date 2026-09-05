@@ -16,7 +16,7 @@ from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
-from quantpulse.analysis import backtest
+from quantpulse.analysis import backtest, scoring
 from quantpulse.analysis.forecasting import baseline_forecast
 from quantpulse.storage.models import (
     BacktestResult,
@@ -50,7 +50,13 @@ def _fast_constants(monkeypatch: pytest.MonkeyPatch) -> None:
         refresh_data, "_FORECAST_RUNNERS", {"baseline": (baseline_forecast, "baseline")}
     )
     monkeypatch.setattr(refresh_data, "_ACCURACY_SAMPLE_SIZE", 3)
-    monkeypatch.setattr(refresh_data, "_BACKTEST_MOMENTUM_LOOKBACK", 20)
+    # The backtest's ranking signal is now `scoring.score_momentum` itself, so
+    # the window to shrink is the scorer's own -- `refresh_data` no longer keeps
+    # a second copy of it. Patching the old constant here silently did nothing
+    # once that changed, and the fixture sat in cash for its first three
+    # rebalances waiting for 126 bars it never had.
+    monkeypatch.setattr(scoring, "MOMENTUM_WINDOW", 20)
+    monkeypatch.setattr(scoring, "MIN_MOMENTUM_BARS", 10)
 
 
 def _seed_prices(
