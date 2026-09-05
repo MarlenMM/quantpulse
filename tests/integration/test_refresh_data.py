@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from collections.abc import Iterator
@@ -1475,3 +1476,151 @@ def test_catalogue_sync_is_idempotent(session: Session) -> None:
         first = refresh_data.sync_catalogue(session)
         second = refresh_data.sync_catalogue(session)
     assert (first, second) == (1, 0)
+
+
+class TestAStepThatWritesNothingIsNotASuccess:
+    """ "Zero rows, no exception" was the shape the 13F bug wore for months.
+
+    `refresh_institutional_ownership` caught its own 404, logged it and returned
+    0. `step()` saw a clean return, so a source that had *never once* produced a
+    row was indistinguishable from a source that simply had nothing new. The run
+    said "partial" for unrelated reasons and nobody looked.
+
+    These drive the real `run()` rather than a stand-in `step`, because the
+    behaviour under test lives in that closure -- a reimplementation in the test
+    would pass whatever the real one did.
+    """
+
+    @staticmethod
+    def _run_with_institutional(engine: Engine, rows: int) -> tuple[str, list[str]]:
+        fake_get_session, factory = _fake_session_factory(engine)
+        records: list[str] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        handler = _Capture()
+        logging.getLogger("refresh_data").addHandler(handler)
+        try:
+            with (
+                patch("refresh_data.get_session", fake_get_session),
+                patch(
+                    "refresh_data.wikipedia_client.fetch_sp500_constituents",
+                    return_value=_one_name_universe(),
+                ),
+                patch(
+                    "refresh_data.fetch_ticker_data",
+                    side_effect=lambda symbol, *a, **k: refresh_data.TickerFetchResult(
+                        symbol=symbol, price_df=_price_df(symbol, rows=1)
+                    ),
+                ),
+                patch("refresh_data.refresh_institutional_ownership", return_value=rows),
+                patch(
+                    "refresh_data.yfinance_client.fetch_price_history",
+                    side_effect=lambda symbol, period="5y": _price_df(symbol, rows=3),
+                ),
+                patch(
+                    "refresh_data.gdelt_client.fetch_articles",
+                    return_value=_empty_df(["title", "url"]),
+                ),
+                patch(
+                    "refresh_data.gdelt_client.fetch_tone_timeline",
+                    return_value=_empty_df(["date", "tone", "query"]),
+                ),
+            ):
+                # `ignore_market_calendar` so the assertion is about the step's
+                # own emptiness on any day of the week, not about the calendar.
+                refresh_data.run(
+                    job_name="test_empty_step",
+                    force_weekly=True,
+                    ignore_market_calendar=True,
+                )
+        finally:
+            logging.getLogger("refresh_data").removeHandler(handler)
+
+        with factory() as session:
+            log = session.scalars(select(RefreshLog)).all()[-1]
+        return log.status, records
+
+    def test_an_empty_13f_step_downgrades_the_run(self, engine: Engine) -> None:
+        status, messages = self._run_with_institutional(engine, rows=0)
+        assert status == "partial", (
+            "a 13F step that wrote nothing reported a clean run -- which is exactly "
+            "how six months of empty institutional ownership went unnoticed"
+        )
+        assert any("wrote no rows" in m for m in messages), (
+            f"nothing in the log named the empty step; messages were {messages}"
+        )
+        assert any("institutional_ownership" in m and "wrote nothing" in m for m in messages), (
+            "the run summary did not name which step wrote nothing"
+        )
+
+    def test_a_13f_step_that_writes_rows_does_not(self, engine: Engine) -> None:
+        """The other half, or the assertion above is satisfied by any run at all."""
+        status, messages = self._run_with_institutional(engine, rows=42)
+        assert status == "success"
+        assert not any("wrote no rows" in m for m in messages)
+
+    def test_membership_is_narrow_on_purpose(self) -> None:
+        """Steps with honest empty runs must stay out, or the signal becomes noise.
+
+        `backtest` explicitly declines to store a run that would describe
+        nothing, `tier2_news` finds no matching articles some days, and
+        `macro_indicators` is empty without a FRED key. Listing any of them
+        would mark a correct run degraded and train a reader to ignore the flag.
+        """
+        assert refresh_data._STEPS_EXPECTED_TO_WRITE == {
+            "institutional_ownership",
+            "benchmark_prices",
+        }
+        assert not (refresh_data._STEPS_EXPECTED_TO_WRITE & refresh_data._CRITICAL_STEPS)
+
+
+class TestInstitutionalOwnershipAsksWhichWindowExists:
+    """The pipeline must *use* the resolver, not merely have one available.
+
+    Unit tests for `latest_published_window` pass whether or not
+    `refresh_institutional_ownership` calls it -- reverting the call site to
+    `quarter_window_for(today)` left every one of them green. The bug was
+    always in the caller, so the assertion has to be there too.
+    """
+
+    @staticmethod
+    def _fetch_window(engine: Engine, resolved: tuple[date, date] | None) -> tuple[int, list]:
+        fake_get_session, factory = _fake_session_factory(engine)
+        universe = _one_name_universe()[["symbol", "name", "sector"]]
+        with (
+            patch("refresh_data.get_session", fake_get_session),
+            patch.object(
+                refresh_data.edgar_13f_client, "latest_published_window", return_value=resolved
+            ),
+            patch.object(
+                refresh_data.edgar_13f_client,
+                "fetch_institutional_ownership_trend",
+                return_value=_empty_df(list(refresh_data._INSTITUTIONAL_COLUMNS)),
+            ) as fetch,
+        ):
+            with factory() as session:
+                rows = refresh_data.refresh_institutional_ownership(
+                    session, universe, date(2026, 9, 5)
+                )
+        return rows, fetch.call_args_list
+
+    def test_it_fetches_the_resolved_window_not_the_computed_one(self, engine: Engine) -> None:
+        today = date(2026, 9, 5)
+        resolved = (date(2026, 3, 1), date(2026, 5, 31))
+        _, calls = self._fetch_window(engine, resolved)
+
+        assert len(calls) == 1
+        assert calls[0].args[0] == resolved
+        # The window the old code computed, named explicitly: on this date it is
+        # Sep-Nov 2026, a quarter that has not finished and that SEC therefore
+        # has not published. Fetching it is the whole bug.
+        assert calls[0].args[0] != refresh_data.edgar_13f_client.quarter_window_for(today)
+
+    def test_no_published_window_writes_nothing_and_downloads_nothing(self, engine: Engine) -> None:
+        """`None` means give up, not guess -- and certainly not start a 100MB download."""
+        rows, calls = self._fetch_window(engine, None)
+        assert rows == 0
+        assert calls == []

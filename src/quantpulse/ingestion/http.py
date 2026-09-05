@@ -55,6 +55,7 @@ def _request_with_retries(
     timeout: float = 15.0,
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
+    raise_on_status: bool = True,
 ) -> requests.Response:
     """Request `url`, retrying network errors and 429/5xx with exponential backoff.
 
@@ -62,21 +63,32 @@ def _request_with_retries(
     instead of guessing — the polite behavior that keeps a free-tier key
     from being escalated to an outright ban (Section 19).
 
-    `method` is "GET" (the ingestion clients) or "POST" (the LLM providers in
-    `quantpulse.llm`, whose APIs take a JSON request body). The two are
-    dispatched explicitly rather than through `requests.request` so the GET
-    path still calls `requests.get` — the retry/backoff behavior every
-    ingestion client depends on is unchanged by the POST addition.
+    `method` is "GET" (the ingestion clients), "POST" (the LLM providers in
+    `quantpulse.llm`, whose APIs take a JSON request body) or "HEAD" (asking
+    whether a large file exists without downloading it). They are dispatched
+    explicitly rather than through `requests.request` so the GET path still
+    calls `requests.get` — the retry/backoff behavior every ingestion client
+    depends on is unchanged by the other two.
 
     Retrying a POST is safe for the only POSTs this project makes: an LLM
     completion is a pure function call with no server-side state to duplicate,
     unlike a POST that creates a resource.
+
+    `raise_on_status=False` returns 4xx responses to the caller instead of
+    raising. That is for the one case where a 404 is an *answer* rather than a
+    failure — asking whether a file has been published yet — and it deliberately
+    does not extend to 429/5xx, which still retry above and then raise, because
+    those genuinely are failures however the caller means to read them.
     """
     for attempt in range(max_retries + 1):
         try:
             if method == "POST":
                 response = requests.post(
                     url, params=params, headers=headers, json=json_body, timeout=timeout
+                )
+            elif method == "HEAD":
+                response = requests.head(
+                    url, params=params, headers=headers, timeout=timeout, allow_redirects=True
                 )
             else:
                 response = requests.get(url, params=params, headers=headers, timeout=timeout)
@@ -92,7 +104,8 @@ def _request_with_retries(
             )
             continue
 
-        response.raise_for_status()
+        if raise_on_status:
+            response.raise_for_status()
         return response
     raise RuntimeError("unreachable")  # pragma: no cover
 
@@ -168,6 +181,40 @@ def post_json(
         backoff_seconds=backoff_seconds,
     )
     return response.json()
+
+
+def resource_exists(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 2,
+    backoff_seconds: float = 1.0,
+) -> bool:
+    """Whether `url` exists, asked with a HEAD so nothing large is transferred.
+
+    For deciding *which* of several large files to download — a 404 here means
+    "not published yet", which is a normal answer, so it comes back as `False`
+    rather than as an exception. A 429/5xx still retries and then raises: the
+    server being broken is not the same answer as the file being absent, and
+    collapsing the two would report a published file as missing during an
+    outage.
+
+    Callers should keep this outside their circuit breaker. A breaker exists to
+    stop hammering a failing source, and a run of honest 404s is not a failing
+    source — counting them would open the circuit and then block the download
+    of the file that *was* found.
+    """
+    response = _request_with_retries(
+        url,
+        method="HEAD",
+        headers=headers,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+        raise_on_status=False,
+    )
+    return response.status_code < 400
 
 
 def get_bytes(

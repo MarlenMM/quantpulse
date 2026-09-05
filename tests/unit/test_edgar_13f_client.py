@@ -116,6 +116,54 @@ def test_normalize_issuer_name(raw_name: str, expected: str) -> None:
     assert edgar_13f_client._normalize_issuer_name(raw_name) == expected
 
 
+def test_normalize_issuer_name_survives_a_blank_issuer() -> None:
+    """The real bulk file has them, and one used to kill the whole quarter.
+
+    A filer may leave `NAMEOFISSUER` empty; pandas reads that column as a float
+    NaN, and `_normalize_issuer_name` raised `AttributeError: 'float' object has
+    no attribute 'strip'` on the first chunk of the first real file ever parsed
+    -- losing all 489 matchable names over a handful of unusable rows. An
+    unnamed holding cannot be matched to a ticker by name, so an empty key is
+    the honest result and the row drops out with every other non-match.
+    """
+    for blank in (float("nan"), None, 123.0):
+        assert edgar_13f_client._normalize_issuer_name(blank) == ""
+
+
+def test_holdings_skip_blank_issuer_rows_without_losing_the_file(tmp_path: Path) -> None:
+    """One NaN issuer must cost that row, not the other 99.99% of the quarter."""
+    window = edgar_13f_client.quarter_window_for(date(2026, 4, 1))
+    infotable = "\n".join(
+        [
+            _INFOTABLE_HEADER,
+            _infotable_row("0001", 1, "APPLE INC", 5_000, 100),
+            # A blank issuer, exactly as the real file carries it.
+            _infotable_row("0002", 2, "", 9_999, 999),
+            _infotable_row("0003", 3, "EBAY INC.", 3_000, 60),
+        ]
+    )
+    submissions = "\n".join(
+        [
+            _SUBMISSION_HEADER,
+            _submission_row("0001", "15-May-2026", "13F-HR", "111", "31-Mar-2026"),
+            _submission_row("0002", "15-May-2026", "13F-HR", "222", "31-Mar-2026"),
+            _submission_row("0003", "15-May-2026", "13F-HR", "333", "31-Mar-2026"),
+        ]
+    )
+    with patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)):
+        _write_synthetic_zip(
+            edgar_13f_client._local_zip_path(window),
+            infotable_tsv=infotable,
+            submission_tsv=submissions,
+        )
+        universe = pd.DataFrame(
+            [{"symbol": "AAPL", "name": "Apple Inc."}, {"symbol": "EBAY", "name": "eBay Inc."}]
+        )
+        holdings = edgar_13f_client.fetch_quarterly_institutional_holdings(window, universe)
+    assert sorted(holdings["symbol"]) == ["AAPL", "EBAY"]
+    assert holdings["total_shares_held"].sum() == 160  # the 999 blank-issuer shares are not in it
+
+
 def test_normalize_issuer_name_matches_ticker_universe_style_names() -> None:
     # Both sides of the join must normalize to the same key.
     assert edgar_13f_client._normalize_issuer_name(
@@ -339,3 +387,141 @@ def test_fetch_institutional_ownership_trend_empty_current_returns_empty_shape(
 
     assert result.empty
     assert list(result.columns) == edgar_13f_client._TREND_COLUMNS
+
+
+# --- latest_published_window ---------------------------------------------------
+
+
+class TestLatestPublishedWindow:
+    """The window resolver, and the bug it exists to make impossible.
+
+    `refresh_institutional_ownership` asked `quarter_window_for(today)` for the
+    life of the project. That names the quarter currently *being filed*, and SEC
+    publishes a window's bulk file only once the window has closed -- so the URL
+    could not exist on any day of any quarter, the fetch 404ed, and
+    `institutional_ownership` held zero rows all-time.
+    """
+
+    @staticmethod
+    def _published(*urls: str):
+        """A `resource_exists` stand-in that only knows about `urls`."""
+        available = set(urls)
+        return lambda url, **_: url in available
+
+    def test_it_never_assumes_the_in_progress_quarter_exists(self, tmp_path: Path) -> None:
+        """The regression itself, stated as the property rather than as a date.
+
+        The old code *computed* `quarter_window_for(today)` and fetched it. So
+        the property is not "it never returns the in-progress window" -- if SEC
+        ever did publish one early, using it would be right -- but "it never
+        returns a window it has not confirmed". With nothing published, the
+        honest answer is `None`, and the old code would have handed back the
+        in-progress window on every one of these dates.
+        """
+        with patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)):
+            for as_of in (
+                date(2026, 9, 5),
+                date(2026, 1, 15),
+                date(2026, 3, 1),
+                date(2026, 6, 30),
+                date(2026, 12, 31),
+            ):
+                with patch.object(
+                    edgar_13f_client, "resource_exists", side_effect=self._published()
+                ):
+                    assert edgar_13f_client.latest_published_window(as_of) is None
+                # ...and the window the old code would have used is exactly the
+                # one nothing confirmed.
+                assert edgar_13f_client.quarter_window_for(as_of)[1] >= as_of
+
+    def test_it_prefers_the_newest_published_window(self, tmp_path: Path) -> None:
+        """Walking back stops at the first hit, so a fresher file always wins."""
+        jun_aug = (date(2026, 6, 1), date(2026, 8, 31))
+        mar_may = (date(2026, 3, 1), date(2026, 5, 31))
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(
+                edgar_13f_client,
+                "resource_exists",
+                side_effect=self._published(
+                    edgar_13f_client._bulk_zip_url(jun_aug),
+                    edgar_13f_client._bulk_zip_url(mar_may),
+                ),
+            ),
+        ):
+            assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) == jun_aug
+
+    def test_it_walks_back_past_a_closed_but_unpublished_window(self, tmp_path: Path) -> None:
+        """Closing is not publishing, and the lag is weeks.
+
+        Measured live on 2026-09-05: Jun-Aug had closed five days earlier and
+        still 404ed, while Mar-May served 200. Any fix that subtracted a fixed
+        number of quarters would be the same bug with a different constant, so
+        the resolver asks.
+        """
+        mar_may = (date(2026, 3, 1), date(2026, 5, 31))
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(
+                edgar_13f_client,
+                "resource_exists",
+                side_effect=self._published(edgar_13f_client._bulk_zip_url(mar_may)),
+            ),
+        ):
+            assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) == mar_may
+
+    def test_a_cached_zip_counts_as_published_without_a_request(self, tmp_path: Path) -> None:
+        """A warm cache stays usable with the network refusing every probe.
+
+        Nothing is "published" as far as `resource_exists` is concerned, so the
+        only way to reach Jun-Aug is the cache -- and the probe must have been
+        asked about the newer window and not about the cached one.
+        """
+        sep_nov = (date(2026, 9, 1), date(2026, 11, 30))
+        jun_aug = (date(2026, 6, 1), date(2026, 8, 31))
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(
+                edgar_13f_client, "resource_exists", side_effect=self._published()
+            ) as probe,
+        ):
+            edgar_13f_client._local_zip_path(jun_aug).write_bytes(b"cached")
+            assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) == jun_aug
+        probed = [call.args[0] for call in probe.call_args_list]
+        assert probed == [edgar_13f_client._bulk_zip_url(sep_nov)]
+
+    def test_it_gives_up_rather_than_guessing(self, tmp_path: Path) -> None:
+        """`None`, not a window nobody checked.
+
+        Returning an unverified guess is how the original bug published a URL
+        that could not exist; the caller logs a warning and writes nothing.
+        """
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(edgar_13f_client, "resource_exists", side_effect=self._published()),
+        ):
+            assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) is None
+
+    def test_the_walk_is_bounded(self, tmp_path: Path) -> None:
+        """An SEC outage costs a handful of HEADs, not an unbounded crawl."""
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(
+                edgar_13f_client, "resource_exists", side_effect=self._published()
+            ) as probe,
+        ):
+            edgar_13f_client.latest_published_window(date(2026, 9, 5), max_lookback=3)
+        assert probe.call_count == 3
+
+    def test_it_does_not_ingest_a_window_older_than_the_lookback(self, tmp_path: Path) -> None:
+        """A year-old window is worse than nothing when labelled "this quarter's trend"."""
+        ancient = (date(2025, 3, 1), date(2025, 5, 31))
+        with (
+            patch.object(edgar_13f_client, "get_settings", return_value=_fake_settings(tmp_path)),
+            patch.object(
+                edgar_13f_client,
+                "resource_exists",
+                side_effect=self._published(edgar_13f_client._bulk_zip_url(ancient)),
+            ),
+        ):
+            assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) is None
