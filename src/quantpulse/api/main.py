@@ -342,7 +342,8 @@ def stock_detail(
         score=ScreenerRow(**score_rows[0]) if score_rows else None,
         prices=[PriceBar(**row) for row in _rows(bars)],
         forecasts=[
-            ForecastRow(**row) for row in _rows(persistence.read_symbol_forecasts(session, ticker))
+            ForecastRow(**row, is_graded=forecasting.is_graded(row.get("historical_hit_rate")))
+            for row in _rows(persistence.read_symbol_forecasts(session, ticker))
         ],
         patterns=[
             PatternRow(**row) for row in _rows(persistence.read_symbol_patterns(session, ticker))

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
 [![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-1%2C521-0f7a44.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1%2C529-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
@@ -34,7 +34,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,521** (unit, integration, and property-based via Hypothesis) |
+| Automated tests | **1,529** (unit, integration, and property-based via Hypothesis) |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **13 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
@@ -214,7 +214,7 @@ not grow when the panel expanded by 330 names.
 |---|---|
 | **Dashboard** | Market Regime Index gauge, top-ranked names, what changed since the last refresh, sector rotation, market-moving Tier-2/3 news |
 | **Screener** | The ranked, filterable table, with sliders that re-weight the seven score categories *and re-rate against them* client-side, a relative/absolute rating-scheme switch, and a 2–4 ticker Compare mode |
-| **Stock Detail** | Price chart with support/resistance and detected patterns, sub-score radar, forecast fan chart with each model's own hit-rate *and the number of windows behind it*, Monte Carlo paths, per-stock risk block, short interest read both ways, sector macro overlay, news feed, optional plain-English summaries of the sentiment move and the latest SEC filing, and a chat box grounded strictly in that stock's computed numbers |
+| **Stock Detail** | Price chart with support/resistance and detected patterns, sub-score radar, forecast fan chart with each model's own hit-rate *and the number of windows behind it* (horizons with no measured accuracy — in practice every 63- and 252-day row — sit behind their own disclosure rather than beside the graded ones), Monte Carlo paths, per-stock risk block, short interest read both ways, sector macro overlay, news feed, optional plain-English summaries of the sentiment move and the latest SEC filing, and a chat box grounded strictly in that stock's computed numbers |
 | **Portfolio & Watchlist** | FIFO tax-lot positions, risk dashboard (vol/Sharpe/Sortino/beta/VaR/correlations + correlation clusters), a target allocation from any of the three optimizers with its concrete trade list, Add-Trim-Hold-Sell guidance, concentration + sector-gap warnings |
 | **Backtest / Track Record** | Sharpe and CAGR with bootstrap confidence intervals, benchmark comparison, stated cost assumptions — and the ranking signal named, with what it is *not* spelled out |
 | **Settings / About** | Data freshness per dataset, pipeline health, configuration, methodology and limitations |
