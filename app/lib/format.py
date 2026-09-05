@@ -85,6 +85,15 @@ STALE_AFTER_DAYS: dict[str, int] = {
     "backtest": 16,
     "analyst_consensus": 16,
     "fundamentals": 100,
+    # 13F is the slowest source in the project by a wide margin, and its age is
+    # dominated by publication lag rather than by this pipeline. The window is a
+    # quarter (~91 days), SEC publishes the bulk file weeks after that window
+    # closes, and the period the file reports on is older still: freshly
+    # ingested on 2026-09-05, the newest available row reports on March. So the
+    # honest ceiling is roughly a quarter plus a full lag -- below that a "stale"
+    # badge would be permanently lit and would mean nothing, which is the exact
+    # failure the comment above describes.
+    "institutional_ownership": 200,
 }
 
 #: Anything not named above. Weekly-ish, which is this pipeline's slowest

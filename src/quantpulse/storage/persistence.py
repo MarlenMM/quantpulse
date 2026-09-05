@@ -1171,6 +1171,19 @@ def read_data_freshness(session: Session) -> dict[str, date | None]:
     that has never been populated maps to `None` rather than being omitted, so
     the UI can distinguish "stale" from "never ran" instead of showing a
     reassuring blank for both.
+
+    `institutional_ownership` is here because it was *not*, and its absence is
+    half of why a source that had never produced a single row went unnoticed for
+    the life of the project: with no freshness entry there was no surface
+    anywhere in either front end on which an empty 13F table could show up as
+    empty. A dataset the composite score consumes and no page reports on is a
+    dataset that can quietly stop.
+
+    It is keyed by the quarter it reports on, not by when the file was fetched.
+    13F is quarterly and published weeks in arrears, so a freshly ingested
+    window is legitimately a few months old -- reading "5 months ago" here is
+    correct rather than stale, which is exactly what a reader needs to know
+    before treating it as a current signal.
     """
     return {
         "prices": session.scalars(select(func.max(PriceHistory.date))).first(),
@@ -1181,6 +1194,9 @@ def read_data_freshness(session: Session) -> dict[str, date | None]:
         "forecasts": session.scalars(select(func.max(Forecast.generated_date))).first(),
         "market_regime": session.scalars(select(func.max(MarketRegime.date))).first(),
         "backtest": session.scalars(select(func.max(BacktestResult.run_date))).first(),
+        "institutional_ownership": session.scalars(
+            select(func.max(InstitutionalOwnership.quarter_end_date))
+        ).first(),
     }
 
 
