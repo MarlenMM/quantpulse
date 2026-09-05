@@ -122,6 +122,14 @@ export interface ForecastRow {
   // rate from 40 windows and one from 3 are different claims; without this they
   // rendered identically.
   hit_rate_windows: number | null;
+  /**
+   * Whether this row has a measured out-of-sample accuracy at all. Sent by the
+   * server (`forecasting.is_graded`) rather than re-derived from a null check
+   * here: it decides how prominently a number is displayed, and the same rule
+   * written twice is how two front ends grade the same forecast differently.
+   * `false` means *never measured*, never "measured and poor".
+   */
+  is_graded: boolean;
   generated_date: string;
 }
 

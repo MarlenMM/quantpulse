@@ -91,6 +91,33 @@ test("a stock page deep link renders its charts", async ({ page }) => {
   await expect(page.locator(".js-plotly-plot")).toHaveCount(3);
   await expect(page.locator(".main-svg").first()).toBeVisible();
 
+  // The forecast table's default view must hold only horizons with a measured
+  // accuracy. Every 63- and 252-day forecast in the published data is ungraded,
+  // and those carry by far the largest returns (AIZ's one-year row is +29%
+  // against +2% at twenty days), so an ungraded row rendered in the same table
+  // as a graded one borrows evidence it does not have. Asserted in a real
+  // browser because it is a claim about what a reader sees, not about the data.
+  // Scoped to the *first* such table, which is the graded one: a closed
+  // `<details>` still holds its rows in the DOM, so a whole-page row query
+  // matches the ungraded ones too and this assertion would pass for the wrong
+  // reason. Matched on the horizon cell rather than on the text "252", which
+  // also appears in prices.
+  const defaultTable = page.locator("table:has(th:text-is('Horizon (days)'))").first();
+  await expect(defaultTable.locator("tbody tr").first()).toBeVisible();
+  await expect(
+    defaultTable.locator('tbody tr:has(td:nth-child(1):text-is("252"))'),
+  ).toHaveCount(0);
+
+  const disclosure = page.locator("details", { hasText: /ungraded horizon/i });
+  await expect(disclosure).toBeVisible();
+  const hiddenLongHorizon = disclosure.locator(
+    'tbody tr:has(td:nth-child(1):text-is("252"))',
+  );
+  await expect(hiddenLongHorizon).toHaveCount(1);
+  await expect(hiddenLongHorizon).not.toBeVisible();
+  await disclosure.locator("summary").click();
+  await expect(hiddenLongHorizon).toBeVisible();
+
   expect(errors).toEqual([]);
 });
 
