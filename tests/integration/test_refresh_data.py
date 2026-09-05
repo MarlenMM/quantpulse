@@ -17,12 +17,14 @@ from sqlalchemy.orm import Session, sessionmaker
 import refresh_data
 from quantpulse.analysis import backtest as bt
 from quantpulse.analysis import risk
+from quantpulse.storage import persistence
 from quantpulse.storage.models import (
     AnalystConsensus,
     Base,
     FundamentalsSnapshot,
     IndexMembershipHistory,
     MarketRegime,
+    NewsEvent,
     OptionsSignal,
     PatternSignal,
     PriceHistory,
@@ -1624,3 +1626,153 @@ class TestInstitutionalOwnershipAsksWhichWindowExists:
         rows, calls = self._fetch_window(engine, None)
         assert rows == 0
         assert calls == []
+
+
+class TestIndustryMacroCoversTheUniverse:
+    """`industry_macro` reached 24 of ~500 names; these pin both halves of the fix.
+
+    The category carries 8-10% of the composite weight in every investor
+    profile, but a symbol only gets a value if (a) it is in a basket and (b)
+    Tier-2 articles are tagged to that basket. Only the six curated themes
+    satisfied either, so for 95% of the index the weight was renormalized away
+    and the advertised seven-category composite was a six-category one.
+    """
+
+    @staticmethod
+    def _universe_frame() -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"symbol": "AAA", "name": "AAA Inc", "sector": "Financials"},
+                {"symbol": "BBB", "name": "BBB Inc", "sector": "Financials"},
+                {"symbol": "CCC", "name": "CCC Inc", "sector": "Utilities"},
+            ]
+        )
+
+    def test_static_config_writes_a_basket_for_every_sector(self, engine: Engine) -> None:
+        fake_get_session, factory = _fake_session_factory(engine)
+        with (
+            patch("refresh_data.get_session", fake_get_session),
+            patch("refresh_data._active_universe", return_value=self._universe_frame()),
+        ):
+            with factory() as session:
+                refresh_data.refresh_static_config(session, date(2026, 9, 5))
+                session.commit()
+
+        with factory() as session:
+            members = persistence.read_theme_members(session)
+
+        covered = set().union(*members.values()) if members else set()
+        assert {"Financials", "Utilities"} <= set(members)
+        assert members["Financials"] == {"AAA", "BBB"}
+        # The property that matters: nothing in the universe is left basketless.
+        assert {"AAA", "BBB", "CCC"} <= covered
+
+    def _run_tier2(self, engine: Engine, articles_per_basket: int) -> tuple[list, dict]:
+        """Drive `refresh_tier2_news` with a fixed article count per basket."""
+        fake_get_session, factory = _fake_session_factory(engine)
+
+        def fake_articles(query: str, **_: object) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "title": f"story {i} for {query[:18]}",
+                        "url": f"https://example.test/{abs(hash(query))}/{i}",
+                        "published_at": datetime(2026, 9, 5, 12, 0)
+                        - timedelta(minutes=i),  # newest first is i=0
+                    }
+                    for i in range(articles_per_basket)
+                ]
+            )
+
+        def fake_classify(frame: pd.DataFrame) -> pd.DataFrame:
+            return pd.DataFrame({"event_type": ["earnings"] * len(frame)})
+
+        def fake_sentiment(frame: pd.DataFrame) -> pd.DataFrame:
+            return pd.DataFrame({"polarity": [0.25] * len(frame)})
+
+        with (
+            patch("refresh_data.get_session", fake_get_session),
+            patch("refresh_data._active_universe", return_value=self._universe_frame()),
+            patch("refresh_data.gdelt_client.fetch_articles", side_effect=fake_articles),
+            patch(
+                "refresh_data.event_classifier.classify_articles", side_effect=fake_classify
+            ) as classify,
+            patch("refresh_data.sentiment.score_articles", side_effect=fake_sentiment),
+        ):
+            with factory() as session:
+                refresh_data.refresh_tier2_news(session, date(2026, 9, 5))
+                session.commit()
+
+        with factory() as session:
+            rows = session.scalars(sa.select(NewsEvent).where(NewsEvent.tier == 2)).all()
+        return classify.call_args_list, {
+            "themes": {r.matched_theme for r in rows},
+            "total": len(rows),
+            "classified": sum(1 for r in rows if r.event_type is not None),
+            "scored": sum(1 for r in rows if r.sentiment_score is not None),
+        }
+
+    def test_sector_baskets_are_queried_not_only_curated_themes(self, engine: Engine) -> None:
+        _, seen = self._run_tier2(engine, articles_per_basket=3)
+        assert {"Financials", "Utilities"} <= seen["themes"], (
+            "no Tier-2 article was tagged to a sector, so every sector basket would "
+            "cover its members with news that does not exist"
+        )
+        assert "ai_theme" in seen["themes"], "the curated themes must keep working too"
+
+    def test_classification_is_capped_per_basket_but_sentiment_is_not(self, engine: Engine) -> None:
+        """The trade that makes sector coverage affordable, asserted as a ratio.
+
+        Measured on real articles: classifying costs 192 ms each against
+        sentiment's 21 ms, and `event_type` is read only by the Dashboard's 8
+        most recent stories while `sentiment_score` feeds every stock's tilt.
+        """
+        over = refresh_data._MAX_CLASSIFIED_TIER2_PER_BASKET + 15
+        calls, seen = self._run_tier2(engine, articles_per_basket=over)
+
+        assert seen["scored"] == seen["total"], "every article must carry a sentiment score"
+        assert seen["classified"] < seen["total"], (
+            "every article was classified -- the cap is not in effect, and the weekly "
+            "news budget is back to being spent on labels nothing reads"
+        )
+        assert all(
+            len(frame) <= refresh_data._MAX_CLASSIFIED_TIER2_PER_BASKET
+            for (frame,) in (c.args for c in calls)
+        )
+
+    def test_the_classified_articles_are_the_newest_ones(self, engine: Engine) -> None:
+        """The Dashboard shows the 8 most recent, so the cap must keep those labelled."""
+        over = refresh_data._MAX_CLASSIFIED_TIER2_PER_BASKET + 15
+        calls, _ = self._run_tier2(engine, articles_per_basket=over)
+        for (frame,) in (c.args for c in calls):
+            stamps = list(frame["published_at"])
+            assert stamps == sorted(stamps, reverse=True)
+            assert stamps[0] == datetime(2026, 9, 5, 12, 0), (
+                "the newest article in the basket was not among those classified"
+            )
+
+    def test_news_themes_and_basket_membership_use_the_same_names(self, engine: Engine) -> None:
+        """The join is by string, and a mismatch fails silently as "no industry signal".
+
+        `refresh_static_config` writes basket membership and `refresh_tier2_news`
+        writes `matched_theme`; `scoring.tier2_thematic_tilt` joins them by name.
+        If the two ever disagree, every symbol keeps a basket and every article
+        keeps a theme, and the category quietly goes back to None for everyone --
+        the original bug wearing a full `thematic_baskets` table.
+        """
+        fake_get_session, factory = _fake_session_factory(engine)
+        with (
+            patch("refresh_data.get_session", fake_get_session),
+            patch("refresh_data._active_universe", return_value=self._universe_frame()),
+        ):
+            with factory() as session:
+                refresh_data.refresh_static_config(session, date(2026, 9, 5))
+                session.commit()
+        with factory() as session:
+            membership_names = set(persistence.read_theme_members(session))
+
+        _, seen = self._run_tier2(engine, articles_per_basket=2)
+        assert seen["themes"] <= membership_names, (
+            f"themes tagged on articles but absent from thematic_baskets: "
+            f"{seen['themes'] - membership_names}"
+        )

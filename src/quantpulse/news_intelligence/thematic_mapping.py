@@ -167,6 +167,121 @@ def build_sector_baskets(universe: pd.DataFrame) -> dict[str, frozenset[str]]:
     return {sector: frozenset(symbols) for sector, symbols in sector_to_symbols.items()}
 
 
+# GICS sector -> the Tier-2 keyword triggers that select it, exactly as the
+# curated baskets above carry theirs.
+#
+# **Why these exist at all.** The curated baskets cover 24 of ~500 names, so
+# `industry_macro` -- a category carrying 8-10% of the composite weight in every
+# investor profile -- had a value for 4.8% of the universe and was renormalized
+# away for the other 95%. The advertised seven-category composite was a
+# six-category composite for almost every stock, and the category's rank
+# correlation with the final composite was -0.10. `build_sector_baskets` above
+# was written and tested for exactly this and never called.
+#
+# **Membership alone would not have fixed it.** A basket only produces a tilt if
+# Tier-2 articles are tagged to it, and `refresh_tier2_news` only ever queried
+# the curated baskets -- so sector baskets would have covered every symbol with
+# a basket that had no news in it, and `tier2_thematic_tilt` would still return
+# None. Sectors need triggers of their own, which is what this table is.
+#
+# Chosen with the same precision discipline the curated keywords document: no
+# bare "interest rates" under Financials (it is a macro story that would fire on
+# half the feed), no bare "gold" under Materials. Each phrase names an *industry*
+# subject rather than a macro condition, because Tier-3 macro is a separate tier
+# that deliberately acts on the rating step instead.
+SECTOR_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "Energy": ("oil refining", "oilfield services", "shale production", "lng export"),
+    "Materials": (
+        "copper price",
+        "steel tariff",
+        "mining output",
+        "chemical producer",
+        "lithium supply",
+    ),
+    "Industrials": (
+        "aerospace orders",
+        "defense contract",
+        "freight rates",
+        "airline capacity",
+        "machinery orders",
+    ),
+    "Consumer Discretionary": (
+        "retail sales",
+        "consumer spending",
+        "auto sales",
+        "restaurant chain",
+        "homebuilder",
+    ),
+    "Consumer Staples": (
+        "packaged food",
+        "beverage maker",
+        "household products",
+        "grocery chain",
+        "food inflation",
+    ),
+    "Health Care": (
+        "drug pricing",
+        "fda approval",
+        "clinical trial",
+        "health insurer",
+        "medicare reimbursement",
+    ),
+    "Financials": (
+        # NOT "interest rates": a macro story, and Tier-3's job. These name the
+        # industry's own subjects.
+        "loan growth",
+        "credit losses",
+        "insurance premium",
+        "asset manager",
+        "payment processor",
+    ),
+    "Information Technology": (
+        # Semiconductors have their own curated basket; these are the rest of
+        # the sector, which that basket does not reach.
+        "enterprise software",
+        "cloud computing",
+        "cybersecurity",
+        "it spending",
+        "data center demand",
+    ),
+    "Communication Services": (
+        "streaming service",
+        "advertising spend",
+        "telecom carrier",
+        "social media platform",
+        "box office",
+    ),
+    "Utilities": ("electric utility", "power grid", "electricity prices", "utility rate case"),
+    "Real Estate": (
+        "commercial real estate",
+        "office vacancy",
+        "mortgage rates",
+        "property market",
+    ),
+}
+
+
+def sector_baskets(universe: pd.DataFrame) -> tuple[ThematicBasket, ...]:
+    """The sector baskets as first-class `ThematicBasket`s, members from `universe`.
+
+    A hybrid of the two halves above by design: members are *dynamic* (whatever
+    is in the index today, so a new constituent is covered the night it is
+    added) while keywords are *static* config, exactly like a curated basket's.
+    That is what lets `refresh_tier2_news` iterate curated and sector baskets
+    through one code path instead of growing a second one.
+
+    A sector present in `SECTOR_KEYWORDS` but absent from `universe` is skipped
+    rather than yielding an empty basket: a basket with no members would spend a
+    GDELT query and a model pass on news that could not reach a single stock.
+    """
+    members_by_sector = build_sector_baskets(universe)
+    return tuple(
+        _basket(sector, members_by_sector[sector], keywords)
+        for sector, keywords in SECTOR_KEYWORDS.items()
+        if members_by_sector.get(sector)
+    )
+
+
 def propagate(
     members: Iterable[str],
     *,

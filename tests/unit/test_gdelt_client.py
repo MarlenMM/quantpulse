@@ -122,3 +122,20 @@ def test_parse_gdelt_datetime_handles_both_observed_formats() -> None:
     assert gdelt_client._parse_gdelt_datetime("20260722120000") is not None
     assert gdelt_client._parse_gdelt_datetime("not-a-date") is None
     assert gdelt_client._parse_gdelt_datetime(None) is None
+
+
+def test_rate_limiter_honours_gdelts_published_five_second_interval() -> None:
+    """GDELT states its limit in the body of its own 429; match it, don't guess.
+
+    "Please limit requests to one every 5 seconds or contact [...] for larger
+    queries." At the previous 1s interval every request was 429ed and rescued by
+    `http._request_with_retries`' backoff -- so the step still worked and simply
+    ran several times slower than it appeared to. That was survivable while six
+    baskets were queried per run and stopped being survivable at seventeen: a
+    real run spent fifteen minutes to cache a single response.
+
+    Pinned as a value rather than left to a comment because the failure mode is
+    silent in both directions -- too fast is invisible behind the retry layer,
+    and nothing else in the project would notice.
+    """
+    assert gdelt_client._rate_limiter._min_interval >= 5.0
