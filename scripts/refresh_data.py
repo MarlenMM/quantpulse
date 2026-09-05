@@ -277,6 +277,24 @@ _INSTITUTIONAL_COLUMNS = (
 # with lower `data_confidence`, which the UI already shows.
 _CRITICAL_STEPS = frozenset({"composite_scores", "market_regime"})
 
+# Optional steps for which writing **zero rows** is itself a failure signal,
+# even though nothing raised.
+#
+# This exists because "0 rows, no exception" is the shape the 13F bug wore for
+# the entire life of the project. `refresh_institutional_ownership` caught its
+# own 404, logged it, and returned 0; `step()` saw a clean return and the run
+# reported "partial" for unrelated reasons, so a source that had never once
+# produced a row looked exactly like a source that simply had nothing new. A
+# step listed here that comes back empty is named in the run summary and
+# downgrades the run, which is the difference between a silent six-month gap and
+# a line in a log.
+#
+# Membership is deliberately narrow. Most optional steps have honest empty runs:
+# `tier2_news` finds no matching articles, `macro_indicators` has no FRED key,
+# and `backtest` explicitly declines to store a run that would describe nothing.
+# Only steps that pull from a source that always has *something* belong here.
+_STEPS_EXPECTED_TO_WRITE = frozenset({"institutional_ownership", "benchmark_prices"})
+
 _REIT_SECTOR = "Real Estate"
 
 
@@ -806,12 +824,32 @@ def refresh_static_config(session: Session, today: date) -> int:
 
 
 def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, today: date) -> int:
-    """Ingest the current quarter's 13F institutional-ownership trend (Section 24).
+    """Ingest the most recently published 13F institutional-ownership trend (Section 24).
 
     A ~100MB quarterly bulk download, cached indefinitely once fetched -- so a
     weekly re-run only re-does real work when a new quarter's file appears.
+
+    **"The most recently published", not "this quarter's".** This asked
+    `quarter_window_for(today)` for its entire life, which names the quarter
+    currently *being filed* -- a file SEC does not publish until the window
+    closes. The URL therefore 404ed on every day of every quarter, and because
+    the failure was an `except`-and-return-0 inside an optional `step()`, the
+    run reported "partial" and moved on: `institutional_ownership` held zero
+    rows all-time while Smart Money quietly ran on two of its three directional
+    signals. `latest_published_window` asks SEC which window exists instead of
+    computing one, which is the only form of this that cannot drift with the
+    publication lag.
     """
-    window = edgar_13f_client.quarter_window_for(today)
+    window = edgar_13f_client.latest_published_window(today)
+    if window is None:
+        logger.warning(
+            "13F: no published bulk window found within the last %d quarters of %s; "
+            "institutional ownership will not update this run",
+            edgar_13f_client._MAX_WINDOW_LOOKBACK,
+            today,
+        )
+        return 0
+    logger.info("13F: using published window %s to %s", window[0], window[1])
     try:
         trend = edgar_13f_client.fetch_institutional_ownership_trend(window, universe)
     except Exception:
@@ -1675,6 +1713,7 @@ def run(
     status = "success"
     rows_updated = 0
     failed_steps: list[str] = []
+    empty_steps: list[str] = []
 
     if not is_trading_day(today) and not ignore_market_calendar:
         logger.info("%s: market closed today (%s), skipping refresh", job_name, today)
@@ -1709,7 +1748,18 @@ def run(
         started = time.monotonic()
         try:
             with _step_timeout(budget, name):
-                return fn()
+                written = fn()
+            if not written and name in _STEPS_EXPECTED_TO_WRITE:
+                logger.warning(
+                    "%s: step %s completed but wrote no rows -- treating that as a "
+                    "degraded run rather than a quiet success",
+                    job_name,
+                    name,
+                )
+                empty_steps.append(name)
+                if status != "failed":
+                    status = "partial"
+            return written
         except Exception:
             logger.exception(
                 "%s: step %s failed after %.0fs", job_name, name, time.monotonic() - started
@@ -1907,12 +1957,18 @@ def run(
         logger.exception("%s failed", job_name)
         status = "failed"
 
-    if failed_steps:
+    if failed_steps or empty_steps:
         # Name them. "partial" on its own sends a reader to grep a long log for
-        # a traceback; this puts the answer in the last line.
-        logger.warning(
-            "%s finished %s -- failed step(s): %s", job_name, status, ", ".join(failed_steps)
-        )
+        # a traceback; this puts the answer in the last line. An *empty* step is
+        # reported separately from a failed one because they need different
+        # answers: a failure has a traceback above it, while "wrote no rows" has
+        # nothing above it at all and is the one a reader would otherwise miss.
+        detail = []
+        if failed_steps:
+            detail.append(f"failed step(s): {', '.join(failed_steps)}")
+        if empty_steps:
+            detail.append(f"step(s) that wrote nothing: {', '.join(empty_steps)}")
+        logger.warning("%s finished %s -- %s", job_name, status, "; ".join(detail))
     else:
         logger.info("%s finished %s (%d rows)", job_name, status, rows_updated)
 

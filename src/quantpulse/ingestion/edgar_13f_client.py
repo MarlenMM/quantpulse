@@ -26,6 +26,7 @@ assumed) before writing this module:
   a silent gap.
 """
 
+import logging
 import re
 import zipfile
 from calendar import monthrange
@@ -36,8 +37,10 @@ import pandas as pd
 
 from quantpulse.config import get_settings
 from quantpulse.ingestion.circuit_breaker import get_breaker
-from quantpulse.ingestion.http import get_bytes
+from quantpulse.ingestion.http import get_bytes, resource_exists
 from quantpulse.ingestion.rate_limit import SimpleRateLimiter
+
+logger = logging.getLogger(__name__)
 
 _SOURCE = "edgar_13f"
 _BULK_URL_TEMPLATE = (
@@ -59,6 +62,14 @@ _MONTH_ABBREVIATIONS = (
 )
 _INFOTABLE_CHUNK_SIZE = 200_000
 _DOWNLOAD_TIMEOUT_SECONDS = 180.0  # ~100MB over a plain GET needs far more than get_bytes' default
+
+# How many quarters back `latest_published_window` will look for a published
+# file. Four is a year: enough to absorb the normal publication lag (weeks) plus
+# a long outage, and short enough that a total SEC failure costs four HEAD
+# requests rather than an unbounded crawl. Ingesting a window older than a year
+# would be worse than ingesting nothing, since it would be presented as "this
+# quarter's institutional trend".
+_MAX_WINDOW_LOOKBACK = 4
 
 # Same fair-use posture as edgar_client.py.
 _rate_limiter = SimpleRateLimiter(min_interval_seconds=0.2)
@@ -107,6 +118,46 @@ def _prior_quarter_window(window: tuple[date, date]) -> tuple[date, date]:
     return quarter_window_for(start - timedelta(days=1))
 
 
+def latest_published_window(
+    as_of: date, *, max_lookback: int = _MAX_WINDOW_LOOKBACK
+) -> tuple[date, date] | None:
+    """The newest window SEC has actually published at `as_of`, or `None`.
+
+    **`quarter_window_for(today)` is never the right thing to ask for**, and
+    asking for it is why this module produced zero rows for its entire life.
+    That function returns the window *containing* today — the quarter currently
+    being filed — and SEC publishes a window's bulk file only after the window
+    closes. So the URL it names cannot exist on any day of any quarter, the
+    fetch 404s, `refresh_institutional_ownership` logs the exception and returns
+    0, the run reports "partial", and `institutional_ownership` stays empty
+    forever while Smart Money silently runs on two of its three signals.
+
+    Nor is "the previous window" a fix by itself. Publication lags the close by
+    weeks: measured on 2026-09-05, five days after Jun-Aug closed, that window
+    still 404ed while Mar-May served 200. Anything that assumes a fixed offset
+    is the same bug with a different constant, so this *asks*, walking back one
+    quarter at a time until a file is there.
+
+    A locally cached ZIP counts as published without a network call, which keeps
+    a warm cache offline-capable. `max_lookback` bounds the walk so an SEC
+    outage costs a handful of HEADs rather than an unbounded crawl into 2024,
+    and `None` (rather than a guess) is what the caller gets when nothing in
+    that range is available.
+    """
+    window = quarter_window_for(as_of)
+    for _ in range(max_lookback):
+        if _local_zip_path(window).exists():
+            return window
+        _rate_limiter.wait()
+        # Deliberately outside `get_breaker(_SOURCE).guard()`: a 404 here is an
+        # answer, not a failure, and counting a run of them would open the
+        # circuit and then block the download of the window that *was* found.
+        if resource_exists(_bulk_zip_url(window), headers=_headers()):
+            return window
+        window = _prior_quarter_window(window)
+    return None
+
+
 def _format_window_date(d: date) -> str:
     return f"{d.day:02d}{_MONTH_ABBREVIATIONS[d.month - 1]}{d.year}"
 
@@ -152,14 +203,28 @@ _CORP_SUFFIX_RE = re.compile(
 )
 
 
-def _normalize_issuer_name(name: str) -> str:
+def _normalize_issuer_name(name: object) -> str:
     """Uppercase, punctuation- and corporate-suffix-stripped key for issuer-name matching.
 
     13F filers write issuer names inconsistently ("EBAY INC.", "APPLE INC")
     -- this collapses both sides (13F `NAMEOFISSUER` and the ticker
     universe's own `name` column) to a common key so they can be joined
     without a CUSIP mapping (module docstring).
+
+    **Takes `object`, not `str`, because the real file contains blanks.** A
+    filer may leave `NAMEOFISSUER` empty, and pandas reads that column as a
+    float NaN, so this used to raise `AttributeError: 'float' object has no
+    attribute 'strip'` on the very first chunk -- killing the whole quarter's
+    ingest over a handful of unusable rows. An unnamed holding cannot be matched
+    to a ticker by name under any circumstances, so the empty key it returns
+    here is the honest answer: the row drops out at the `notna()` filter with
+    every other unmatched one, and the other ~99.99% of the file still lands.
+
+    This was invisible until the window bug above was fixed, because no real
+    bulk file had ever been parsed.
     """
+    if not isinstance(name, str):
+        return ""
     normalized = _NON_ALNUM_RE.sub(" ", name.strip().upper())
     normalized = _WHITESPACE_RE.sub(" ", normalized).strip()
     return _CORP_SUFFIX_RE.sub("", normalized).strip()
@@ -252,10 +317,26 @@ def fetch_institutional_ownership_trend(
     module docstring) is left honestly unknown rather than silently assumed.
     """
     current = fetch_quarterly_institutional_holdings(window, universe)
-    prior = fetch_quarterly_institutional_holdings(_prior_quarter_window(window), universe)
-
     if current.empty:
         return pd.DataFrame(columns=_TREND_COLUMNS)
+
+    # The prior quarter is for the *comparison* only, so it is allowed to be
+    # missing: the oldest window the dataset carries has no predecessor, and a
+    # transient failure on the second download should not throw away a
+    # successful first one. Every symbol then gets `change_from_prior_quarter`
+    # = NaN, which is already this function's documented "no comparable prior
+    # figure" -- holdings and filer counts still land, and `smart_money`
+    # renormalizes over the sub-signals that do have data.
+    try:
+        prior = fetch_quarterly_institutional_holdings(_prior_quarter_window(window), universe)
+    except Exception:
+        logger.warning(
+            "13F: could not read the quarter before %s; storing holdings without a "
+            "quarter-over-quarter change",
+            window[0],
+            exc_info=True,
+        )
+        prior = pd.DataFrame(columns=_HOLDINGS_COLUMNS)
 
     prior_shares = prior[["symbol", "total_shares_held"]].rename(
         columns={"total_shares_held": "_prior_shares_held"}

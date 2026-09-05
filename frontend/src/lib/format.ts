@@ -122,6 +122,11 @@ export const STALE_AFTER_DAYS: Record<string, number> = {
   backtest: 16,
   analyst_consensus: 16,
   fundamentals: 100,
+  // 13F is the slowest source in the project by a wide margin, and its age is
+  // dominated by publication lag rather than by this pipeline: a quarterly
+  // window, published weeks after it closes, reporting on a period older still.
+  // Below roughly a quarter plus a full lag the badge would be permanently lit.
+  institutional_ownership: 200,
 };
 
 /** Anything not named above. Weekly-ish, this pipeline's slowest routine cadence. */
