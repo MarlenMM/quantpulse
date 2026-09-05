@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
 [![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-1%2C529-0f7a44.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1%2C534-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
@@ -34,7 +34,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,529** (unit, integration, and property-based via Hypothesis) |
+| Automated tests | **1,534** (unit, integration, and property-based via Hypothesis) |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **13 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
@@ -165,18 +165,20 @@ The backfill takes a few hours for the full ~1,200-symbol universe and is
 resumable — it infers progress from the database, so re-running it continues
 rather than starting over. Expect roughly 300 MB.
 
-**Refreshes are manual, on purpose.** Nothing runs on a timer: the data changes
-when you ask it to, from **⚙️ Settings → Run a refresh** in the app (the usual
-way — it runs in the background and tails its own log while you keep using the
-app) or by running the script above. Two things follow from there being no
-schedule, and the page offers a checkbox for each:
+**Your own database refreshes when you ask it to** — from **⚙️ Settings → Run a
+refresh** in the app (the usual way: it runs in the background and tails its own
+log while you keep using the app) or by running the script above. The *public
+demo* is different and runs on a timer; see [Data and secrets](#data-and-secrets).
+
+Three things are worth knowing before you start one by hand, and the page offers
+a checkbox for the last two:
 
 - **Run it after the US close.** Earlier and the day's closing prices and option
   chain simply have not been published yet.
-- **The weekly branch no longer comes round by itself.** Fundamentals, analyst
-  consensus, 13F, forecasts, the backtest, news and sentiment key off Monday, so
-  tick *Include the weekly steps* to refresh them on any other day. That run
-  takes hours rather than minutes.
+- **The weekly branch keys off Monday.** Fundamentals, analyst consensus, 13F,
+  forecasts, the backtest, news and sentiment only run then, so tick *Include the
+  weekly steps* to refresh them on any other day. That run takes hours rather
+  than minutes.
 - A refresh is a deliberate no-op on a weekend or holiday unless you tick *Run
   even though the market is closed today*.
 
@@ -309,10 +311,21 @@ night's data commit refreshes the live app with no separate step.
 
 `.github/workflows/refresh_data.yml` updates the repo-committed demo database
 (`quantpulse_demo.db` — distinct from your own local `quantpulse.db`, see
-`.gitignore`), so neither deployment needs API keys of its own (ADR 4.4). It is
-**dispatched by hand** (Actions → Data Refresh → Run workflow), not on a
-schedule — so both public deployments are only as fresh as the last time
-somebody ran it. The in-app refresh button stays off in hosted `session` mode
+`.gitignore`), so neither deployment needs API keys of its own (ADR 4.4). It runs
+**weekday evenings at 22:00 UTC**, one to two hours after the New York close, and
+can also be dispatched by hand (Actions → Data Refresh → Run workflow) to catch a
+database up or to test a fix without waiting for the next run. Monday's run
+carries the weekly branch, so the slow-moving datasets come round by themselves.
+
+The schedule was off between 2026-08-27 and 2026-09-06, and the demo visibly
+aged: its own freshness strip read "24 days ago" for sentiment. Worth recording
+why, because the cause was not the timer. From 2026-08-10 the scheduled run went
+red thirteen nights running, and every failure was the *Pages publish*, not the
+refresh — a Playwright strict-mode violation in the site check, where
+`getByText("AIZ")` matched six elements. The data kept updating and the site
+stopped republishing. The selector is fixed; the timer is back.
+
+The in-app refresh button stays off in hosted `session` mode
 (`MANUAL_REFRESH_ENABLED`): a shared URL is no place to let a visitor start an
 hours-long job on rate-limited quota, and that host omits the model stack the
 refresh needs anyway.
@@ -327,10 +340,9 @@ DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_d
 git add quantpulse_demo.db && git commit -m "Reseed the live-demo database" && git push
 ```
 
-Dispatching the workflow then keeps it current, committing an updated
-`quantpulse_demo.db` back to `main` (the workflow file's own comments explain
-why that is safe given ADR 4.5's session-vs-sqlite split) and republishing the
-Pages site against it.
+The schedule then keeps it current, committing an updated `quantpulse_demo.db`
+back to `main` (the workflow file's own comments explain why that is safe given
+ADR 4.5's session-vs-sqlite split) and republishing the Pages site against it.
 
 Fresher data needs **repo secrets** (Settings → Secrets and variables →
 Actions). **Without them the job still runs, but some datasets stay

@@ -1,33 +1,51 @@
-name: Data Refresh (manual)
+name: Data Refresh
 
 on:
-  # No `schedule:` -- by design. Nothing refreshes on a timer: a person asks for
-  # a refresh, either from the app's own Settings page or by dispatching this
-  # workflow. Dispatching is the only path that can update the repo-committed
-  # demo database, so it is what keeps the public deployments current.
+  schedule:
+    # Weekday evenings, one to two hours after the New York close.
+    #
+    # **Run after the US close, not before.** 22:00 UTC is one to two hours
+    # after the 16:00 ET close on the same calendar day in New York. Earlier
+    # than that and the day's closing prices and option chain are not published
+    # yet -- the database once ended up with an implied volatility of 0.46% for
+    # Apple, and sub-penny values for 96% of names, from running too early.
+    #
+    # **The date is derived in exchange time**, not the runner's, so a run near
+    # midnight UTC still stamps the New York trading day rather than tomorrow.
+    # That lives in the script and needs no help from the trigger.
+    #
+    # **Monday's run carries the weekly branch** -- fundamentals, analyst
+    # consensus, 13F, forecasts, the backtest, news and sentiment all key off
+    # `_WEEKLY_REFRESH_WEEKDAY`. That is the point of scheduling weekdays rather
+    # than a subset: those datasets are the ones that go stalest, and they have
+    # no other way round. Measured on the two Mondays it last ran unattended
+    # (2026-08-17 and 08-24), the refresh job took **3h14m** and **3h25m**
+    # against GitHub's 6-hour job limit; a weekday run takes about 12 minutes.
+    - cron: "0 22 * * 1-5"
+
+  # **This was removed on 2026-08-27 and is restored deliberately.** The reason
+  # given at the time was that a timer was the wrong shape for the project. The
+  # reason it *looked* wrong is more specific and is now fixed: from 2026-08-10
+  # the scheduled run went red thirteen nights running, and every one of those
+  # failures was `publish / build`, not the refresh. The refresh job succeeded
+  # each night and committed fresh data; the Pages job then failed its browser
+  # gate on `getByText("AIZ")` matching six elements -- a Playwright strict-mode
+  # violation in the *test*, unrelated to the data, the app, or the six-hour
+  # limit the weekly branch was once suspected of.
   #
-  # This used to run on `cron: "0 22 * * 1-5"`, and the reasoning behind that
-  # timing is kept because it now governs *when a manual run is worth doing*
-  # rather than when one happens:
+  # So the demo went stale twice over: the site stopped republishing while the
+  # database kept updating, and then the timer was removed. The selector was
+  # fixed (`tests-static/static-site.spec.ts` now matches the `h1` by role, with
+  # a comment saying why), so the failure mode that made a nightly schedule look
+  # untenable is gone rather than merely quiet.
   #
-  #  * **Run after the US close, not before.** 22:00 UTC is one to two hours
-  #    after the 16:00 ET close on the same calendar day in New York. Earlier
-  #    than that and the day's closing prices and option chain are not published
-  #    yet -- the database once ended up with an implied volatility of 0.46% for
-  #    Apple, and sub-penny values for 96% of names, from running too early.
-  #  * **The date is derived in exchange time**, not the runner's, so a run near
-  #    midnight UTC still stamps the New York trading day rather than tomorrow.
-  #    That lives in the script and needs no help from the trigger.
+  # Manual dispatch stays, because a schedule answers "keep it current" and
+  # dispatch answers the two questions a schedule cannot:
   #
-  # Two consequences of there being no schedule, both handled by the inputs
-  # below rather than left as surprises:
-  #
-  #  * The weekly branch no longer comes round by itself. It keys off Monday, so
-  #    without `force_weekly` a database refreshed on Tuesdays would never see
-  #    fundamentals, analyst consensus, 13F, forecasts, the backtest, news or
-  #    sentiment again.
-  #  * A closed day is still a cheap no-op unless `ignore_market_calendar` says
-  #    otherwise, which is usually what you want and occasionally not.
+  #  * catching a database up out of band, with `force_weekly` when it is not a
+  #    Monday, or
+  #  * finding out whether a fix to the weekly branch worked without waiting a
+  #    week for Monday to tell you.
   workflow_dispatch:
     inputs:
       force_weekly:
@@ -81,6 +99,12 @@ jobs:
         env:
           DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
+      # On a `schedule` event `inputs` is null, so both expressions collapse to
+      # the empty string and the scheduled run takes the plain path: the weekly
+      # branch on Mondays via the script's own weekday check, and a no-op on a
+      # closed day. That is the intended behaviour rather than an oversight --
+      # the flags exist to override those two defaults by hand, and a timer has
+      # no business overriding either.
       - name: Run refresh
         run: >-
           uv run python scripts/refresh_data.py
