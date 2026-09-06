@@ -15,6 +15,7 @@ from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
+from quantpulse.alerting import discord, rules
 from quantpulse.analysis import backtest as bt
 from quantpulse.analysis import risk, scoring
 from quantpulse.ingestion import historical_constituents_client as hist
@@ -23,6 +24,7 @@ from quantpulse.storage.models import (
     AnalystConsensus,
     BacktestResult,
     Base,
+    CompositeScore,
     FundamentalsSnapshot,
     IndexMembershipHistory,
     MarketRegime,
@@ -1896,3 +1898,357 @@ class TestTheBacktestRanksWhatThePageClaims:
         assert runs, "the fixture produced no stored run to assert on"
         assert runs[-1].signal_name == refresh_data._BACKTEST_SIGNAL_NAME
         assert runs[-1].signal_name is not None
+
+
+class TestAlerting:
+    """Section 10's alert, asserted at the caller rather than at the helper.
+
+    `send_alerts` has unit coverage through `alerting.rules`, `alerting.discord`
+    and the three persistence reads. None of that says the nightly run ever
+    calls it, which is the mistake this project has now shipped twice: a
+    resolver with passing unit tests that the pipeline never invoked. So every
+    test here drives `refresh_data.run()`.
+    """
+
+    _SYMBOLS = ("AAA", "BBB", "CCC", "DDD", "EEE")
+
+    @staticmethod
+    def _sloped_prices(symbol: str, today: date, rows: int = 60) -> pd.DataFrame:
+        """A distinct trend per symbol, because a tie ranks as no change.
+
+        The first version of this fixture reused `_price_df`, which returns the
+        same flat series for every symbol. Five identical inputs percentile-rank
+        identically, so all five came out "hold" -- the same rating they were
+        seeded with -- and the run correctly reported that nothing had changed.
+        The test was measuring the fixture, not the alert.
+        """
+        index = TestAlerting._SYMBOLS.index(symbol)
+        drift = 1.0 + (index - 2) * 0.01  # AAA falls hardest, EEE rises hardest
+        closes = np.array([100.0 * drift**step for step in range(rows)])
+        return pd.DataFrame(
+            {
+                "date": pd.date_range(end=pd.Timestamp(today), periods=rows, freq="D"),
+                "symbol": symbol,
+                "open": closes,
+                "high": closes * 1.02,
+                "low": closes * 0.98,
+                "close": closes,
+                "adj_close": closes,
+                "volume": 1_000_000,
+            }
+        )
+
+    def _universe(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": symbol,
+                    "name": f"{symbol} Inc.",
+                    "sector": "Technology",
+                    "industry": "Software",
+                    "exchange": None,
+                    "asset_type": "equity",
+                    "is_active": True,
+                }
+                for symbol in self._SYMBOLS
+            ]
+        )
+
+    def _seed_snapshot(self, factory, day: date, rating: str, *, add_tickers: bool) -> None:
+        """A stored scoring snapshot with every name on the same rating.
+
+        Uniform on purpose. The composite ranks cross-sectionally, so five names
+        come out spread across the five ratings whatever their inputs -- which
+        means at least four must differ from a uniform "hold", and two of those
+        land on strong_buy / strong_sell. That makes the universe-wide rule fire
+        without the test having to predict a score.
+        """
+        with factory() as session:
+            for index, symbol in enumerate(self._SYMBOLS):
+                if add_tickers:
+                    session.add(
+                        Ticker(symbol=symbol, name=symbol, asset_type="equity", is_active=True)
+                    )
+                session.add(
+                    CompositeScore(
+                        symbol=symbol,
+                        date=day,
+                        profile="balanced",
+                        composite_score=50.0 + index,
+                        percentile_rank=50.0,
+                        rating=rating,
+                        data_confidence=80.0,
+                    )
+                )
+            session.commit()
+
+    @contextmanager
+    def _driven_run(self, engine: Engine, *, settings, today: date, seed=("hold",)):
+        """`run()` with every upstream source mocked and the clock pinned.
+
+        `seed` is the ratings to store for the days before `today`, oldest
+        first, so a test can arrange more than one prior snapshot. `()` seeds
+        none.
+        """
+        fake_get_session, factory = _fake_session_factory(engine)
+        for offset, rating in enumerate(reversed(seed), start=1):
+            self._seed_snapshot(
+                factory, today - timedelta(days=offset), rating, add_tickers=offset == len(seed)
+            )
+        options = {
+            "symbol": "AAA",
+            "expiration": "2026-08-21",
+            "put_call_ratio": 0.8,
+            "atm_implied_volatility": 0.25,
+        }
+        with (
+            patch("refresh_data.get_session", fake_get_session),
+            patch("refresh_data.get_settings", return_value=settings),
+            patch("refresh_data.is_trading_day", return_value=True),
+            patch("refresh_data.datetime", wraps=datetime) as clock,
+            patch(
+                "refresh_data.wikipedia_client.fetch_sp500_constituents",
+                return_value=self._universe(),
+            ),
+            patch(
+                "refresh_data.yfinance_client.fetch_price_history",
+                side_effect=lambda symbol, **_: self._sloped_prices(symbol, today),
+            ),
+            patch("refresh_data.options_client.fetch_options_signals", return_value=options),
+            patch("refresh_data.yfinance_client.fetch_fundamentals", return_value={}),
+            patch("refresh_data.yfinance_client.fetch_analyst_consensus", return_value={}),
+            patch(
+                "refresh_data.short_interest_client.fetch_short_interest",
+                return_value={"symbol": "AAA", "pct_float_short": None, "days_to_cover": None},
+            ),
+            patch(
+                "refresh_data.edgar_client.fetch_insider_transactions",
+                return_value=_empty_df(list(refresh_data._INSIDER_COLUMNS)),
+            ),
+            patch(
+                "refresh_data.news_client.fetch_all_tier1_news",
+                return_value=_empty_df(
+                    ["title", "link", "summary", "published_at", "source", "symbol"]
+                ),
+            ),
+            patch(
+                "refresh_data.edgar_13f_client.fetch_institutional_ownership_trend",
+                return_value=_empty_df(list(refresh_data._INSTITUTIONAL_COLUMNS)),
+            ),
+            patch(
+                "refresh_data.gdelt_client.fetch_articles",
+                return_value=_empty_df(["title", "url"]),
+            ),
+            patch(
+                "refresh_data.gdelt_client.fetch_tone_timeline",
+                return_value=_empty_df(["date", "tone", "query"]),
+            ),
+            patch("refresh_data.discord.send", return_value=1) as send,
+        ):
+            clock.now.return_value = datetime.combine(today, datetime.min.time())
+            yield send, factory
+
+    @staticmethod
+    def _settings(**overrides):
+        from quantpulse.config import Settings
+
+        return Settings(
+            _env_file=None,
+            **{
+                "alert_discord_webhook_url": "https://discord.test/api/webhooks/1/tok",
+                **overrides,
+            },
+        )
+
+    def test_the_nightly_run_sends_the_digest(self, engine: Engine) -> None:
+        today = date(2026, 7, 22)
+        with self._driven_run(engine, settings=self._settings(), today=today) as (send, _):
+            refresh_data.run(job_name="test_alerts")
+
+        send.assert_called_once()
+        url, digest = send.call_args.args
+        assert url == "https://discord.test/api/webhooks/1/tok"
+        assert "2026-07-22" in digest and "2026-07-21" in digest
+        assert rules.UNIVERSE_HEADING in digest
+
+    def test_an_unconfigured_webhook_sends_nothing_and_does_not_degrade_the_run(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Every fork of this public repo runs this workflow with no secret.
+
+        The status is not asserted directly: this mocked universe has no
+        `^GSPC`, so `benchmark_prices` writes nothing and the run is "partial"
+        whatever alerting does. An assertion on the status alone would pass
+        without alerting being involved at all, so what is asserted is that the
+        step is not among the ones named as failed.
+        """
+        today = date(2026, 7, 22)
+        settings = self._settings(alert_discord_webhook_url=None)
+        with caplog.at_level(logging.INFO):
+            with self._driven_run(engine, settings=settings, today=today) as (send, _):
+                status = refresh_data.run(job_name="test_alerts")
+
+        send.assert_not_called()
+        assert status != "failed"
+        assert "failed step(s)" not in caplog.text
+        assert "Alerting is not configured" in caplog.text
+
+    def test_the_kill_switch_stops_the_send(self, engine: Engine) -> None:
+        today = date(2026, 7, 22)
+        settings = self._settings(alerts_enabled=False)
+        with self._driven_run(engine, settings=settings, today=today) as (send, _):
+            refresh_data.run(job_name="test_alerts")
+        send.assert_not_called()
+
+    def test_a_webhook_failure_costs_the_message_and_nothing_else(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The night's data is already committed; a Discord outage must cost the
+        message alone.
+
+        `status == "partial"` is not enough on its own -- this fixture is
+        already partial for an unrelated reason -- so the log has to name
+        `alerts` as the failed step, and the day's scores have to be in the
+        database regardless.
+        """
+        today = date(2026, 7, 22)
+        with caplog.at_level(logging.INFO):
+            with self._driven_run(engine, settings=self._settings(), today=today) as (
+                send,
+                factory,
+            ):
+                send.side_effect = discord.WebhookError("discord.test said no")
+                status = refresh_data.run(job_name="test_alerts")
+
+        assert status == "partial"
+        assert "failed step(s): alerts" in caplog.text
+        with factory() as session:
+            scored = session.scalars(
+                select(CompositeScore.symbol).where(CompositeScore.date == today)
+            ).all()
+        assert set(scored) == set(self._SYMBOLS)
+
+    def test_no_alert_when_this_run_did_not_write_todays_scores(self, engine: Engine) -> None:
+        """A failed composite step leaves the two newest snapshots unchanged, so
+        an unguarded alert would re-send the previous run's digest as tonight's
+        news -- and `step()`'s isolation means a red run still reaches this
+        point.
+
+        **Two** prior snapshots, and they differ. An earlier version of this
+        test seeded one, so a failed composite left a single snapshot and the
+        "needs two snapshots" guard fired first -- the `current != today` guard
+        this test is named for was never reached, and deleting it changed
+        nothing that any test could see. With hold -> strong_buy already
+        stored, an unguarded run has a perfectly good digest to send, and only
+        the date check stops it.
+        """
+        today = date(2026, 7, 22)
+        with self._driven_run(
+            engine, settings=self._settings(), today=today, seed=("hold", "strong_buy")
+        ) as (send, _):
+            with patch("refresh_data.refresh_composite_scores", side_effect=RuntimeError("boom")):
+                refresh_data.run(job_name="test_alerts")
+        send.assert_not_called()
+
+    def test_a_fresh_database_says_why_it_cannot_compare_yet(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One stored snapshot is not a comparison.
+
+        Behaviourally this is covered by the "scores are not today's" guard
+        anyway, so the branch exists for its message: on a first run "needs two
+        snapshots" and "the composite step failed" want different answers from
+        whoever reads the log, and collapsing them would make a cold start look
+        like a fault.
+        """
+        with caplog.at_level(logging.INFO):
+            with self._driven_run(
+                engine, settings=self._settings(), today=date(2026, 7, 21), seed=()
+            ) as (send, _):
+                refresh_data.run(job_name="test_alerts")
+        send.assert_not_called()
+        assert "needs two stored scoring snapshots" in caplog.text
+
+    def test_a_quiet_night_sends_no_message_at_all(self, engine: Engine) -> None:
+        """An alert that arrives every night regardless stops being read.
+
+        Two consecutive runs over the same price shape: the second run's
+        cross-sectional ranking is identical to the first's, so no rating moves
+        and there is nothing to say. Driven through `run()` because "send
+        nothing" is a decision the caller has to actually honour -- replacing
+        the empty digest with a placeholder string is otherwise invisible.
+        """
+        with self._driven_run(
+            engine, settings=self._settings(), today=date(2026, 7, 21), seed=()
+        ) as (send, _):
+            refresh_data.run(job_name="test_alerts")
+        send.assert_not_called()  # only one snapshot exists yet
+
+        with self._driven_run(
+            engine, settings=self._settings(), today=date(2026, 7, 22), seed=()
+        ) as (send, factory):
+            refresh_data.run(job_name="test_alerts")
+
+        with factory() as session:
+            snapshots = set(session.scalars(select(CompositeScore.date).distinct()).all())
+        assert len(snapshots) == 2, "the second run must have written a snapshot to compare"
+        send.assert_not_called()
+
+    def test_a_new_formation_on_a_watched_name_reaches_the_digest(self, engine: Engine) -> None:
+        """The end-to-end path for the pattern trigger: the watermark taken
+        before the sweep, the rows the sweep inserted, the watchlist scope, and
+        the confidence floor -- all through `run()`."""
+        from quantpulse.storage.models import WatchlistEntry
+
+        today = date(2026, 7, 22)
+        settings = self._settings()
+        detected = pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "date": pd.Timestamp(today - timedelta(days=30)),
+                    "pattern_type": "cup_and_handle",
+                    "direction": "bullish",
+                    "confidence": 88.0,
+                }
+            ]
+        )
+        with self._driven_run(engine, settings=settings, today=today) as (send, factory):
+            with factory() as session:
+                session.add(WatchlistEntry(symbol="AAA", added_date=today))
+                session.commit()
+            with patch("refresh_data.patterns.detect_chart_patterns", return_value=detected):
+                refresh_data.run(job_name="test_alerts")
+
+        _, digest = send.call_args.args
+        assert rules.TRACKED_HEADING in digest
+        assert "cup and handle" in digest and "88" in digest
+
+    def test_a_re_detected_formation_is_not_reported_as_new(self, engine: Engine) -> None:
+        """The watermark's whole job. The sweep re-detects the same formation
+        every night; only the run that first inserted it may say so."""
+        from quantpulse.storage.models import WatchlistEntry
+
+        today = date(2026, 7, 22)
+        detected = pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "date": pd.Timestamp(today - timedelta(days=30)),
+                    "pattern_type": "cup_and_handle",
+                    "direction": "bullish",
+                    "confidence": 88.0,
+                }
+            ]
+        )
+        with self._driven_run(engine, settings=self._settings(), today=today) as (send, factory):
+            with factory() as session:
+                session.add(WatchlistEntry(symbol="AAA", added_date=today))
+                session.commit()
+            with patch("refresh_data.patterns.detect_chart_patterns", return_value=detected):
+                refresh_data.run(job_name="test_alerts")
+                send.reset_mock()
+                refresh_data.run(job_name="test_alerts")
+
+        if send.call_args is not None:
+            assert "cup and handle" not in send.call_args.args[1]

@@ -115,6 +115,16 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+          # Section 10's alert destination. A Discord webhook URL is a
+          # credential -- whoever holds it can post into that channel -- so it
+          # lives here and nowhere else in the repository (Section 18).
+          #
+          # An unset secret expands to the empty string rather than to nothing,
+          # which is why `Settings.alerting_configured()` treats a blank as
+          # unset: this expression is present in every fork of this public repo,
+          # and none of them have a webhook of their own. Unset means the alert
+          # step logs one line and does nothing, which must not be an error.
+          ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}
 
       # ADR 4.4: "commit/store the results" so the live app never needs
       # rate-limited API keys of its own. `quantpulse_demo.db` (not

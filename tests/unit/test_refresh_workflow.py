@@ -106,3 +106,42 @@ def test_manual_dispatch_survives_alongside_the_schedule(workflow: dict) -> None
     assert "workflow_dispatch" in triggers
     inputs = triggers["workflow_dispatch"]["inputs"]
     assert {"force_weekly", "ignore_market_calendar"} <= set(inputs)
+
+
+def _refresh_step_env(workflow: dict) -> dict:
+    steps = workflow["jobs"]["refresh"]["steps"]
+    run_step = next(step for step in steps if step.get("name") == "Run refresh")
+    return run_step["env"]
+
+
+class TestAlertDestination:
+    """Where the alert goes, asserted from the one file that decides it.
+
+    Everything else about alerting is checked in Python, where a secret cannot
+    reach. This is the seam: the module reads `ALERT_DISCORD_WEBHOOK_URL` from
+    the environment, and if the workflow never puts it there the whole feature
+    is dead code in the only place it runs -- with no failing test anywhere,
+    because every Python-side test supplies its own settings object.
+    """
+
+    def test_the_webhook_reaches_the_refresh_step(self, workflow: dict) -> None:
+        env = _refresh_step_env(workflow)
+        assert "ALERT_DISCORD_WEBHOOK_URL" in env, (
+            "the refresh step cannot see the webhook secret, so the alert step "
+            "logs 'not configured' every night and nothing is ever sent"
+        )
+
+    def test_it_comes_from_a_secret_and_not_from_a_literal(self, workflow: dict) -> None:
+        """A webhook URL in a workflow file is a published credential."""
+        value = _refresh_step_env(workflow)["ALERT_DISCORD_WEBHOOK_URL"]
+        assert value.strip() == "${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}"
+
+    def test_no_workflow_file_contains_a_webhook_url(self) -> None:
+        """The whole directory, not just this file. A URL pasted into any
+        workflow (or into a `run:` line while debugging) is public the moment
+        it is pushed, and a repository's history keeps it after the fix.
+        """
+        for path in WORKFLOW.parent.glob("*.yml"):
+            text = path.read_text()
+            assert "discord.com/api/webhooks/" not in text, f"{path.name} carries a webhook URL"
+            assert "discordapp.com/api/webhooks/" not in text, f"{path.name} carries a webhook URL"

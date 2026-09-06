@@ -46,12 +46,14 @@ from quantpulse.storage.models import (
     NewsEvent,
     OptionsSignal,
     PatternSignal,
+    PortfolioHolding,
     PriceHistory,
     RefreshLog,
     SentimentScore,
     ShortInterest,
     ThematicBasket,
     Ticker,
+    WatchlistEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -849,15 +851,17 @@ def read_screener_rows(
     )
 
 
-def read_rating_changes(
-    session: Session, *, profile: str = "balanced", limit: int = 25
-) -> pd.DataFrame:
-    """Symbols whose rating changed between the two most recent scoring dates.
+def read_latest_score_dates(
+    session: Session, *, profile: str = "balanced"
+) -> tuple[date | None, date | None]:
+    """The two most recent stored scoring dates, newest first.
 
-    Section 10's "what changed since yesterday" view, which the append-only
-    point-in-time schema (Section 6.8) makes almost free: compare the latest
-    two stored snapshots instead of maintaining a separate change log. Empty
-    frame when there aren't two snapshots yet.
+    Exported rather than left inline in `read_rating_changes` because a caller
+    that *reports* a change has to be able to say which two snapshots it
+    compared. They are usually consecutive trading days and sometimes are not --
+    the demo's most recent pair was ten days apart after the schedule lapsed --
+    so a message calling this "since yesterday" would be wrong exactly when the
+    gap is the interesting part. `(None, None)` when there are not two.
     """
     dates = list(
         session.scalars(
@@ -869,8 +873,27 @@ def read_rating_changes(
         )
     )
     if len(dates) < 2:
+        return None, None
+    return dates[0], dates[1]
+
+
+def read_rating_changes(
+    session: Session, *, profile: str = "balanced", limit: int | None = 25
+) -> pd.DataFrame:
+    """Symbols whose rating changed between the two most recent scoring dates.
+
+    Section 10's "what changed since yesterday" view, which the append-only
+    point-in-time schema (Section 6.8) makes almost free: compare the latest
+    two stored snapshots instead of maintaining a separate change log. Empty
+    frame when there aren't two snapshots yet.
+
+    `limit=None` reads them all. Both front ends want a top-N table; the
+    alerting digest wants every change on a name you hold, and decides for
+    itself which of the rest are worth a line.
+    """
+    current, previous = read_latest_score_dates(session, profile=profile)
+    if current is None or previous is None:
         return pd.DataFrame()
-    current, previous = dates[0], dates[1]
 
     def _snapshot(target: date) -> dict[str, tuple[str, float]]:
         stmt = select(
@@ -894,7 +917,8 @@ def read_rating_changes(
     frame = pd.DataFrame(changes)
     if frame.empty:
         return frame
-    return frame.reindex(frame["score_change"].abs().sort_values(ascending=False).index).head(limit)
+    ranked = frame.reindex(frame["score_change"].abs().sort_values(ascending=False).index)
+    return ranked if limit is None else ranked.head(limit)
 
 
 def read_symbol_ohlcv(session: Session, symbol: str, *, lookback_days: int = 400) -> pd.DataFrame:
@@ -1284,3 +1308,68 @@ def read_latest_prices(session: Session, symbols: Sequence[str]) -> dict[str, fl
         (PriceHistory.symbol == subquery.c.symbol) & (PriceHistory.date == subquery.c.latest),
     )
     return {row.symbol: float(row.close) for row in session.execute(stmt)}
+
+
+# --------------------------------------------------------------------------- #
+# Alerting reads (Section 10)
+# --------------------------------------------------------------------------- #
+
+
+def read_tracked_symbols(session: Session) -> set[str]:
+    """Every symbol you hold or watch — the scope the alert applies no filter to.
+
+    Excludes the `CASH` pseudo-position. `SqlitePortfolioStore` stores cash as a
+    holding with `asset_type='cash'` so a restored portfolio keeps its sleeve;
+    it has no rating and no chart, so including it would put a symbol in scope
+    that cannot move.
+
+    Returns an empty set on the hosted demo, and that is correct rather than
+    broken: it runs `PORTFOLIO_BACKEND=session`, so holdings live in a browser
+    and never reach this file (ADR 4.5). The alert's universe-wide rule is what
+    carries that deployment; this one carries a local `sqlite` instance, which
+    is the one Section 10 describes.
+    """
+    holdings = session.scalars(
+        select(PortfolioHolding.symbol).where(PortfolioHolding.asset_type != "cash")
+    )
+    watched = session.scalars(select(WatchlistEntry.symbol))
+    return {str(symbol) for symbol in holdings} | {str(symbol) for symbol in watched}
+
+
+def max_pattern_signal_id(session: Session) -> int:
+    """The table's high-water mark, for asking what a later run inserted.
+
+    Paired with `read_pattern_signals_after_id`. `pattern_signals.id` is a plain
+    autoincrement, so a row's id ordering is its insertion ordering, and the
+    difference between two readings is exactly the set of rows written between
+    them. Zero on an empty table, which makes the first run's "everything is
+    new" fall out without a special case.
+    """
+    return int(session.scalar(select(func.coalesce(func.max(PatternSignal.id), 0))) or 0)
+
+
+def read_pattern_signals_after_id(session: Session, after_id: int) -> pd.DataFrame:
+    """The formations inserted since `after_id`, in the `pattern_signals` shape.
+
+    **Not "formations dated recently".** A formation's stored `date` is the day
+    its shape completed, and `patterns.detect_chart_patterns` cannot recognise a
+    pivot until the move after it confirms one -- so a head-and-shoulders that
+    completed a week ago can first appear in this table tonight. Filtering on
+    the date would silently drop precisely the formation a reader most wants to
+    hear about, while looking like it worked.
+    """
+    stmt = (
+        select(
+            PatternSignal.symbol,
+            PatternSignal.date,
+            PatternSignal.pattern_type,
+            PatternSignal.direction,
+            PatternSignal.confidence,
+        )
+        .where(PatternSignal.id > after_id)
+        .order_by(PatternSignal.confidence.desc())
+    )
+    return pd.DataFrame(
+        session.execute(stmt).all(),
+        columns=["symbol", "date", "pattern_type", "direction", "confidence"],
+    )
