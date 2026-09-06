@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from quantpulse.alerting import discord, rules
 from quantpulse.analysis import (
     analyst_consensus,
     backtest,
@@ -1244,6 +1245,72 @@ def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], 
     return hit_rates
 
 
+def send_alerts(session: Session, today: date, *, after_pattern_id: int) -> int:
+    """Push the night's rating changes and new formations to a webhook (Section 10).
+
+    Returns the number of Discord messages sent, which is deliberately **not**
+    added to the run's `rows_updated`: this step writes no rows, and inflating a
+    row count with a message count is how a number stops meaning anything.
+
+    Three guards, each of which exists because the failure it prevents is quiet:
+
+    * **Nothing configured, nothing sent.** This repository is public and every
+      fork runs this workflow, so an unset webhook has to be an ordinary no-op
+      rather than an error.
+    * **Only alert on scores this run actually wrote.** Without this, a run
+      whose `composite_scores` step failed would compare the same two old
+      snapshots the last run compared and re-send yesterday's digest as though
+      it were tonight's news. `_CRITICAL_STEPS` makes that run red, but red runs
+      still reach this point -- the isolation in `step()` is the whole design.
+    * **A delivery failure must not fail the run.** The caller wraps this in
+      `step()`, so a Discord outage costs the message and downgrades the run to
+      "partial"; the night's data is already committed either way.
+
+    A same-day re-dispatch re-sends the same digest, because the append-only
+    writer makes the second run's scores identical to the first's and there is
+    no sent-message log to check against. That is a known and accepted
+    duplicate; the alternative is a table whose only purpose is deduplicating a
+    manual override.
+    """
+    settings = get_settings()
+    if not settings.alerting_configured():
+        logger.info("Alerting is not configured (no webhook URL); sending nothing")
+        return 0
+
+    current, previous = persistence.read_latest_score_dates(session)
+    if current is None or previous is None:
+        logger.info("Alerting needs two stored scoring snapshots; sending nothing")
+        return 0
+    if current != today:
+        # The run did not write today's scores -- the composite step failed, or
+        # this is a catch-up over a database that already had them. Either way
+        # the newest pair is not news, and sending it would present old changes
+        # as tonight's.
+        logger.warning(
+            "Latest stored scores are %s, not today (%s); sending no alert", current, today
+        )
+        return 0
+
+    digest = rules.build_digest(
+        changes=persistence.read_rating_changes(session, limit=None),
+        patterns=persistence.read_pattern_signals_after_id(session, after_pattern_id),
+        tracked=persistence.read_tracked_symbols(session),
+        current_date=current,
+        previous_date=previous,
+        min_confidence=(
+            settings.alert_pattern_min_confidence
+            if settings.alert_pattern_min_confidence is not None
+            else rules.DEFAULT_PATTERN_MIN_CONFIDENCE
+        ),
+    )
+    if digest is None:
+        logger.info("Nothing crossed an alert threshold tonight; sending nothing")
+        return 0
+    # `alert_discord_webhook_url` is not None here -- `alerting_configured()`
+    # is exactly that check plus the kill switch.
+    return discord.send(str(settings.alert_discord_webhook_url), digest)
+
+
 def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> int:
     """Generate and persist each name's price forecasts, tagged with the model's track record.
 
@@ -2012,6 +2079,14 @@ def run(
 
         # Chart patterns are a daily technical read off the same price window the
         # composite uses, and the whole 503-name sweep costs about a second.
+        #
+        # The high-water mark is read BEFORE the sweep so the alert step below
+        # can ask which formations this run actually inserted. It cannot ask
+        # that of the rows themselves: a formation's stored date is the day its
+        # shape *completed*, which the zigzag often cannot confirm until days
+        # later, so "dated recently" and "new to this database" are different
+        # questions with different answers.
+        patterns_before = _in_session(persistence.max_pattern_signal_id)
         rows_updated += step(
             "pattern_signals",
             lambda: _in_session(lambda s: refresh_pattern_signals(s, universe_df, today)),
@@ -2023,6 +2098,20 @@ def run(
         rows_updated += step(
             "composite_scores",
             lambda: _in_session(lambda s: refresh_composite_scores(s, universe_df, today)),
+        )
+
+        # Section 10's alert, immediately after the scores it reports and before
+        # the weekly branch's slow half.
+        #
+        # Here rather than at the end of `run()` on purpose. The three steps
+        # below take hours on a Monday and have twice exhausted the job's
+        # budget; an alert placed after them would be the first thing lost on
+        # the nights it is most worth having, and it depends on none of them.
+        # It is not added to `rows_updated` -- it writes no rows, and a message
+        # count summed into a row count makes both numbers mean nothing.
+        step(
+            "alerts",
+            lambda: _in_session(lambda s: send_alerts(s, today, after_pattern_id=patterns_before)),
         )
 
         # Phase 7 forecasting + backtesting ride the weekly cadence (the heaviest

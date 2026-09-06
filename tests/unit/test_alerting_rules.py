@@ -157,6 +157,34 @@ def test_a_new_pattern_on_a_tracked_name_alerts() -> None:
     assert "82" in alerts[0].line
 
 
+def test_two_formations_of_the_same_type_are_told_apart_by_their_dates() -> None:
+    """Found by rendering the committed demo database rather than a fixture.
+
+    A run really does insert several double bottoms for one symbol at once --
+    different formations, different completion dates, different confidences.
+    Without the date the message read "UNP new double bottom" three times with
+    nothing to distinguish them, which looks like a duplication bug.
+    """
+    rows = pd.DataFrame(
+        [
+            {
+                "symbol": "UNP",
+                "date": day,
+                "pattern_type": "double_bottom",
+                "direction": "bullish",
+                "confidence": confidence,
+            }
+            for day, confidence in (
+                (date(2026, 8, 14), 97.0),
+                (date(2026, 9, 1), 85.0),
+            )
+        ]
+    )
+    lines = [a.line for a in rules.pattern_alerts(rows, tracked={"UNP"})]
+    assert len(set(lines)) == 2
+    assert "2026-08-14" in " ".join(lines) and "2026-09-01" in " ".join(lines)
+
+
 def test_a_new_pattern_on_an_untracked_name_is_silent() -> None:
     """17-80 formations a day across the universe; only your own names are news."""
     assert (

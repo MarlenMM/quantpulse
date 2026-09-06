@@ -360,6 +360,7 @@ pretending otherwise. Worth knowing which cost what:
    | `FINNHUB_API_KEY` | Short interest (Section 24's two readings) |
    | `FRED_API_KEY` | Fed funds, CPI, unemployment, GDP, and the 10Y/2Y series — so the yield-curve spread drops out of the Market Regime Index |
    | `SEC_EDGAR_USER_AGENT` | Insider (Form 4) and 13F institutional ownership. This one is **not an API key** — SEC only asks for a contact string like `"Your Name your@email.com"`, so it costs nothing but a repo secret |
+   | `ALERT_DISCORD_WEBHOOK_URL` | The nightly alert (below). Unset, the refresh logs one line and sends nothing |
 
    Everything else — prices, options, news, fundamentals, analyst consensus,
    the index constituent list — comes from sources that need no credential at
@@ -373,6 +374,33 @@ pretending otherwise. Worth knowing which cost what:
    and that the score is renormalized over those, and a stock with no
    short-interest reading says the source is absent rather than dropping the
    section, which would read as "this stock has no short interest".
+
+### Alerts — the refresh telling you when to open the app
+
+The refresh already computes every rating change and completed chart formation.
+With a Discord webhook in `ALERT_DISCORD_WEBHOOK_URL`, it posts the ones worth
+interrupting you about:
+
+* **every** rating change on a name you hold or watch,
+* a new chart formation on one of those names at confidence ≥ 70,
+* and, from the rest of the universe, only a rating that **lands on** Strong Buy
+  or Strong Sell.
+
+The scoping is not squeamishness. Measured against the committed demo database,
+"any rating change" is 96–195 a night — at ~45 characters a line that is roughly
+twice Discord's 2,000-character message limit, so the naive version would fail
+rather than annoy. The published rules produce one message of about 800
+characters. A night on which nothing qualifies sends **nothing at all**; an
+alert that arrives every night regardless stops being read.
+
+To set it up: in Discord, *Edit Channel → Integrations → Webhooks → New Webhook
+→ Copy Webhook URL*, then paste it into a repo secret (or `.env` locally).
+Treat the URL as a password — anyone holding it can post into that channel; it
+is never written to a log, and revoking it is one click in the same menu.
+
+Discord rather than Gmail SMTP because of the size of the secret: a webhook is
+one opaque URL, where SMTP needs a host, a port, a from-address, a to-address
+and an app password that authenticates against a whole mailbox.
 
 ## Development
 

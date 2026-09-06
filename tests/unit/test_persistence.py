@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -630,3 +630,126 @@ class TestBrokenAdjustmentSeriesAreDropped:
         session.commit()
 
         assert "CBE" not in self._panel(session).columns
+
+
+class TestAlertingReads:
+    """The three reads Section 10's alert needs that nothing else asked for.
+
+    Each exists because the obvious substitute is subtly wrong, and the wrong
+    version is the one that looks fine until someone reads the message.
+    """
+
+    def _hold(self, session: Session, symbol: str, asset_type: str = "equity") -> None:
+        from quantpulse.storage.models import PortfolioHolding
+
+        session.add(
+            PortfolioHolding(symbol=symbol, asset_type=asset_type, shares=10.0, cost_basis=1000.0)
+        )
+
+    def test_tracked_symbols_are_holdings_plus_watchlist(self, session: Session) -> None:
+        from quantpulse.storage.models import WatchlistEntry
+
+        self._hold(session, "AAPL")
+        session.add(WatchlistEntry(symbol="MSFT", added_date=date.today()))
+        session.commit()
+        assert persistence.read_tracked_symbols(session) == {"AAPL", "MSFT"}
+
+    def test_the_cash_pseudo_position_is_not_a_tracked_symbol(self, session: Session) -> None:
+        """`SqlitePortfolioStore` stores cash as a holding with asset_type
+        'cash' so a restored portfolio keeps its sleeve. It has no rating, so
+        alerting on it would mean alerting on a symbol that cannot move."""
+        self._hold(session, "CASH", asset_type="cash")
+        session.commit()
+        assert persistence.read_tracked_symbols(session) == set()
+
+    def test_an_empty_portfolio_tracks_nothing(self, session: Session) -> None:
+        """The normal case in the deployment that sends these: the demo runs
+        PORTFOLIO_BACKEND=session, so its committed database holds no
+        positions at all."""
+        assert persistence.read_tracked_symbols(session) == set()
+
+    def test_latest_score_dates_returns_the_pair_being_compared(self, ui_session) -> None:
+        current, previous = persistence.read_latest_score_dates(ui_session)
+        assert current == date.today() and previous == date.today() - timedelta(days=1)
+
+    def test_latest_score_dates_is_none_without_two_snapshots(self, session: Session) -> None:
+        assert persistence.read_latest_score_dates(session) == (None, None)
+
+    def test_new_pattern_rows_are_the_ones_this_run_inserted(self, session: Session) -> None:
+        """Not "rows dated recently".
+
+        A formation's stored `date` is the day its *shape completed*, which can
+        be well before the run that first detects it -- the zigzag needs the
+        move after a pivot to confirm it. So "date >= yesterday" would miss
+        exactly the formation a reader most wants to hear about, and the only
+        honest question is which rows this run actually wrote.
+        """
+        before = persistence.max_pattern_signal_id(session)
+        persistence.upsert_pattern_signals(
+            session,
+            [
+                {
+                    "symbol": "AAPL",
+                    "date": date.today() - timedelta(days=30),
+                    "pattern_type": "cup_and_handle",
+                    "direction": "bullish",
+                    "confidence": 82.0,
+                }
+            ],
+        )
+        session.commit()
+        fresh = persistence.read_pattern_signals_after_id(session, before)
+        assert list(fresh["symbol"]) == ["AAPL"]
+        assert list(fresh["pattern_type"]) == ["cup_and_handle"]
+
+    def test_a_re_detected_formation_is_not_new(self, session: Session) -> None:
+        """The nightly re-detects last week's double top every night. It is
+        deduped on (symbol, date, pattern_type), so it inserts nothing -- and
+        must therefore alert nothing, or the same formation is news forever."""
+        record = {
+            "symbol": "AAPL",
+            "date": date.today(),
+            "pattern_type": "double_top",
+            "direction": "bearish",
+            "confidence": 90.0,
+        }
+        persistence.upsert_pattern_signals(session, [record])
+        session.commit()
+        before = persistence.max_pattern_signal_id(session)
+        persistence.upsert_pattern_signals(session, [record])
+        session.commit()
+        assert persistence.read_pattern_signals_after_id(session, before).empty
+
+    def test_max_pattern_signal_id_is_zero_on_an_empty_table(self, session: Session) -> None:
+        assert persistence.max_pattern_signal_id(session) == 0
+
+    def test_rating_changes_can_be_read_unlimited(self, session: Session) -> None:
+        """The alert wants every change on a name you hold, not the top 25.
+
+        Thirty changes, deliberately: an earlier version of this test asserted
+        only "not empty" against a one-change fixture, and so passed with
+        `limit=None` silently falling back to the default cap of 25. Measured,
+        a real night produces 96-195 changes, so the difference between "all"
+        and "the first 25" is most of the message.
+        """
+        from quantpulse.storage.models import CompositeScore
+
+        today = date.today()
+        for index in range(30):
+            symbol = f"S{index:03d}"
+            session.add(Ticker(symbol=symbol, name=symbol, asset_type="equity", is_active=True))
+            for day, rating in ((today - timedelta(days=1), "hold"), (today, "buy")):
+                session.add(
+                    CompositeScore(
+                        symbol=symbol,
+                        date=day,
+                        profile="balanced",
+                        composite_score=50.0 + index,
+                        rating=rating,
+                        data_confidence=80.0,
+                    )
+                )
+        session.commit()
+
+        assert len(persistence.read_rating_changes(session, limit=None)) == 30
+        assert len(persistence.read_rating_changes(session)) == 25

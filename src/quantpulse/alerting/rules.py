@@ -172,6 +172,12 @@ def pattern_alerts(
         if symbol not in tracked or confidence < min_confidence:
             continue
         shape = str(row.pattern_type).replace("_", " ")
+        # The completion date, not the detection date, and it earns its place:
+        # a run routinely inserts several formations of the same type on one
+        # symbol, and without it the message repeats "UNP new double bottom"
+        # three times with nothing to tell them apart. (Real rows from the
+        # committed demo database; the tests had not produced that shape.)
+        completed = pd.Timestamp(row.date).date()
         alerts.append(
             Alert(
                 kind="new_pattern",
@@ -180,7 +186,7 @@ def pattern_alerts(
                 magnitude=confidence,
                 line=(
                     f"{_PATTERN_MARK} `{symbol}` new {shape} "
-                    f"({row.direction}, confidence {confidence:.0f})"
+                    f"({row.direction}, confidence {confidence:.0f}, completed {completed})"
                 ),
             )
         )
