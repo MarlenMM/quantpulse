@@ -207,6 +207,60 @@ class TestShortInterestIsVisible:
         assert "squeeze" in body
         assert "betting against" in body
 
+    def test_it_explains_itself_when_no_reading_is_stored(self, tmp_path: Path) -> None:
+        """An absent source is not a low short interest, and must not read as one.
+
+        The panel used to return early when nothing was stored, so on every
+        deployment without a `FINNHUB_API_KEY` -- which is every one of them, and
+        `short_interest` has 0 rows all-time -- the section simply was not there.
+        A section that silently disappears makes a claim of its own: that this
+        stock has nothing worth saying about its short interest. Section 24 asks
+        for both readings to be shown; when there are none, saying so is the
+        honest version of that.
+        """
+        engine = create_engine(f"sqlite:///{tmp_path / 'noshort.db'}")
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(bind=engine)
+        with factory() as session:
+            # The standard fixture minus its `ShortInterest` row -- which is the
+            # state of every real deployment, since `short_interest` has held
+            # zero rows for the life of the project.
+            session.add(
+                Ticker(
+                    symbol="NVDA",
+                    name="NVIDIA Corporation",
+                    sector="Information Technology",
+                    asset_type="equity",
+                    is_active=True,
+                )
+            )
+            _price_series(session, "NVDA", seed=7)
+            session.add(
+                CompositeScore(
+                    symbol="NVDA",
+                    date=AS_OF,
+                    profile="balanced",
+                    composite_score=87.3,
+                    percentile_rank=96.2,
+                    rating="strong_buy",
+                    data_confidence=84.0,
+                    **{f"{category}_score": 70.0 for category in CATEGORIES},
+                )
+            )
+            session.commit()
+
+        at = _run(STOCK_DETAIL, engine)
+        assert not at.exception
+        assert "Short interest" in [element.value for element in at.subheader], (
+            "the section vanished entirely, which reads as 'nothing to report' rather "
+            "than 'this source is not configured'"
+        )
+        body = _text(at).lower()
+        assert "no short-interest reading is stored" in body
+        assert "not a low short interest" in body
+        # ...and it must not have invented the metrics it had no data for.
+        assert "% of float short" not in [metric.label for metric in at.metric]
+
 
 class TestMonteCarloIsVisible:
     def test_simulated_paths_section_renders(self, seeded_engine: Engine) -> None:

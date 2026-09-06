@@ -360,6 +360,13 @@ class RegimePoint(BaseModel):
     yield_curve_spread: float | None = None
     regime_score: float | None = None
     regime_label: str | None = None
+    #: How many of the four inputs actually produced this score, as a sentence
+    #: the client prints verbatim. Composed server-side for the same reason
+    #: `beta_benchmark` is: it is a claim about how the number beside it was
+    #: computed, and a client that assembles its own version can outlive the
+    #: blend it describes. Both front ends said "built from four inputs" while
+    #: the yield-curve spread had been null since the project began.
+    coverage_note: str = ""
 
 
 class BacktestRun(BaseModel):

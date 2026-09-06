@@ -689,3 +689,88 @@ class TestForecastGradingReachesTheClient:
                 r["point_return"] for r in rows if r["is_graded"]
             )
             break
+
+
+class TestRegimeCoverageReachesTheClient:
+    """React prints the coverage sentence, so the server must compose and send it.
+
+    Both front ends described the index as "built from four inputs" while the
+    yield-curve spread had been null since the project began. The sentence is
+    server-side for the same reason `beta_benchmark` is: it is a claim about how
+    the number beside it was computed.
+    """
+
+    def test_each_point_carries_its_own_note(self, client: TestClient) -> None:
+        points = client.get("/api/regime").json()
+        assert points, "the fixture stored no regime rows"
+        assert all(p["coverage_note"] for p in points)
+
+    def test_a_missing_input_is_reported_as_missing(self, tmp_path) -> None:
+        def _seed_partial(session: Session) -> None:
+            session.add(
+                MarketRegime(
+                    date=TODAY - timedelta(days=2),
+                    vix_level=14.5,
+                    breadth_pct_above_200dma=66.4,
+                    macro_news_tone=-0.5,
+                    yield_curve_spread=None,
+                    regime_score=73.6,
+                    regime_label="risk_on",
+                )
+            )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_partial):
+            point = next(p for p in c.get("/api/regime").json() if p["yield_curve_spread"] is None)
+            assert "Three of its four inputs are live" in point["coverage_note"]
+            assert "the yield-curve spread is missing" in point["coverage_note"]
+            break
+
+    def test_the_note_is_per_row_not_per_series(self, tmp_path) -> None:
+        """A key added tomorrow makes tomorrow a four-input reading, not the history.
+
+        Rewriting older points to match today's coverage would be exactly the
+        retroactive edit the append-only score storage exists to prevent.
+        """
+
+        def _seed_mixed(session: Session) -> None:
+            session.add(
+                MarketRegime(
+                    date=TODAY - timedelta(days=3),
+                    vix_level=15.0,
+                    breadth_pct_above_200dma=60.0,
+                    macro_news_tone=-0.2,
+                    yield_curve_spread=None,
+                    regime_score=70.0,
+                    regime_label="risk_on",
+                )
+            )
+            session.add(
+                MarketRegime(
+                    date=TODAY - timedelta(days=2),
+                    vix_level=15.0,
+                    breadth_pct_above_200dma=60.0,
+                    macro_news_tone=-0.2,
+                    yield_curve_spread=0.4,
+                    regime_score=71.0,
+                    regime_label="risk_on",
+                )
+            )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_mixed):
+            notes = {
+                p["date"]: p["coverage_note"]
+                for p in c.get("/api/regime").json()
+                if p["date"]
+                in {
+                    str(TODAY - timedelta(days=3)),
+                    str(TODAY - timedelta(days=2)),
+                }
+            }
+            assert len(notes) == 2
+            assert len(set(notes.values())) == 2, (
+                "both points got the same coverage note, so it is describing the series "
+                "rather than the row"
+            )
+            break

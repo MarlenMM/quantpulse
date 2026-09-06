@@ -147,3 +147,82 @@ class TestComputeMarketRegime:
         assert record["macro_news_tone"] == 1.0
         assert record["yield_curve_spread"] == 0.3
         assert record["date"] == date(2026, 7, 22)
+
+
+class TestCoverageIsDescribedHonestly:
+    """The index renormalizes over what it has, so the caption must say what that was.
+
+    Both front ends called it "built from four inputs" while `yield_curve_spread`
+    had been `None` since the project began -- with no `FRED_API_KEY` the 10Y-2Y
+    series never arrives. The published score is a weighted average of three
+    signals presented as an average of four, which misdescribes the number
+    standing next to it rather than merely omitting a row.
+    """
+
+    @staticmethod
+    def _row(**overrides: float | None) -> dict[str, float | None]:
+        row: dict[str, float | None] = {
+            "vix_level": 14.5,
+            "breadth_pct_above_200dma": 66.4,
+            "macro_news_tone": -0.5,
+            "yield_curve_spread": 0.42,
+        }
+        row.update(overrides)
+        return row
+
+    def test_all_four_present_says_so_plainly(self) -> None:
+        note = market_regime.describe_regime_coverage(self._row())
+        assert note == "All four inputs are live."
+
+    def test_a_missing_input_is_counted_and_named(self) -> None:
+        note = market_regime.describe_regime_coverage(self._row(yield_curve_spread=None))
+        assert note.startswith("Three of its four inputs are live")
+        assert "the yield-curve spread is missing" in note
+        # The renormalization is the reason this matters: a reader who thinks a
+        # missing input scored 50 reads the headline number wrong.
+        assert "renormalized" in note
+
+    def test_two_missing_inputs_read_as_a_list(self) -> None:
+        note = market_regime.describe_regime_coverage(
+            self._row(yield_curve_spread=None, macro_news_tone=None)
+        )
+        assert note.startswith("Two of its four inputs are live")
+        assert "macro news tone and the yield-curve spread are missing" in note
+
+    def test_nan_counts_as_missing(self) -> None:
+        """A stored NaN and a stored NULL are the same absence to a reader."""
+        note = market_regime.describe_regime_coverage(self._row(yield_curve_spread=float("nan")))
+        assert "the yield-curve spread is missing" in note
+
+    def test_nothing_available_does_not_claim_a_score(self) -> None:
+        note = market_regime.describe_regime_coverage(
+            {key: None for key, _ in market_regime.REGIME_INPUT_LABELS}
+        )
+        assert "no score to read" in note
+
+    def test_the_labels_cover_exactly_the_blended_signals(self) -> None:
+        """A signal described here and blended there under another name would drift.
+
+        The weights key off short names (`vix`, `breadth`, `yield_curve`,
+        `tone`); this table keys off the stored columns. They have to stay the
+        same set or the caption counts a different four than the score does.
+        """
+        assert len(market_regime.REGIME_INPUT_LABELS) == len(market_regime._REGIME_WEIGHTS)
+
+    def test_it_matches_what_the_blend_actually_used(self) -> None:
+        """The count in the sentence is the count the score was built from.
+
+        Asserted against `compute_market_regime` rather than against the
+        sentence's own arithmetic, so the two cannot disagree.
+        """
+        reading = market_regime.compute_market_regime(
+            date(2026, 9, 6),
+            vix_level=14.5,
+            vix_history=[12.0, 15.0, 18.0, 20.0],
+            breadth_pct=66.4,
+            macro_tone=-0.5,
+            yield_curve_spread_value=None,
+        )
+        row = market_regime.regime_to_record(reading)
+        assert reading.regime_score is not None, "the fixture must still produce a score"
+        assert market_regime.describe_regime_coverage(row).startswith("Three of its four")

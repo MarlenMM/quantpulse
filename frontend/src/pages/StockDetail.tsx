@@ -431,7 +431,17 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             </p>
           )}
         </section>
-      ) : null}
+      ) : (
+        <section className="block">
+          <h2>Short interest</h2>
+          <p className="muted">
+            No short-interest reading is stored for this symbol. The figures come from
+            Finnhub, which needs an API key the deployment may not have configured. This is
+            an absent source, not a low short interest — Section 24 asks for both readings to
+            be shown, and a section that quietly disappears makes a claim of its own.
+          </p>
+        </section>
+      )}
 
       {data.monte_carlo ? (
         <section className="block">
