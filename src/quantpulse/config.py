@@ -60,6 +60,32 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_timeout_seconds: float = 30.0
 
+    # Section 10's alerting: the refresh telling you when to open the app.
+    #
+    # A Discord webhook URL is a credential -- whoever holds it can post into
+    # that channel -- so it is a repo secret reaching the process as an
+    # environment variable, never a literal in this repository (Section 18).
+    # Unset means alerting does nothing at all, which is the only safe default
+    # for a public repo: every fork runs the same refresh workflow, and a fork
+    # must not fail (or, worse, post) because it has no webhook of its own.
+    #
+    # `alerts_enabled` is the same shape as `llm_enabled` -- a switch that turns
+    # the feature off without unsetting a working credential you would then have
+    # to re-issue.
+    alerts_enabled: bool = True
+    alert_discord_webhook_url: str | None = None
+    # Confidence floor for a chart formation to be worth a message.
+    #
+    # `None` means "whatever `alerting.rules` measured", which is where that
+    # number belongs and where its derivation is written down. Carrying a copy
+    # of the default here would make this the fourth place in the project where
+    # one constant lives in two files, and `config` is imported by both front
+    # ends, the API and every script -- importing `alerting.rules` (and through
+    # it `analysis.scoring` and the indicator stack) to read one float would be
+    # a heavy dependency in the wrong direction, and a circular import the first
+    # time scoring needs a setting. Same shape as `manual_refresh_enabled`.
+    alert_pattern_min_confidence: float | None = None
+
     # Section 5: free-tier data source credentials.
     finnhub_api_key: str | None = None
     fred_api_key: str | None = None
@@ -100,6 +126,19 @@ class Settings(BaseSettings):
     # the forecast price window is 1,280 days. It also roughly halves the
     # database, which matters because the demo DB is committed to git.
     seed_history_period: str = "10y"
+
+    def alerting_configured(self) -> bool:
+        """Whether this instance may send an alert, and has somewhere to send it.
+
+        A *blank* webhook is treated as unset on purpose. An unset GitHub
+        Actions secret expands to the empty string rather than to nothing, so
+        `ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.MISSING }}` reaches the process
+        as `""` -- which is falsy here but would be a perfectly good `str` for
+        anything that only checked `is not None`.
+        """
+        if not self.alerts_enabled:
+            return False
+        return bool(self.alert_discord_webhook_url and self.alert_discord_webhook_url.strip())
 
     def manual_refresh_allowed(self) -> bool:
         """Whether this instance may start a data refresh from the UI."""
