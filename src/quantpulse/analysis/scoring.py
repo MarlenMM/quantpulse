@@ -74,6 +74,23 @@ CATEGORY_RAW_COLUMNS: dict[str, str] = {category: f"{category}_raw" for category
 
 RATINGS = ("strong_buy", "buy", "hold", "sell", "strong_sell")
 
+#: The one place a rating turns into words a person reads.
+#:
+#: Exported from here rather than kept privately by each consumer because three
+#: copies of a constant is how the two front ends have drifted apart before
+#: (Section 22): `portfolio.recommendations` renders these into holding advice,
+#: `app.lib.format` pairs each with an icon and a colour for the UI, and
+#: `alerting.rules` writes them into a webhook message that no test renders.
+#: A rating added to `RATINGS` without a label here raises a `KeyError` at the
+#: point of use instead of shipping `strong_buy` verbatim to a reader.
+RATING_LABELS: dict[str, str] = {
+    "strong_buy": "Strong Buy",
+    "buy": "Buy",
+    "hold": "Hold",
+    "sell": "Sell",
+    "strong_sell": "Strong Sell",
+}
+
 # Relative-rating percentile cutoffs (Section 7.5 step 4): top 10% / next 20% /
 # middle 40% / next 20% / bottom 10%, expressed as the lower percentile bound
 # of each rating.
