@@ -15,7 +15,7 @@ So the rules are: everything on a name you hold or watch, plus only the
 top-conviction crossings from the other 480.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -218,6 +218,80 @@ def test_a_pattern_exactly_on_the_floor_alerts() -> None:
 
 def test_an_empty_pattern_frame_is_handled() -> None:
     assert rules.pattern_alerts(pd.DataFrame(), tracked={"MSFT"}) == []
+
+
+def _dated_pattern(day: date, confidence: float = 90.0) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "symbol": "MSFT",
+                "date": day,
+                "pattern_type": "double_top",
+                "direction": "bearish",
+                "confidence": confidence,
+            }
+        ]
+    )
+
+
+def test_a_formation_that_completed_long_ago_is_not_news() -> None:
+    """Found by running the real database, not by a fixture.
+
+    The first run after the pattern writer landed inserted the whole 420-day
+    lookback at once, so `quantpulse_demo.db` holds rows completing in 2025
+    that were first stored in 2026. Those are new to the database and are not
+    news, and "new double bottom (completed 2025-09-05)" a year late is exactly
+    the kind of overclaim the project's rules exist to stop.
+    """
+    as_of = date(2026, 9, 5)
+    assert (
+        rules.pattern_alerts(
+            _dated_pattern(as_of - timedelta(days=365)), tracked={"MSFT"}, as_of=as_of
+        )
+        == []
+    )
+
+
+def test_a_formation_inside_the_confirmation_lag_still_alerts() -> None:
+    """The age limit must not undo what the insertion filter is for: a pivot is
+    not confirmable until the swing after it, so a formation dated a couple of
+    weeks back can legitimately be detected tonight."""
+    as_of = date(2026, 9, 5)
+    fresh = rules.pattern_alerts(
+        _dated_pattern(as_of - timedelta(days=14)), tracked={"MSFT"}, as_of=as_of
+    )
+    assert len(fresh) == 1
+
+
+def test_the_age_limit_is_inclusive_at_its_boundary() -> None:
+    as_of = date(2026, 9, 5)
+    edge = as_of - timedelta(days=rules.MAX_FORMATION_AGE_DAYS)
+    assert len(rules.pattern_alerts(_dated_pattern(edge), tracked={"MSFT"}, as_of=as_of)) == 1
+    assert (
+        rules.pattern_alerts(
+            _dated_pattern(edge - timedelta(days=1)), tracked={"MSFT"}, as_of=as_of
+        )
+        == []
+    )
+
+
+def test_without_an_as_of_the_age_check_is_skipped() -> None:
+    """For a caller that has already bounded the window itself."""
+    ancient = _dated_pattern(date(2020, 1, 1))
+    assert len(rules.pattern_alerts(ancient, tracked={"MSFT"}, as_of=None)) == 1
+
+
+def test_the_digest_applies_the_age_limit() -> None:
+    """Asserted through `build_digest`, because passing `current_date` down to
+    `pattern_alerts` is a separate mistake from having the limit at all."""
+    text = _digest(
+        patterns=_dated_pattern(date(2025, 9, 5)),
+        changes=_changes(("NVDA", "hold", "buy", 8.4)),
+        tracked={"MSFT", "NVDA"},
+        current_date=date(2026, 9, 5),
+        previous_date=date(2026, 9, 4),
+    )
+    assert "double top" not in text
 
 
 # --------------------------------------------------------------------------- #
