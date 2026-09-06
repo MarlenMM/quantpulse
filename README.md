@@ -382,7 +382,8 @@ With a Discord webhook in `ALERT_DISCORD_WEBHOOK_URL`, it posts the ones worth
 interrupting you about:
 
 * **every** rating change on a name you hold or watch,
-* a new chart formation on one of those names at confidence ≥ 70,
+* a new chart formation on one of those names at confidence ≥ 70, completed
+  within the last 30 days,
 * and, from the rest of the universe, only a rating that **lands on** Strong Buy
   or Strong Sell.
 

@@ -5,7 +5,7 @@ demo database, and the pipeline's own upstream sources. Points **1–10 are fixe
 and live**; **11–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** 1,621 tests, 14 Alembic migrations, CI and Pages
+**State at time of writing:** 1,626 tests, 14 Alembic migrations, CI and Pages
 green, working tree clean.
 
 ---
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,621 tests
+uv run pytest                 # 1,626 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -103,7 +103,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 7 | Whole document scrolled sideways at 375px (Dashboard 619px) | `minmax(0, 1fr)` in the base `.split`/`.split-even` rules | `63045a3` |
 | 8 | Regime said "built from four inputs" while one had always been null; short interest vanished silently | Server-composed coverage note, per row; short interest explains its absence | `d96cb02` |
 | 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `f12dab1` |
-| 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
+| 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70 completed within 30 days, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
 
 ### Two things from those fixes that still need watching
 
