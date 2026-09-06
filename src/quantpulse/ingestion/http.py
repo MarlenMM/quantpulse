@@ -183,6 +183,38 @@ def post_json(
     return response.json()
 
 
+def post_for_status(
+    url: str,
+    *,
+    json_body: Any,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+    max_retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> int:
+    """POST `json_body` to `url`, returning the HTTP status and parsing no body.
+
+    For an endpoint whose success answer has no body to parse. A Discord webhook
+    answers `204 No Content`, on which `post_json` raises inside `.json()` --
+    so the caller would have to read a JSON-decode error as "the message was
+    delivered", which is exactly backwards.
+
+    Same retry/backoff/`Retry-After` behaviour as every other helper here
+    (see `_request_with_retries`), and it still raises on a 4xx: a webhook that
+    has been deleted or revoked is a failure, not an answer.
+    """
+    response = _request_with_retries(
+        url,
+        method="POST",
+        headers=headers,
+        json_body=json_body,
+        timeout=timeout,
+        max_retries=max_retries,
+        backoff_seconds=backoff_seconds,
+    )
+    return response.status_code
+
+
 def resource_exists(
     url: str,
     *,

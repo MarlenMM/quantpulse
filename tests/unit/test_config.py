@@ -115,3 +115,62 @@ class TestSchemaVersionGate:
         )
         with pytest.raises(db_module.SchemaOutOfDateError):
             db_module.assert_schema_current()
+
+
+class TestAlertingGate:
+    """Whether the nightly refresh may send anything, and to where.
+
+    The destination is a Discord webhook URL, which is a credential: whoever
+    holds it can post into that channel. So it lives in a repo secret and
+    reaches the process as an environment variable, and this repository is
+    public -- an unset default that quietly does nothing is the only safe one.
+    Every fork of this repo runs the refresh workflow with no secret set.
+    """
+
+    def test_alerting_is_off_until_a_destination_is_configured(self) -> None:
+        assert Settings(_env_file=None).alert_discord_webhook_url is None
+        assert not Settings(_env_file=None).alerting_configured()
+
+    def test_a_configured_webhook_turns_it_on(self) -> None:
+        settings = Settings(_env_file=None, alert_discord_webhook_url="https://example.test/hook")
+        assert settings.alerting_configured()
+
+    def test_the_kill_switch_works_without_unsetting_the_webhook(self) -> None:
+        """Same shape as `llm_enabled`: turn the feature off without destroying
+        a working credential you would then have to re-issue."""
+        settings = Settings(
+            _env_file=None,
+            alert_discord_webhook_url="https://example.test/hook",
+            alerts_enabled=False,
+        )
+        assert not settings.alerting_configured()
+
+    def test_a_blank_webhook_secret_counts_as_unset(self) -> None:
+        """An unset GitHub Actions secret expands to the empty string, not to
+        nothing -- so `ALERT_DISCORD_WEBHOOK_URL=` reaches the process as `""`
+        and would otherwise be posted to as a URL."""
+        assert not Settings(_env_file=None, alert_discord_webhook_url="").alerting_configured()
+        assert not Settings(_env_file=None, alert_discord_webhook_url="   ").alerting_configured()
+
+    def test_the_pattern_confidence_floor_defers_to_the_measured_one(self) -> None:
+        """Unset here, so the number lives in one place -- next to the
+        distribution it was measured from."""
+        assert Settings(_env_file=None).alert_pattern_min_confidence is None
+
+    def test_the_pattern_confidence_floor_can_be_overridden(self) -> None:
+        assert (
+            Settings(_env_file=None, alert_pattern_min_confidence=85.0).alert_pattern_min_confidence
+            == 85.0
+        )
+
+    def test_config_does_not_drag_the_analysis_stack_into_every_import(self) -> None:
+        """`config` is imported by both front ends, the API and every script.
+
+        Importing `alerting.rules` from it to read one float would pull in
+        `analysis.scoring` and the indicator library behind it, and would become
+        a circular import the first time scoring needs a setting.
+        """
+        import quantpulse.config as config_module
+
+        source = Path(config_module.__file__).read_text()
+        assert "from quantpulse" not in source and "import quantpulse" not in source
