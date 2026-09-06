@@ -111,12 +111,44 @@ def test_the_raised_error_does_not_chain_the_original_leaking_one() -> None:
     assert caught.value.__context__ is None or caught.value.__suppress_context__
 
 
-def test_a_non_2xx_status_raises_without_the_token() -> None:
-    with patch("quantpulse.alerting.discord.http.post_for_status", return_value=403):
+def test_a_non_success_status_raises_without_the_token() -> None:
+    """The 3xx path. `post_for_status` raises on 4xx/5xx, so a status returned
+    to this function is a redirect `requests` declined to follow -- which must
+    still never read as delivered."""
+    with patch("quantpulse.alerting.discord.http.post_for_status", return_value=302):
         with pytest.raises(discord.WebhookError) as caught:
             discord.send(_URL, "hello")
     assert _SECRET not in str(caught.value)
+    assert "302" in str(caught.value)
+
+
+def test_a_revoked_webhook_reports_its_status_code() -> None:
+    """The path a real 404/401/429 takes, and the reason redaction must not
+    cost diagnosability: "failed: HTTPError" does not tell its reader whether
+    the URL is wrong, the webhook was revoked, or Discord is rate limiting.
+
+    Found by posting a real digest to a local server answering 403 -- the
+    mocked test above never exercised this branch, because a real 4xx never
+    reaches it.
+    """
+    response = requests.Response()
+    response.status_code = 403
+    boom = requests.HTTPError(f"403 Client Error for url: {_URL}", response=response)
+    with patch("quantpulse.alerting.discord.http.post_for_status", side_effect=boom):
+        with pytest.raises(discord.WebhookError) as caught:
+            discord.send(_URL, "hello")
     assert "403" in str(caught.value)
+    assert _SECRET not in str(caught.value)
+
+
+def test_an_error_with_no_response_still_names_its_type() -> None:
+    """A connection error has no status code; the type is all there is."""
+    with patch(
+        "quantpulse.alerting.discord.http.post_for_status",
+        side_effect=requests.ConnectionError("connection refused"),
+    ):
+        with pytest.raises(discord.WebhookError, match="ConnectionError"):
+            discord.send(_URL, "hello")
 
 
 def test_nothing_logged_while_sending_carries_the_token(caplog: pytest.LogCaptureFixture) -> None:
