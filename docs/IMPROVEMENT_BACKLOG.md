@@ -1,12 +1,12 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–9 are fixed
-and live**; **10–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–10 are fixed
+and live**; **11–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** HEAD `f12dab1`, 1,554 tests, 14 Alembic
-migrations, CI and Pages green, working tree clean.
+**State at time of writing:** 1,621 tests, 14 Alembic migrations, CI and Pages
+green, working tree clean.
 
 ---
 
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,554 tests
+uv run pytest                 # 1,621 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -71,6 +71,18 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   root cause of the two front ends disagreeing.** Collapse them into one
   exported value; three separate copies of a market window once produced three
   different betas.
+- **A guard shadowed by an earlier guard is an untested guard.** Three tests
+  written for point 10 passed with the thing they were named for deleted: a
+  `KeyError` came from a rank lookup two lines below the label lookup being
+  tested, a "these scores are not today's" check sat behind a "there are not
+  two snapshots" check that fired first, and an unlimited read was asserted
+  against a one-row fixture where a cap of 25 is invisible. Mutating found all
+  three; nothing else would have.
+- **Render the real database before believing the fixtures.** The alert's
+  formation lines looked right in every test and read "UNP new double bottom"
+  three times against real rows, and a 403 from a real socket reported
+  `HTTPError` with no status code where the mocked test had asserted a status.
+  Both were only visible by running it against `quantpulse_demo.db`.
 - **`gh run list` first.** A workflow that was cancelled or never created writes
   nothing the app can see, and that has been the single biggest bug twice.
 
@@ -91,6 +103,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 7 | Whole document scrolled sideways at 375px (Dashboard 619px) | `minmax(0, 1fr)` in the base `.split`/`.split-even` rules | `63045a3` |
 | 8 | Regime said "built from four inputs" while one had always been null; short interest vanished silently | Server-composed coverage note, per row; short interest explains its absence | `d96cb02` |
 | 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `f12dab1` |
+| 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
 
 ### Two things from those fixes that still need watching
 
@@ -100,30 +113,30 @@ Recorded because several of them explain why the code looks the way it does now.
    weekly run. **Monday's scheduled run is the test.** Check on Tuesday:
    `select count(distinct matched_theme) from news_events where tier=2` should
    be ~17, not 5, and `industry_macro_raw` should be non-null for ~all 503.
-2. **Two repo secrets are still unset, and they are the user's to add** — never
-   offer to obtain or enter an API key. `FRED_API_KEY` (fred.stlouisfed.org)
-   fills the yield curve and macro series; `FINNHUB_API_KEY` (finnhub.io) fills
-   short interest. Both go in Settings → Secrets and variables → Actions.
+
+   **Re-checked 2026-09-06 (Sunday): still open, and not for a new reason.**
+   `matched_theme` is still the same 5 curated themes and `industry_macro_raw`
+   is still 19/503 on the 2026-09-05 snapshot. The manual dispatch on
+   2026-09-05 does not count as the test — it ran 17m29s without
+   `force_weekly`, and news/sentiment are on the weekly branch, so it never
+   fetched a Tier-2 article. The 11 GICS sector baskets *are* in
+   `thematic_baskets` (503 names covered), so the missing half really is only
+   the fetch. **Monday 2026-09-07 22:00 UTC is still the test.**
+2. **Three repo secrets are still unset, and they are the user's to add** —
+   never offer to obtain or enter a key or a webhook URL. `FRED_API_KEY`
+   (fred.stlouisfed.org) fills the yield curve and macro series;
+   `FINNHUB_API_KEY` (finnhub.io) fills short interest;
+   `ALERT_DISCORD_WEBHOOK_URL` (point 10) is where the nightly alert goes —
+   until it is set, the alert step logs one line and sends nothing, by design.
+   All three go in Settings → Secrets and variables → Actions.
 
 ---
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 10–14 are unbuilt features; 15–18 are
-methodology and hygiene.
-
-### 10. Alerting — nothing exists, and the job that would send it already runs
-
-No Discord, webhook or SMTP anywhere in the repo. The refresh job already
-computes every rating change and pattern trigger — "these five names moved from
-Hold to Buy" is on the Dashboard now. Pushing that to a Discord webhook or a
-Gmail SMTP message is the highest utility-per-line item left on the plan
-(Section 10), and it converts a tool you must remember to open into one that
-tells you when to open it.
-
-Worth deciding first: what triggers a message (a held or watchlisted name
-crossing a rating threshold? any Strong Buy change? a new pattern?), and where
-the destination lives (a repo secret, so it stays out of the source).
+Ordered as the audit ranked them. 11–14 are unbuilt features; 15–18 are
+methodology and hygiene. The numbering is the audit's and is kept stable, so
+11 stays 11 now that 10 is done.
 
 ### 11. Forward testing via Alpaca paper trading
 

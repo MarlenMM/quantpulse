@@ -51,6 +51,19 @@ def redact(webhook_url: str) -> str:
     return f"{scheme}://{host}/api/webhooks/…"
 
 
+def _describe(error: Exception) -> str:
+    """An error in words, carrying its HTTP status and never its URL.
+
+    `requests` puts the full URL in `str(error)`, so only the type name and the
+    status code -- read off the attached response, not off the message -- may
+    be repeated.
+    """
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    if status is None:
+        return type(error).__name__
+    return f"{type(error).__name__} (HTTP {status})"
+
+
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     """`text` as a list of chunks that each fit in one Discord message.
 
@@ -100,11 +113,22 @@ def send(webhook_url: str, text: str) -> int:
             # exception's message in the traceback, and that message is where
             # `requests` put the full URL -- which would undo the redaction one
             # line above it.
+            #
+            # The status code is dug out of the exception rather than left in
+            # it. `post_for_status` raises on a 4xx, so this -- not the check
+            # below -- is the path a revoked or deleted webhook takes, and
+            # "failed: HTTPError" does not tell its reader whether the URL is
+            # wrong (404), the webhook was revoked (401), or Discord is rate
+            # limiting (429). Redaction that costs diagnosability is a bad
+            # trade; this keeps both.
             raise WebhookError(
-                f"posting message {index}/{len(chunks)} to {destination} failed: "
-                f"{type(error).__name__}"
+                f"posting message {index}/{len(chunks)} to {destination} failed: {_describe(error)}"
             ) from None
         if not 200 <= status < 300:
+            # A 3xx, in practice: `post_for_status` raises on 4xx/5xx, so this
+            # catches the redirect that `requests` did not follow rather than
+            # an error status. Kept because "the webhook answered something
+            # other than success" must never read as delivered.
             raise WebhookError(
                 f"posting message {index}/{len(chunks)} to {destination} returned HTTP {status}"
             )
