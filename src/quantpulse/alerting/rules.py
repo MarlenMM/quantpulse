@@ -41,7 +41,7 @@ without a database or a network.
 
 from collections.abc import Iterable, Set
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -70,6 +70,22 @@ DEFAULT_PATTERN_MIN_CONFIDENCE = 70.0
 #: rest. Measured at 17-32 a night, so the normal message shows most of them and
 #: says how many it dropped; the cap exists so an unusual night still sends.
 MAX_UNIVERSE_LINES = 15
+
+#: How long after completing a formation may still be called new.
+#:
+#: Applied **in addition to** the caller's "inserted by this run" filter, never
+#: instead of it -- see `pattern_alerts` for why the date alone is the wrong
+#: question. This exists for the opposite failure: the first run after the
+#: pattern writer lands (or after a reseed) inserts the entire lookback window
+#: at once, and the committed demo database really does hold rows completing in
+#: 2025 that were first stored in 2026. Those are new to the database and are
+#: not news, and announcing one as "new" a year late is the kind of overclaim
+#: Section 22 is about.
+#:
+#: 30 days is generous against the lag being allowed for: a zigzag pivot needs
+#: the swing after it before the shape can be confirmed, which runs to days or
+#: a couple of weeks, not months.
+MAX_FORMATION_AGE_DAYS = 30
 
 TRACKED_HEADING = "Your names"
 UNIVERSE_HEADING = "Top conviction, whole universe"
@@ -153,7 +169,9 @@ def pattern_alerts(
     patterns: pd.DataFrame,
     *,
     tracked: Set[str],
+    as_of: date | None = None,
     min_confidence: float = DEFAULT_PATTERN_MIN_CONFIDENCE,
+    max_age_days: int = MAX_FORMATION_AGE_DAYS,
 ) -> list[Alert]:
     """Alerts for rule 2 -- a new formation on a name you hold or watch.
 
@@ -162,14 +180,26 @@ def pattern_alerts(
     restriction is the caller's job and it matters: a formation's stored date is
     the day its shape *completed*, which can be a week before the run that first
     detects it, so "date is recent" is not the same question as "this is new".
+
+    An age limit applies on top of that, and only on top of it. The two guard
+    opposite failures: without the caller's filter, a formation the database has
+    held for weeks is announced every night; without the age limit, the first
+    run after the writer lands (or after a reseed) inserts the whole lookback
+    window at once and announces a formation that completed a year ago. The
+    committed demo database holds exactly those rows. `as_of=None` skips the age
+    check, for a caller that has already bounded the window itself.
     """
     if patterns.empty:
         return []
+    oldest = None if as_of is None else as_of - timedelta(days=max_age_days)
     alerts: list[Alert] = []
     for row in patterns.itertuples(index=False):
         symbol = str(row.symbol)
         confidence = float(row.confidence)
         if symbol not in tracked or confidence < min_confidence:
+            continue
+        completed = pd.Timestamp(row.date).date()
+        if oldest is not None and completed < oldest:
             continue
         shape = str(row.pattern_type).replace("_", " ")
         # The completion date, not the detection date, and it earns its place:
@@ -177,7 +207,6 @@ def pattern_alerts(
         # symbol, and without it the message repeats "UNP new double bottom"
         # three times with nothing to tell them apart. (Real rows from the
         # committed demo database; the tests had not produced that shape.)
-        completed = pd.Timestamp(row.date).date()
         alerts.append(
             Alert(
                 kind="new_pattern",
@@ -230,7 +259,9 @@ def build_digest(
     about.
     """
     rating = rating_change_alerts(changes, tracked=tracked)
-    formations = pattern_alerts(patterns, tracked=tracked, min_confidence=min_confidence)
+    formations = pattern_alerts(
+        patterns, tracked=tracked, as_of=current_date, min_confidence=min_confidence
+    )
     if not rating and not formations:
         return None
 
