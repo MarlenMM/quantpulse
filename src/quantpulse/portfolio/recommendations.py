@@ -53,7 +53,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from quantpulse.analysis.scoring import RATINGS
+from quantpulse.analysis.scoring import RATING_LABELS, RATINGS
 from quantpulse.portfolio.rebalancing import RebalancePlan
 
 __all__ = [
@@ -111,13 +111,6 @@ _ACTION_BY_RATING: dict[str, Literal["add", "trim", "sell", "hold"]] = {
     "hold": "hold",
     "sell": "trim",
     "strong_sell": "sell",
-}
-_RATING_LABELS: dict[str, str] = {
-    "strong_buy": "Strong Buy",
-    "buy": "Buy",
-    "hold": "Hold",
-    "sell": "Sell",
-    "strong_sell": "Strong Sell",
 }
 
 
@@ -195,9 +188,9 @@ def holding_recommendation(
     if overweight_capped:
         action = "hold"
 
-    reason = f"Rated {_RATING_LABELS[rating]}"
+    reason = f"Rated {RATING_LABELS[rating]}"
     if purchase_rating is not None and purchase_rating != rating:
-        reason += f" (was {_RATING_LABELS[purchase_rating]} at purchase)"
+        reason += f" (was {RATING_LABELS[purchase_rating]} at purchase)"
     reason += "."
     if overweight_capped:
         reason += (
