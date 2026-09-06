@@ -199,3 +199,33 @@ test.describe("mobile layout", () => {
     });
   }
 });
+
+
+/**
+ * A route served from its own `index.html` arrives with a trailing slash.
+ *
+ * Deep links are real files now, so a static host answers `/screener` with a
+ * 301 to `/screener/` and serves the directory index -- which means the app
+ * boots on a pathname it never saw before. `useMatch` splits on "/" and filters
+ * empties so the stock route never noticed, but `App.tsx`'s switch compares
+ * whole strings: without the normalization in `toRoute` every one of those
+ * visits rendered "No such page". Verified by reverting that one line, which
+ * turned `/screener/` into the not-found view while every other gate stayed
+ * green.
+ */
+test.describe("routes served as directory pages", () => {
+  for (const [name, path] of [
+    ["screener", "screener/"],
+    ["track record", "track-record/"],
+    ["glossary", "glossary/"],
+    ["stock detail", "stocks/AIZ/"],
+  ] as const) {
+    test(`the ${name} renders with a trailing slash`, async ({ page }) => {
+      const errors = watchForErrors(page);
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page.getByText("No such page")).toHaveCount(0);
+      expect(errors).toEqual([]);
+    });
+  }
+});

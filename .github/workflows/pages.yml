@@ -98,13 +98,21 @@ jobs:
           VITE_STATIC_API: "1"
           VITE_BASE: /${{ github.event.repository.name }}/
 
-      # Pages has no SPA rewrite: a deep link like /stocks/AAPL is a missing
-      # file, and a missing file is served as 404.html. Making that a copy of
-      # index.html means the app boots and its router reads the path, which is
-      # the standard (and only) way to keep client-side routes shareable here.
-      - name: Serve deep links through the app
-        run: cp dist/index.html dist/404.html
-        working-directory: frontend
+      # Pages has no SPA rewrite, so a deep link like /stocks/AAPL is a missing
+      # file. Copying index.html to 404.html -- what this step used to be -- made
+      # the app boot and the page render, but the *status* stayed 404, because
+      # the file being served was the not-found document. Invisible to a person;
+      # decisive for everything else. A crawler will not index a 404, an unfurler
+      # will not preview one, so a shared stock link arrived as bare text, and an
+      # uptime check reads the site as down.
+      #
+      # A rewrite rule is not what is needed -- the files are. This writes a real
+      # index.html per route (and gives each stock page its own title and
+      # description, so 503 shared links do not all preview identically), and
+      # still writes 404.html for paths nothing enumerated, which genuinely are
+      # not found.
+      - name: Give every route a real page
+        run: uv run python scripts/emit_route_pages.py --dist frontend/dist
 
       # The generator and the client agree about filenames only by convention:
       # they are in different languages and neither imports the other. If they
