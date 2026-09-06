@@ -20,6 +20,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from quantpulse.analysis import risk, technical
+from quantpulse.news_intelligence import market_regime
 
 st.set_page_config(
     page_title="QuantPulse — Dashboard",
@@ -146,7 +147,8 @@ def render_regime(regime: "object") -> None:
     )
     st.caption(
         "Built in-house from VIX percentile, index breadth, macro news tone and the "
-        "yield-curve spread — not scraped from a paywalled index."
+        "yield-curve spread — not scraped from a paywalled index. "
+        + market_regime.describe_regime_coverage(latest)
     )
 
 

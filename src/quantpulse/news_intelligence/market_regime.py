@@ -211,6 +211,68 @@ def compute_market_regime(
     )
 
 
+#: Each input's stored column, paired with the name a reader knows it by. The
+#: order is the one both front ends display, and the weights above key off the
+#: same names, so a signal cannot be described here and blended there under a
+#: different label.
+REGIME_INPUT_LABELS: tuple[tuple[str, str], ...] = (
+    ("vix_level", "the VIX percentile"),
+    ("breadth_pct_above_200dma", "index breadth"),
+    ("macro_news_tone", "macro news tone"),
+    ("yield_curve_spread", "the yield-curve spread"),
+)
+
+
+def describe_regime_coverage(row: "dict[str, object] | pd.Series") -> str:
+    """A sentence naming how many of the four inputs actually produced this score.
+
+    **The blend renormalizes over whatever it has**, which is the right
+    behaviour and the reason this function exists. Both front ends described the
+    index as "built from four inputs" while one of them had been `None` since the
+    project began: with no `FRED_API_KEY` the yield-curve spread never arrives,
+    so the published score is a weighted average of three signals presented as an
+    average of four. That is not a missing row in a table -- it misdescribes the
+    number standing next to it.
+
+    Composed on the server and printed verbatim by both front ends, the same way
+    `risk.MarketSeries.label` is. The alternative is each surface assembling its
+    own version of a claim about how the score was computed, which is how two
+    front ends come to describe one number differently.
+
+    Deliberately does not guess *why* an input is absent -- an empty series and a
+    missing credential look identical from here, and the Settings page already
+    lists which sources are configured. It says what is missing and points there.
+    """
+    missing = [label for column, label in REGIME_INPUT_LABELS if _is_absent(row, column)]
+    total = len(REGIME_INPUT_LABELS)
+    live = total - len(missing)
+    if not missing:
+        return f"All {_WORDS[total]} inputs are live."
+    if live == 0:
+        return "None of its four inputs produced a reading, so there is no score to read."
+    joined = _join(missing)
+    return (
+        f"{_WORDS[live].capitalize()} of its {_WORDS[total]} inputs are live — "
+        f"{joined} {'is' if len(missing) == 1 else 'are'} missing, so the score is "
+        f"renormalized over the rest rather than treating {'it' if len(missing) == 1 else 'them'} "
+        f"as neutral. Settings lists which data sources are configured."
+    )
+
+
+_WORDS = {0: "none", 1: "one", 2: "two", 3: "three", 4: "four"}
+
+
+def _is_absent(row: "dict[str, object] | pd.Series", column: str) -> bool:
+    value = row.get(column) if hasattr(row, "get") else None
+    return value is None or bool(pd.isna(value))
+
+
+def _join(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
 def regime_to_record(reading: MarketRegimeReading) -> dict[str, object]:
     """The `market_regime`-table row dict for `reading` (Section 13)."""
     return asdict(reading)
