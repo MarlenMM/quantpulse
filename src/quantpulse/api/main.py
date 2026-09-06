@@ -69,6 +69,7 @@ from quantpulse.api.schemas import (
     TickerSummary,
 )
 from quantpulse.glossary import TERMS
+from quantpulse.news_intelligence import market_regime
 from quantpulse.portfolio.optimization import kelly_position_fraction
 from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
@@ -551,9 +552,18 @@ def regime(
     limit: int = Query(90, ge=1, le=730),
     session: Session = Depends(db_session),
 ) -> list[RegimePoint]:
-    """Market Regime Index history, oldest first (Sections 5, 12)."""
+    """Market Regime Index history, oldest first (Sections 5, 12).
+
+    Each point carries its own `coverage_note`, because how many of the four
+    inputs produced a score is a property of that day's row rather than of the
+    series: a `FRED_API_KEY` added tomorrow makes tomorrow's point a four-input
+    reading and leaves today's a three-input one.
+    """
     frame = persistence.read_recent_market_regime(session, limit=limit)
-    return [RegimePoint(**row) for row in _rows(frame)]
+    return [
+        RegimePoint(**row, coverage_note=market_regime.describe_regime_coverage(row))
+        for row in _rows(frame)
+    ]
 
 
 @app.get("/api/news", response_model=list[NewsItem], tags=["market"])

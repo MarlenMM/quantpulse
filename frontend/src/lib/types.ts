@@ -258,6 +258,14 @@ export interface RegimePoint {
   yield_curve_spread: number | null;
   regime_score: number | null;
   regime_label: string | null;
+  /**
+   * How many of the four inputs produced this score, as a sentence to print
+   * verbatim. Composed server-side like `beta_benchmark`: it is a claim about
+   * how the number beside it was computed, and both front ends said "built from
+   * four inputs" while the yield-curve spread had been null since the project
+   * began.
+   */
+  coverage_note: string;
 }
 
 export interface BacktestRun {

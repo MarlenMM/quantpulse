@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
 [![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-1%2C534-0f7a44.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1%2C545-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
@@ -34,7 +34,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 
 | | |
 |---|---|
-| Automated tests | **1,534** (unit, integration, and property-based via Hypothesis) |
+| Automated tests | **1,545** (unit, integration, and property-based via Hypothesis) |
 | Core engine code | **~16,700** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **23 tables**, **13 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
@@ -360,9 +360,13 @@ pretending otherwise. Worth knowing which cost what:
    all, which is why the composite score still computes without any of the
    above (at a lower `data_confidence`, which every page displays).
 
-   As of 2026-08-08 only `SEC_EDGAR_USER_AGENT` is set, so short interest and
-   the FRED macro series are empty in the published demo — which every page
-   reports as "never run" rather than scoring as zero.
+   As of 2026-09-06 only `SEC_EDGAR_USER_AGENT` is set, so short interest and
+   the FRED macro series are empty in the published demo. Nothing scores them as
+   zero, and — since this was the point of the audit item — nothing hides them
+   either: the Market Regime Index states that three of its four inputs are live
+   and that the score is renormalized over those, and a stock with no
+   short-interest reading says the source is absent rather than dropping the
+   section, which would read as "this stock has no short interest".
 
 ## Development
 

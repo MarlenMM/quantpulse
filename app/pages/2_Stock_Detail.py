@@ -110,11 +110,21 @@ def render_short_interest(symbol: str) -> None:
     only means anything if a page shows them, and until now none did.
     """
     reading_row = data.short_interest(symbol)
-    if reading_row is None:
-        return
-
-    reading = smart_money.read_short_interest(reading_row)
-    if reading.pct_float_short is None and reading.days_to_cover is None:
+    reading = None if reading_row is None else smart_money.read_short_interest(reading_row)
+    if reading is None or (reading.pct_float_short is None and reading.days_to_cover is None):
+        # Say so rather than vanish. Section 24 requires *both* readings be
+        # shown, and a section that silently disappears when its source is
+        # unconfigured reads as "this stock has no short interest" -- which is
+        # a claim, and a false one. The panel and its explanation were built;
+        # the data behind them needs a free Finnhub key, and a reader deserves
+        # to know that is the reason rather than guessing at one.
+        st.subheader("Short interest", help=tip("Short interest"))
+        st.caption(
+            "No short-interest reading is stored for this symbol. The figures come from "
+            "Finnhub, which needs an API key the deployment may not have configured — "
+            "**⚙️ Settings** lists which sources are set up. This is an absent source, "
+            "not a low short interest."
+        )
         return
 
     st.subheader("Short interest", help=tip("Short interest"))

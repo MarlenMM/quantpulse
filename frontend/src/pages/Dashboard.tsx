@@ -218,11 +218,14 @@ export default function Dashboard() {
                 />
               </div>
               <p className="note">
-                Built here from four inputs — the VIX percentile, index breadth, macro news tone
-                and the yield-curve spread — not read off a paywalled index. It moves the
-                Strong Buy cutoff: in a risk-off market the top decile has to clear a higher
-                bar before the model will call anything a Strong Buy.
+                Built here from the VIX percentile, index breadth, macro news tone and the
+                yield-curve spread — not read off a paywalled index. It moves the Strong Buy
+                cutoff: in a risk-off market the top decile has to clear a higher bar before
+                the model will call anything a Strong Buy.
               </p>
+              {latestRegime.coverage_note ? (
+                <p className="note">{latestRegime.coverage_note}</p>
+              ) : null}
             </>
           ) : regime.loading ? null : (
             <p className="muted small">
