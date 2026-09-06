@@ -38,10 +38,20 @@ const PathContext = createContext<string>("/");
  */
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-/** Browser pathname -> route path. */
+/**
+ * Browser pathname -> route path, with any trailing slash removed.
+ *
+ * The trailing slash matters because of how the deep-link pages are served.
+ * Each route is a real `index.html` on disk, and a static host answers
+ * `/screener` by redirecting to `/screener/` and serving the directory index --
+ * so the pathname the app boots with genuinely has the slash on it. `useMatch`
+ * splits on "/" and filters empties, so the stock route never noticed; the
+ * `switch` in `App.tsx` compares whole strings and would have sent every one of
+ * those visits to "No such page".
+ */
 function toRoute(pathname: string): string {
-  if (BASE && pathname.startsWith(BASE)) return pathname.slice(BASE.length) || "/";
-  return pathname;
+  const path = BASE && pathname.startsWith(BASE) ? pathname.slice(BASE.length) : pathname;
+  return path.replace(/\/+$/, "") || "/";
 }
 
 /** Route path -> browser pathname. */
