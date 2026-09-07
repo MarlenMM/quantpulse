@@ -1,11 +1,11 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–11 are fixed
-and live**; **12–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–12 are fixed
+and live**; **13–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** 1,711 tests, 14 Alembic migrations, CI and Pages
+**State at time of writing:** 1,740 tests, 14 Alembic migrations, CI and Pages
 green, working tree clean.
 
 ---
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,711 tests
+uv run pytest                 # 1,740 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -89,6 +89,12 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   Mondays — where a mocked-empty step correctly downgrades the run and the
   assertion failed for an unrelated reason. It went red on its own on
   2026-09-07, the first Monday after it was written. Pin the clock.
+- **`frontend/dist/data/` is Vite's *copy* of `frontend/public/data/`.**
+  `scripts/build_static_site.py` writes to `public/`; only `npm run build`
+  refreshes `dist/`. Reading `dist/` after re-running just the Python build
+  gives a stale file, and doing that produced a completely wrong diagnosis
+  (a schema field looked "silently dropped from the published payload" when it
+  had always been present). Check `public/data/`, or rebuild both.
 - **`gh run list` first.** A workflow that was cancelled or never created writes
   nothing the app can see, and that has been the single biggest bug twice.
 
@@ -111,6 +117,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `f12dab1` |
 | 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70 completed within 30 days, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
 | 11 | The Track Record page ranked the momentum category, never the published rating, and could not — 22 days of stored composite history against a 1,183-day window | Alpaca paper trading, forward. Top 20 Buy/Strong Buy, equal-weight, whole shares, weekly rebalance, daily equity snapshot. The endpoint is a module constant with no setting that can reach live money; nothing is annualised | `66a01c9`, `4d697e4`, `840feca` |
+| 12 | The radar showed seven sub-scores and never said which moved the rating | An exact decomposition: `composite - 50 = Σ (w/A)(s-50)`, verified to sum for all 503 names. One sentence built server-side, naming the drivers **and** the largest opposing category (that clause fires for 75% of names) | `e5fb095` + this |
 
 ### Two things from those fixes that still need watching
 
@@ -143,18 +150,9 @@ Recorded because several of them explain why the code looks the way it does now.
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 12–14 are unbuilt features; 15–18 are
+Ordered as the audit ranked them. 13–14 are unbuilt features; 15–18 are
 methodology and hygiene. The numbering is the audit's and is kept stable, so
-12 stays 12 now that 10 and 11 are done.
-
-### 12. No answer to "why is this one rated Buy?"
-
-The radar plots seven sub-scores and never says which of them moved the
-composite. SHAP for the ML forecaster was planned and is absent (Section 10) —
-but the cheap version needs no new dependency: rank each name's categories by
-contribution to the composite (weight × z-score) and print the top two in a
-sentence. That works for every stock and is exactly what a reader wants on
-opening a stock page.
+13 stays 13 now that 10-12 are done.
 
 ### 13. The Portfolio Manager has no sense of time
 

@@ -165,6 +165,7 @@ export interface StockDetail {
   symbol: string;
   summary: TickerSummary;
   score: ScreenerRow | null;
+  explanation: RatingExplanation | null;
   prices: PriceBar[];
   forecasts: ForecastRow[];
   patterns: PatternRow[];
@@ -381,4 +382,28 @@ export interface ForwardTest {
   is_meaningful: boolean;
   min_days_for_meaning: number;
   points: ForwardTestPoint[];
+}
+
+/** One category's share of the distance between this name and an average one. */
+export interface CategoryContribution {
+  category: string;
+  sub_score: number;
+  /** Renormalized over the categories that had data — what the composite applied. */
+  effective_weight: number;
+  /** `effective_weight * (sub_score - 50)`, in composite points. */
+  contribution: number;
+}
+
+/**
+ * Why this name is rated what it is.
+ *
+ * `sentence` is built server-side and rendered verbatim. Wording it here as
+ * well is how two front ends come to describe one explanation differently.
+ */
+export interface RatingExplanation {
+  sentence: string;
+  contributions: CategoryContribution[];
+  missing: string[];
+  covered_weight: number;
+  baseline: number;
 }

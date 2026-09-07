@@ -31,6 +31,7 @@ Interactive docs are then at `/docs` (FastAPI generates them from the schemas).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from datetime import date, timedelta
 from typing import Any
@@ -47,6 +48,7 @@ from quantpulse.api.schemas import (
     AbsoluteRatingResponse,
     AnalystConsensusModel,
     BacktestRun,
+    CategoryContributionModel,
     ForecastRow,
     ForwardTest,
     ForwardTestPoint,
@@ -61,6 +63,7 @@ from quantpulse.api.schemas import (
     PatternRow,
     PriceBar,
     RatingChange,
+    RatingExplanation,
     RegimePoint,
     RiskProfileModel,
     ScreenerResponse,
@@ -344,6 +347,7 @@ def stock_detail(
         symbol=ticker,
         summary=TickerSummary(**_rows(match)[0]),
         score=ScreenerRow(**score_rows[0]) if score_rows else None,
+        explanation=_rating_explanation(score_rows[0]) if score_rows else None,
         prices=[PriceBar(**row) for row in _rows(bars)],
         forecasts=[
             ForecastRow(**row, is_graded=forecasting.is_graded(row.get("historical_hit_rate")))
@@ -370,6 +374,66 @@ def stock_detail(
 # never one verdict). Each helper calls the same analysis function the Streamlit
 # page calls, so the two front ends cannot disagree about a number.
 # --------------------------------------------------------------------------- #
+
+
+logger = logging.getLogger(__name__)
+
+#: How far a stored composite may sit from the one its own sub-scores imply
+#: before the explanation is withheld.
+_EXPLANATION_TOLERANCE = 1e-6
+
+
+def _rating_explanation(score_row: dict[str, Any]) -> RatingExplanation | None:
+    """Decompose one scored row into "why is this rated Buy?" (Section 10).
+
+    Built from the stored `<category>_score` columns rather than recomputed, so
+    the explanation describes the rating the page is showing rather than one
+    derived from today's inputs. `None` when the row cannot be explained --
+    which `build_composite` would not have scored either.
+    """
+    sub_scores = {category: score_row.get(f"{category}_score") for category in CATEGORIES}
+    explained = scoring.explain_composite(sub_scores, profile=score_row.get("profile"))
+    if explained is None:
+        return None
+    rating = str(score_row.get("rating", ""))
+    if rating not in scoring.RATINGS:
+        # A row stored before the rating vocabulary settled. The numbers are
+        # still a valid decomposition; only the sentence needs a rating.
+        return None
+
+    # Refuse to explain a number that is not the one on the page.
+    #
+    # The decomposition is rebuilt from the row's sub-scores, so it is only an
+    # explanation of the displayed composite while those two agree. They agree
+    # for all 503 rows the pipeline writes -- `build_composite` produces both --
+    # but a hand-written or legacy row can disagree, and a confident sentence
+    # accounting for a composite of 80 beside a printed 75 is worse than no
+    # sentence at all. Caught by a seeded fixture that had exactly that shape.
+    stored = score_row.get("composite_score")
+    if stored is not None and abs(float(stored) - explained.composite) > _EXPLANATION_TOLERANCE:
+        logger.warning(
+            "Not explaining %s: stored composite %.4f but its sub-scores imply %.4f",
+            score_row.get("symbol"),
+            float(stored),
+            explained.composite,
+        )
+        return None
+    return RatingExplanation(
+        sentence=scoring.describe_composite(explained, rating=rating),
+        contributions=[
+            CategoryContributionModel(
+                category=c.category,
+                sub_score=c.sub_score,
+                effective_weight=c.effective_weight,
+                contribution=c.contribution,
+            )
+            for c in explained.contributions
+        ],
+        missing=list(explained.missing),
+        covered_weight=explained.covered_weight,
+        baseline=explained.baseline,
+    )
+
 
 # Matches `app/pages/2_Stock_Detail.py`.
 _MONTE_CARLO_HORIZON = 63
