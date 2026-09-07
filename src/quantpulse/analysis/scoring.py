@@ -570,7 +570,7 @@ _MATERIAL_COUNTERWEIGHT = 0.33
 #: than a note: nothing would catch it appearing.
 _MATERIAL_DRIVER = 0.10
 
-_CATEGORY_WORDS: dict[str, str] = {
+CATEGORY_WORDS: dict[str, str] = {
     "fundamental": "fundamentals",
     "technical": "technicals",
     "analyst": "analyst consensus",
@@ -664,7 +664,7 @@ def explain_composite(
 
 
 def _phrase(contribution: CategoryContribution) -> str:
-    word = _CATEGORY_WORDS.get(contribution.category, contribution.category)
+    word = CATEGORY_WORDS.get(contribution.category, contribution.category)
     return f"{word} ({contribution.contribution:+.1f})"
 
 
@@ -744,7 +744,7 @@ def _coverage_clause(explanation: CompositeExplanation) -> str:
     """
     if not explanation.missing:
         return ""
-    words = [_CATEGORY_WORDS.get(category, category) for category in explanation.missing]
+    words = [CATEGORY_WORDS.get(category, category) for category in explanation.missing]
     listed = words[0] if len(words) == 1 else ", ".join(words[:-1]) + f" and {words[-1]}"
     share = explanation.covered_weight * 100.0
     # Terse on purpose. 484 of 503 names are missing industry/macro, so this

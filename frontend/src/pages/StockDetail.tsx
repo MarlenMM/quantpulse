@@ -10,7 +10,7 @@ import {
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
-import type { ForecastRow } from "../lib/types";
+import type { ForecastRow, RatingExplanation } from "../lib/types";
 import { CATEGORIES, SUBSCORE_KEYS } from "../lib/types";
 import {
   confidenceLabel,
@@ -119,6 +119,60 @@ function UngradedForecasts({ rows }: { rows: ForecastRow[] }) {
       </p>
       <ForecastTable rows={rows} />
     </details>
+  );
+}
+
+/**
+ * Which categories moved this rating, and which worked against it (Section 10).
+ *
+ * The radar above shows seven numbers and leaves the reader to work out which
+ * of them mattered. This says it, and it is an attribution rather than a guess:
+ * the composite is a weighted mean, so it decomposes exactly, and the
+ * contributions listed here sum to `composite - 50`.
+ *
+ * The sentence arrives from the API already written. Composing it here as well
+ * is how this page and the Streamlit one would come to word one explanation
+ * two ways.
+ */
+function WhyThisRating({ explanation }: { explanation: RatingExplanation }) {
+  return (
+    <>
+      <p className="callout">
+        <strong>Why this rating?</strong> {explanation.sentence}
+      </p>
+      <details>
+        <summary>Every category&rsquo;s contribution</summary>
+        <p className="muted small">
+          Weight × (sub-score − 50), in composite points. The weights are renormalized
+          over the categories that had data, so these add up to the composite minus 50.
+        </p>
+        <div className="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Category</th>
+                <th scope="col" className="num">Sub-score</th>
+                <th scope="col" className="num">Weight used</th>
+                <th scope="col" className="num">Contribution</th>
+              </tr>
+            </thead>
+            <tbody>
+              {explanation.contributions.map((c) => (
+                <tr key={c.category}>
+                  <td>{humanize(c.category)}</td>
+                  <td className="num">{c.sub_score.toFixed(1)}</td>
+                  <td className="num">{(c.effective_weight * 100).toFixed(0)}%</td>
+                  <td className="num">
+                    {c.contribution >= 0 ? "+" : ""}
+                    {c.contribution.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -269,6 +323,9 @@ export default function StockDetail({ symbol }: { symbol: string }) {
             Categories with no data are omitted rather than plotted at zero — a missing
             score is not a bad score.
           </p>
+          {data.explanation ? (
+            <WhyThisRating explanation={data.explanation} />
+          ) : null}
         </div>
 
         <div>

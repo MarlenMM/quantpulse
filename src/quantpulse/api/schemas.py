@@ -322,6 +322,43 @@ class MacroOverlay(BaseModel):
     components: list[MacroOverlayComponent] = Field(default_factory=list)
 
 
+class CategoryContributionModel(BaseModel):
+    """One category's share of the distance between this name and an average one."""
+
+    category: str
+    sub_score: float
+    #: The weight after renormalizing over the categories that had data — what
+    #: the composite actually applied, not the profile's stated weight.
+    effective_weight: float
+    #: `effective_weight * (sub_score - 50)`, in composite points. These sum to
+    #: `composite_score - 50` exactly.
+    contribution: float
+
+
+class RatingExplanation(BaseModel):
+    """Why this name is rated what it is (Section 10).
+
+    A weighted mean decomposes exactly, so this is an attribution rather than a
+    ranking of plausible-looking numbers: the contributions add up to
+    `composite - 50`, and a test asserts it.
+
+    `sentence` is built server-side and rendered verbatim by both front ends.
+    Two clients wording one explanation differently is how a limitation stops
+    being one — the Track Record page's signal labels already carry a comment
+    asking for two copies to be kept in step by hand.
+    """
+
+    sentence: str
+    contributions: list[CategoryContributionModel]
+    #: Categories with no data for this name. Named rather than omitted: 484 of
+    #: 503 names had no industry/macro reading when this was built, so silence
+    #: would imply a seven-category verdict on six categories' data.
+    missing: list[str]
+    #: Share of the profile's weight that had data behind it, 0-1.
+    covered_weight: float
+    baseline: float
+
+
 class StockDetail(BaseModel):
     """Everything the Stock Detail page needs, in one round trip.
 
@@ -333,6 +370,9 @@ class StockDetail(BaseModel):
     symbol: str
     summary: TickerSummary
     score: ScreenerRow | None = None
+    #: Section 10's "why is this one rated Buy?". `None` when the name has no
+    #: score to explain.
+    explanation: RatingExplanation | None = None
     prices: list[PriceBar] = Field(default_factory=list)
     forecasts: list[ForecastRow] = Field(default_factory=list)
     patterns: list[PatternRow] = Field(default_factory=list)
