@@ -45,6 +45,7 @@ from quantpulse.storage.models import (
     MarketRegime,
     NewsEvent,
     OptionsSignal,
+    PaperTradingSnapshot,
     PatternSignal,
     PortfolioHolding,
     PriceHistory,
@@ -1372,4 +1373,66 @@ def read_pattern_signals_after_id(session: Session, after_id: int) -> pd.DataFra
     return pd.DataFrame(
         session.execute(stmt).all(),
         columns=["symbol", "date", "pattern_type", "direction", "confidence"],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Forward-test reads (Sections 10, 32)
+# --------------------------------------------------------------------------- #
+
+
+def upsert_paper_snapshot(session: Session, record: dict[str, Any]) -> int:
+    """Write one day of the forward test's record, correcting a re-run day.
+
+    Upsert rather than append-only, which is the opposite of how every other
+    point-in-time table here is written -- and deliberately. Those tables record
+    what the *app computed* on a date, so a second computation is a second fact
+    worth keeping. This one records what an external account *was worth* on a
+    date, which has exactly one true value. Appending would leave two
+    contradictory equities for one day and nothing to say which the account
+    actually had.
+    """
+    stmt = (
+        sqlite_insert(PaperTradingSnapshot)
+        .values([record])
+        .on_conflict_do_update(
+            index_elements=["run_date"],
+            set_={key: value for key, value in record.items() if key != "run_date"},
+        )
+    )
+    return _inserted(session, stmt, 1)
+
+
+def read_paper_trading_history(session: Session) -> pd.DataFrame:
+    """The whole forward-test record, oldest first, for plotting as a curve."""
+    stmt = select(
+        PaperTradingSnapshot.run_date,
+        PaperTradingSnapshot.equity,
+        PaperTradingSnapshot.cash,
+        PaperTradingSnapshot.positions_held,
+        PaperTradingSnapshot.benchmark_close,
+        PaperTradingSnapshot.rebalanced,
+        PaperTradingSnapshot.orders_submitted,
+        PaperTradingSnapshot.orders_rejected,
+        PaperTradingSnapshot.turnover,
+        PaperTradingSnapshot.signal_name,
+        PaperTradingSnapshot.profile,
+        PaperTradingSnapshot.target_positions,
+    ).order_by(PaperTradingSnapshot.run_date)
+    return pd.DataFrame(
+        session.execute(stmt).all(),
+        columns=[
+            "run_date",
+            "equity",
+            "cash",
+            "positions_held",
+            "benchmark_close",
+            "rebalanced",
+            "orders_submitted",
+            "orders_rejected",
+            "turnover",
+            "signal_name",
+            "profile",
+            "target_positions",
+        ],
     )

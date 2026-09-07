@@ -18,6 +18,7 @@ import refresh_data
 from quantpulse.alerting import discord, rules
 from quantpulse.analysis import backtest as bt
 from quantpulse.analysis import risk, scoring
+from quantpulse.execution import alpaca
 from quantpulse.ingestion import historical_constituents_client as hist
 from quantpulse.storage import persistence
 from quantpulse.storage.models import (
@@ -380,8 +381,18 @@ def test_run_end_to_end_with_tiny_mocked_universe(engine: Engine) -> None:
         "put_call_ratio": 0.8,
         "atm_implied_volatility": 0.25,
     }
+    # The clock is pinned to a Tuesday, and that is load-bearing rather than
+    # tidy. `run()` derives `is_weekly` from the real weekday, so this test
+    # silently exercised a different code path depending on the day it ran --
+    # and on a Monday it took the weekly branch, where `institutional_ownership`
+    # is mocked to an empty frame, lands in `_STEPS_EXPECTED_TO_WRITE`, and
+    # correctly downgrades the run to "partial". The assertion below then failed
+    # for a reason that had nothing to do with what the test is about. It was
+    # written on a weekday and went red the first Monday after (2026-09-07).
+    # The weekly branch has its own tests; this one is the daily path.
     with (
         patch("refresh_data.get_session", fake_get_session),
+        patch("refresh_data.datetime", wraps=datetime) as clock,
         patch("refresh_data.is_trading_day", return_value=True),
         patch("refresh_data.wikipedia_client.fetch_sp500_constituents", return_value=tiny_universe),
         patch(
@@ -418,6 +429,7 @@ def test_run_end_to_end_with_tiny_mocked_universe(engine: Engine) -> None:
             return_value=_empty_df(["date", "tone", "query"]),
         ),
     ):
+        clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday
         refresh_data.run(job_name="test_run")
 
     with factory() as session:
@@ -2252,3 +2264,201 @@ class TestAlerting:
 
         if send.call_args is not None:
             assert "cup and handle" not in send.call_args.args[1]
+
+
+class TestPaperTrading:
+    """The forward test, asserted through `run()`.
+
+    Same discipline as the alert: unit tests for `execution.alpaca` and
+    `execution.strategy` say nothing about whether the nightly job ever calls
+    them. Every test here drives `refresh_data.run()`, and `alpaca` is patched
+    at the boundary that talks to the network -- so the paper-only guard, the
+    credential check and the order validation all still execute.
+    """
+
+    _SYMBOLS = TestAlerting._SYMBOLS
+
+    @staticmethod
+    def _settings(**overrides):
+        from quantpulse.config import Settings
+
+        return Settings(
+            _env_file=None,
+            **{
+                "alpaca_api_key_id": "PKTEST",
+                "alpaca_api_secret_key": "shh",
+                "alerts_enabled": False,
+                **overrides,
+            },
+        )
+
+    @contextmanager
+    def _driven(self, engine: Engine, *, settings, today: date, account=None, positions=None):
+        account = account or alpaca.Account(
+            status="ACTIVE", equity=100_000.0, cash=100_000.0, buying_power=200_000.0
+        )
+        with TestAlerting()._driven_run(engine, settings=settings, today=today) as (_, factory):
+            with (
+                patch("refresh_data.alpaca.get_account", return_value=account) as get_account,
+                patch("refresh_data.alpaca.list_positions", return_value=dict(positions or {})),
+                patch("refresh_data.alpaca.submit_order", return_value={"id": "x"}) as submit,
+            ):
+                yield get_account, submit, factory
+
+    def _snapshots(self, factory) -> list:
+        from quantpulse.storage.models import PaperTradingSnapshot
+
+        with factory() as session:
+            return list(session.scalars(select(PaperTradingSnapshot)).all())
+
+    def test_a_weekly_run_rebalances_and_records_the_account(self, engine: Engine) -> None:
+        today = date(2026, 7, 20)  # a Monday -- the weekly branch
+        assert today.weekday() == refresh_data._WEEKLY_REFRESH_WEEKDAY
+        with self._driven(engine, settings=self._settings(), today=today) as (_, submit, factory):
+            refresh_data.run(job_name="test_paper")
+
+        rows = self._snapshots(factory)
+        assert len(rows) == 1
+        assert rows[0].equity == 100_000.0
+        assert rows[0].rebalanced is True
+        assert rows[0].signal_name == "composite_rating"
+        assert submit.call_count > 0, "a weekly run with scores must actually place orders"
+        assert rows[0].orders_submitted == submit.call_count
+
+    def test_a_weekday_run_snapshots_without_trading(self, engine: Engine) -> None:
+        """Section 7.6's cadence rule. A daily rebalance racks up turnover no
+        real investor would accept, and the equity curve does not need trades
+        to have daily resolution."""
+        today = date(2026, 7, 21)  # a Tuesday
+        with self._driven(engine, settings=self._settings(), today=today) as (_, submit, factory):
+            refresh_data.run(job_name="test_paper")
+
+        rows = self._snapshots(factory)
+        assert len(rows) == 1 and rows[0].rebalanced is False
+        submit.assert_not_called()
+
+    def test_nothing_happens_without_credentials(self, engine: Engine) -> None:
+        """The default in every fork of this public repo."""
+        settings = self._settings(alpaca_api_key_id=None, alpaca_api_secret_key=None)
+        with self._driven(engine, settings=settings, today=date(2026, 7, 20)) as (
+            get_account,
+            submit,
+            factory,
+        ):
+            status = refresh_data.run(job_name="test_paper")
+
+        get_account.assert_not_called()
+        submit.assert_not_called()
+        assert self._snapshots(factory) == []
+        assert status != "failed"
+
+    def test_the_kill_switch_stops_it_with_credentials_present(self, engine: Engine) -> None:
+        with self._driven(
+            engine, settings=self._settings(paper_trading_enabled=False), today=date(2026, 7, 20)
+        ) as (get_account, submit, factory):
+            refresh_data.run(job_name="test_paper")
+        get_account.assert_not_called()
+        assert self._snapshots(factory) == []
+
+    def test_a_non_active_account_records_nothing(self, engine: Engine) -> None:
+        """A restricted account still answers with a number, and recording it
+        would flat-line the published curve at whatever it froze on."""
+        frozen = alpaca.Account(status="ACCOUNT_CLOSED", equity=99.0, cash=0.0, buying_power=0.0)
+        with self._driven(
+            engine, settings=self._settings(), today=date(2026, 7, 20), account=frozen
+        ) as (_, submit, factory):
+            refresh_data.run(job_name="test_paper")
+        assert self._snapshots(factory) == []
+        submit.assert_not_called()
+
+    def test_one_rejected_order_does_not_abandon_the_rest(self, engine: Engine) -> None:
+        """A half-rebalanced book is worse than a fully rebalanced one, and a
+        run that mostly failed must be visible rather than looking quiet."""
+        today = date(2026, 7, 20)
+        with self._driven(engine, settings=self._settings(), today=today) as (_, submit, factory):
+            calls = {"n": 0}
+
+            def flaky(*args, **kwargs):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise alpaca.AlpacaError("rejected")
+                return {"id": "x"}
+
+            submit.side_effect = flaky
+            refresh_data.run(job_name="test_paper")
+
+        row = self._snapshots(factory)[0]
+        assert row.orders_rejected == 1
+        assert row.orders_submitted == submit.call_count - 1 > 0
+
+    def test_an_alpaca_outage_does_not_fail_the_run(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The night's data is already committed; a broker being down costs the
+        snapshot and nothing else."""
+        with caplog.at_level(logging.INFO):
+            with self._driven(engine, settings=self._settings(), today=date(2026, 7, 20)) as (
+                get_account,
+                _,
+                factory,
+            ):
+                get_account.side_effect = alpaca.AlpacaError("paper-api unreachable")
+                status = refresh_data.run(job_name="test_paper")
+
+        assert status == "partial"
+        assert "failed step(s): paper_trading" in caplog.text
+        assert self._snapshots(factory) == []
+
+    def test_re_running_the_same_day_corrects_rather_than_duplicates(self, engine: Engine) -> None:
+        today = date(2026, 7, 20)
+        with self._driven(engine, settings=self._settings(), today=today) as (_, __, factory):
+            refresh_data.run(job_name="test_paper")
+            refresh_data.run(job_name="test_paper")
+        assert len(self._snapshots(factory)) == 1
+
+    def test_the_benchmark_close_is_stored_beside_the_equity(self, engine: Engine) -> None:
+        """So the comparison stays point-in-time rather than being re-joined
+        against an index series that may later be re-ingested."""
+        today = date(2026, 7, 20)
+        with self._driven(engine, settings=self._settings(), today=today) as (_, __, factory):
+            with factory() as session:
+                session.add(
+                    Ticker(
+                        symbol=risk.MARKET_INDEX_SYMBOL,
+                        name="S&P 500",
+                        asset_type="index",
+                        is_active=False,
+                    )
+                )
+                session.add(
+                    PriceHistory(
+                        symbol=risk.MARKET_INDEX_SYMBOL,
+                        date=today,
+                        open=1.0,
+                        high=1.0,
+                        low=1.0,
+                        close=5500.0,
+                        adj_close=5500.0,
+                        volume=1,
+                    )
+                )
+                session.commit()
+            refresh_data.run(job_name="test_paper")
+
+        assert self._snapshots(factory)[0].benchmark_close == pytest.approx(5500.0)
+
+    def test_the_orders_it_places_are_whole_share_buys_of_rated_names(self, engine: Engine) -> None:
+        """The end-to-end shape: only names the app rates Buy/Strong Buy, whole
+        positive quantities, sells before buys."""
+        today = date(2026, 7, 20)
+        with self._driven(
+            engine, settings=self._settings(), today=today, positions={"ZZZZ": 4.0}
+        ) as (_, submit, factory):
+            refresh_data.run(job_name="test_paper")
+
+        placed = [(c.args[0], c.kwargs["qty"], c.kwargs["side"]) for c in submit.call_args_list]
+        assert placed, "expected orders"
+        assert placed[0] == ("ZZZZ", 4, "sell"), "an unrated holding is sold, and sells go first"
+        for _symbol, qty, side in placed:
+            assert isinstance(qty, int) and qty > 0
+            assert side in ("buy", "sell")

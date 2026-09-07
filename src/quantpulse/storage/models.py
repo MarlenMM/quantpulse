@@ -581,6 +581,60 @@ class BacktestResult(Base):
     assumed_txn_cost: Mapped[float] = mapped_column(Float)
 
 
+class PaperTradingSnapshot(Base):
+    """One day of the forward test's record (Sections 10, 32).
+
+    The counterpart to `backtest_results`, and the reason both exist. A backtest
+    is a claim about a past that has already happened, so it invites "you fitted
+    that" and no amount of bootstrap rigour fully answers it. This table is
+    written forward: each row records what the paper account was worth on a day
+    whose outcome nobody knew when the positions were chosen.
+
+    It also carries the signal the backtest cannot. `backtest_results` ranks
+    `momentum_category`, because five of the composite's seven categories hold
+    weeks of stored history rather than years -- so the published Buy/Sell
+    rating itself has never been testable. `signal_name` here is
+    `composite_rating`, and these rows are how that history accumulates.
+
+    One row per run rather than per rebalance. Equity is snapshotted on every
+    refresh (a single cheap API call) so the curve has daily resolution, while
+    the portfolio is rebalanced weekly -- `rebalanced` records which kind of run
+    this was, so a reader can tell a day the strategy merely drifted from a day
+    it acted. `benchmark_close` is the S&P 500 close on the same date, stored
+    alongside rather than joined later, so the comparison stays point-in-time
+    even if the index series is later re-ingested.
+
+    `orders_submitted` / `orders_rejected` are kept because a rebalance that
+    silently placed nothing looks exactly like a week with no changes, and
+    `turnover` because turnover is what a real forward test pays for in spread.
+
+    **`positions_held` and `equity` are both as-of the moment before this run's
+    orders**, and on a rebalance day that is not what the run ended up holding.
+    Orders placed after the close queue for the next open, so there is no later
+    moment in this job at which they would read any differently -- but a row
+    saying `positions_held=1, orders_submitted=21` is only coherent once you
+    know which side of the trade it was read on. Any surface showing these must
+    label them as the pre-trade state; the next day's row is where the new
+    book first appears. `target_positions` is the *configured* size of the
+    book, not what this particular run aimed at.
+    """
+
+    __tablename__ = "paper_trading_snapshots"
+
+    run_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    equity: Mapped[float] = mapped_column(Float)
+    cash: Mapped[float] = mapped_column(Float)
+    positions_held: Mapped[int] = mapped_column(Integer, default=0)
+    benchmark_close: Mapped[float | None] = mapped_column(Float)
+    rebalanced: Mapped[bool] = mapped_column(default=False)
+    orders_submitted: Mapped[int] = mapped_column(Integer, default=0)
+    orders_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    turnover: Mapped[float | None] = mapped_column(Float)
+    signal_name: Mapped[str] = mapped_column(String(50))
+    profile: Mapped[str] = mapped_column(String(30))
+    target_positions: Mapped[int] = mapped_column(Integer)
+
+
 # --------------------------------------------------------------------------- #
 # Phase 10 -- portfolio bookkeeping (Sections 13, 30) + watchlist (Section 9)
 #
