@@ -86,6 +86,25 @@ class Settings(BaseSettings):
     # time scoring needs a setting. Same shape as `manual_refresh_enabled`.
     alert_pattern_min_confidence: float | None = None
 
+    # Sections 10/32's forward test: the app paper-trading its own published
+    # ratings, so the Track Record page eventually has a record that cannot be
+    # called fitted. Simulated money on Alpaca's paper endpoint -- which is not
+    # configurable from here, deliberately. There is no base-URL setting,
+    # because an env var carrying `api.` where `paper-api.` was meant is one
+    # keystroke away from trading real money on a schedule with nobody
+    # watching. See `execution.alpaca`.
+    #
+    # Two credentials rather than one, both repo secrets, both unset by default
+    # for the same reason the alert webhook is: every fork of this public repo
+    # runs the same workflow.
+    paper_trading_enabled: bool = True
+    alpaca_api_key_id: str | None = None
+    alpaca_api_secret_key: str | None = None
+    # How many names the forward test holds, equal-weight, from the top of the
+    # published ranking. `None` follows `execution.strategy`'s own default,
+    # which is where the reasoning for the number lives.
+    paper_trading_positions: int | None = None
+
     # Section 5: free-tier data source credentials.
     finnhub_api_key: str | None = None
     fred_api_key: str | None = None
@@ -139,6 +158,22 @@ class Settings(BaseSettings):
         if not self.alerts_enabled:
             return False
         return bool(self.alert_discord_webhook_url and self.alert_discord_webhook_url.strip())
+
+    def paper_trading_configured(self) -> bool:
+        """Whether this instance may place paper orders, and has an account to place them in.
+
+        Both credentials, and blanks count as unset -- an unset GitHub Actions
+        secret expands to the empty string, so a workflow referencing a secret
+        that was never created hands this a perfectly good `str`.
+        """
+        if not self.paper_trading_enabled:
+            return False
+        return bool(
+            self.alpaca_api_key_id
+            and self.alpaca_api_key_id.strip()
+            and self.alpaca_api_secret_key
+            and self.alpaca_api_secret_key.strip()
+        )
 
     def manual_refresh_allowed(self) -> bool:
         """Whether this instance may start a data refresh from the UI."""
