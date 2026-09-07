@@ -55,6 +55,7 @@ caller's job (the nightly refresh reads only rows dated <= the as-of date); the
 technical/momentum scorers additionally never read a bar past the frame's end.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -507,3 +508,247 @@ def build_composite(
     result = result[ordered_columns].sort_values("composite_score", ascending=False)
     result = result.reset_index(drop=True)
     return CompositeResult(scores=result, profile=resolved.name, rating_mode=rating_mode)
+
+
+# --------------------------------------------------------------------------- #
+# "Why is this one rated Buy?" -- decomposing the composite (Section 10)
+#
+# The radar plots seven sub-scores and never says which of them moved the
+# ranking. SHAP for the ML forecaster was planned and is absent, but the honest
+# answer for the *composite* needs no model and no new dependency, because
+# `build_composite` is a weighted mean and a weighted mean decomposes exactly:
+#
+#     composite = sum(w_i * s_i) / A           where A = sum of present weights
+#     composite - 50 = sum( (w_i / A) * (s_i - 50) )
+#
+# Every contribution is in composite points, they add up, and the identity is
+# asserted in the tests rather than assumed. That is an attribution, not a
+# ranking of plausible-looking numbers.
+#
+# 50 is the baseline because the sub-scores are cross-sectional percentiles: 50
+# is the median name by construction, so a contribution answers "how far did
+# this category push the name away from an ordinary one, and which way". In
+# absolute rating mode 50 is the midpoint of the fixed bar instead, which is a
+# different sentence but the same arithmetic.
+# --------------------------------------------------------------------------- #
+
+#: The sub-score of a name that is exactly ordinary in a category.
+NEUTRAL_SUB_SCORE = 50.0
+
+#: How many categories the sentence leads with.
+_HEADLINE_DRIVERS = 2
+
+#: A contributor pushing *against* the name's overall verdict is named when it
+#: is at least this fraction of the largest contribution.
+#:
+#: Chosen by counting, over the 503 names scored on 2026-09-05:
+#:
+#: ==========  =====================  ======================  =================
+#:  threshold   clause fires (all)     clause fires (Buys)     median size
+#: ==========  =====================  ======================  =================
+#:       0.25                   82%                     70%       4.8 points
+#:       0.33                   75%                     57%       5.0 points
+#:       0.50                   53%                     34%       5.5 points
+#: ==========  =====================  ======================  =================
+#:
+#: 0.33, and the high firing rate is the finding rather than a problem with it:
+#: most names genuinely are good at some things and bad at others, and the
+#: median clause is worth 5 composite points against rating bands 10-20 points
+#: wide. Staying quiet about that is the overclaim being guarded against.
+#:
+#: Hoping the drag turns up among the top few by magnitude is not enough -- it
+#: missed the drag for 27% of the Buy-rated names that had one, and each of
+#: those would have read as rated Buy *because* of two strengths with no hint
+#: it was rated Buy *despite* something.
+_MATERIAL_COUNTERWEIGHT = 0.33
+
+#: A driver must be at least this fraction of the largest contribution to be
+#: worth naming. Without it a name with one dominant category and six sitting on
+#: the median reads as "... on fundamentals (+11.2) and news sentiment (-0.1)",
+#: presenting rounding dust as an explanation. No name in the committed database
+#: has that shape today (0 of 503), which is exactly why it needs a guard rather
+#: than a note: nothing would catch it appearing.
+_MATERIAL_DRIVER = 0.10
+
+_CATEGORY_WORDS: dict[str, str] = {
+    "fundamental": "fundamentals",
+    "technical": "technicals",
+    "analyst": "analyst consensus",
+    "sentiment": "news sentiment",
+    "momentum": "momentum",
+    "industry_macro": "industry/macro",
+    "smart_money": "smart money",
+}
+
+
+@dataclass(frozen=True)
+class CategoryContribution:
+    """One category's share of the distance between this name and an average one."""
+
+    category: str
+    sub_score: float
+    #: The category's weight *after* renormalizing over the categories that had
+    #: data -- what `build_composite` actually applied, not the profile's
+    #: stated weight. These sum to 1 across `contributions`.
+    effective_weight: float
+    #: `effective_weight * (sub_score - 50)`, in composite points.
+    contribution: float
+
+
+@dataclass(frozen=True)
+class CompositeExplanation:
+    """The composite, taken apart into the categories that produced it."""
+
+    contributions: tuple[CategoryContribution, ...]  # ranked by |contribution|
+    missing: tuple[str, ...]
+    composite: float
+    baseline: float
+    #: Share of the profile's weight that had data behind it, 0-1. The median
+    #: name in the committed database carries 0.90, and only 19 of 503 carry
+    #: 1.0 -- so this is a normal condition to report, not an error.
+    covered_weight: float
+
+
+def explain_composite(
+    sub_scores: Mapping[str, float | None],
+    *,
+    profile: InvestorProfile | str | None = None,
+) -> CompositeExplanation | None:
+    """Decompose one name's composite into per-category contributions.
+
+    `sub_scores` maps category to its 0-100 normalized sub-score, with `None`
+    for a category that had no data -- exactly the shape a `composite_scores`
+    row carries. Returns `None` when nothing had data, because a name with no
+    inputs has no composite to explain (and `build_composite` drops it too).
+
+    The effective weights are renormalized over the present categories, matching
+    `build_composite` exactly. Getting that wrong would produce contributions
+    that do not add up to the composite shown on the page, which is worse than
+    no explanation at all.
+    """
+    resolved = profile if isinstance(profile, InvestorProfile) else get_profile(profile)
+    weights = resolved.weights
+
+    present = {
+        category: float(score)
+        for category, score in sub_scores.items()
+        if category in weights and score is not None and not pd.isna(score)
+    }
+    missing = tuple(category for category in CATEGORIES if category not in present)
+    covered = sum(weights[category] for category in present)
+    if covered <= 0:
+        return None
+
+    contributions = tuple(
+        sorted(
+            (
+                CategoryContribution(
+                    category=category,
+                    sub_score=score,
+                    effective_weight=weights[category] / covered,
+                    contribution=(weights[category] / covered) * (score - NEUTRAL_SUB_SCORE),
+                )
+                for category, score in present.items()
+            ),
+            key=lambda c: (-abs(c.contribution), c.category),
+        )
+    )
+    composite = sum(c.effective_weight * c.sub_score for c in contributions)
+    return CompositeExplanation(
+        contributions=contributions,
+        missing=missing,
+        composite=composite,
+        baseline=NEUTRAL_SUB_SCORE,
+        covered_weight=covered,
+    )
+
+
+def _phrase(contribution: CategoryContribution) -> str:
+    word = _CATEGORY_WORDS.get(contribution.category, contribution.category)
+    return f"{word} ({contribution.contribution:+.1f})"
+
+
+def describe_composite(explanation: CompositeExplanation, *, rating: str) -> str:
+    """One sentence saying what moved this name's rating, and what worked against it.
+
+    Built here rather than in each front end for the same reason the Kelly
+    fraction is computed server-side: two front ends wording one explanation
+    differently is how a limitation stops being one, and the Track Record
+    page's signal labels already carry a comment asking for two copies to be
+    kept in step by hand.
+
+    The counterweight clause is the part that matters. A name rated Buy on two
+    strong categories while a third drags hard is rated Buy *despite* that
+    third, and a sentence naming only the strengths would be the same
+    overclaim -- describing itself more confidently than its data supports --
+    that the rest of this project has been unpicking.
+    """
+    if rating not in RATING_LABELS:
+        raise ValueError(f"rating must be one of {RATINGS}, got {rating!r}")
+    label = RATING_LABELS[rating]
+
+    ranked = list(explanation.contributions)
+    coverage = _coverage_clause(explanation)
+    biggest = abs(ranked[0].contribution) if ranked else 0.0
+
+    if biggest < 0.05:
+        return (
+            f"Rated {label}: nothing sets this name apart — every category with data "
+            f"lands close to the average name.{coverage}"
+        )
+
+    # Split by sign FIRST, then take the strongest of each side. Ranking by
+    # magnitude alone and calling the top two "what it is rated on" produced
+    # sentences like "Rated Sell mostly on technicals (-9.9) and fundamentals
+    # (+5.3)" against real rows -- where fundamentals were the one thing holding
+    # the name *up*, presented as a reason it was rated down. Only visible by
+    # running it over the committed database; every unit test passed.
+    direction = 1.0 if explanation.composite >= explanation.baseline else -1.0
+    agreeing = [c for c in ranked if c.contribution * direction > 0]
+    opposing = [c for c in ranked if c.contribution * direction < 0]
+
+    # `agreeing` cannot be empty, and neither can `drivers`: the contributions
+    # sum to `composite - baseline`, so whichever way that lands, the categories
+    # on that side must outweigh the ones opposing. With seven categories the
+    # largest of them is therefore always at least a seventh of the opposing
+    # total, comfortably clearing `_MATERIAL_DRIVER`. A fallback branch here
+    # would be unreachable, and unreachable code that no test can exercise is
+    # worse than none -- it reads as a case someone has thought about.
+    drivers = [
+        c for c in agreeing[:_HEADLINE_DRIVERS] if abs(c.contribution) >= _MATERIAL_DRIVER * biggest
+    ]
+
+    counterweight = next(
+        (c for c in opposing if abs(c.contribution) >= _MATERIAL_COUNTERWEIGHT * biggest),
+        None,
+    )
+
+    lead = " and ".join(_phrase(c) for c in drivers)
+    sentence = f"Rated {label} mostly on {lead}"
+    if counterweight is not None:
+        # Neutral wording, because this clause has to be true in both
+        # directions: for a Buy the counterweight is holding it back, for a Sell
+        # it is propping it up, and one phrase has to cover both without
+        # asserting either.
+        sentence += f" — pulling the other way, {_phrase(counterweight)}"
+    return f"{sentence}.{coverage}"
+
+
+def _coverage_clause(explanation: CompositeExplanation) -> str:
+    """Name the categories that had nothing behind them, or say nothing.
+
+    Never silent when coverage is partial. Only 19 of 503 names in the committed
+    database had all seven categories and the median carried 90% of the weight,
+    so a sentence that read as a seven-category verdict on six categories' data
+    would be the normal case rather than a rare one.
+    """
+    if not explanation.missing:
+        return ""
+    words = [_CATEGORY_WORDS.get(category, category) for category in explanation.missing]
+    listed = words[0] if len(words) == 1 else ", ".join(words[:-1]) + f" and {words[-1]}"
+    share = explanation.covered_weight * 100.0
+    # Terse on purpose. 484 of 503 names are missing industry/macro, so this
+    # clause lands on nearly every sentence; at the length it was first written
+    # it was 110 of a 188-character sentence, which is how a reader learns to
+    # skip it. Short enough to read every time, specific enough to act on.
+    return f" No {listed} data, so this rests on {share:.0f}% of the profile's weight."
