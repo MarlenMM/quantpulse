@@ -1,0 +1,19 @@
+**What were you trying to figure out, and why did it matter?**
+
+Whether I'd actually learned anything about markets, or was just riding beta. I started trading for real in March 2026, mostly AI names, and by June my portfolio was up about 40% — until I noticed the S&P 500 and Nasdaq had just had a historic run, and almost everything I held had simply risen with them. That gap between "I made money" and "I understand why" was enough to make me stop treating returns as feedback and start building QuantPulse (github.com/MarlenMM/quantpulse): a sandbox to answer one question before trusting my own judgment again — is this signal, or just the tide?
+
+**What did you actually do?**
+
+QuantPulse is a self-hosted equity-research and portfolio-management engine (MIT license, live at marlenmm.github.io/quantpulse), built solo over about seven weeks — 182 commits, July 21–September 6, 2026, an estimated 150–200+ hours. Eight free data sources (Yahoo Finance, Finnhub, FRED, SEC EDGAR filings and 13F, GDELT, Reddit, news RSS, Wikipedia) feed a SQLite store (23 tables, 13 migrations). A from-scratch analysis layer scores every S&P 500 name across seven categories — technicals, fundamentals, analyst consensus, FinBERT-scored news sentiment, momentum, macro, and insider/institutional "smart money" signals — into a composite rank across six investor-profile weightings. On top: four forecasting methods graded out-of-sample against a naive baseline; a backtester reporting Sharpe/CAGR as bootstrap confidence intervals; and three portfolio optimizers (mean-variance, Hierarchical Risk Parity, Black-Litterman) with concrete trade lists. Outputs: 1,554 unit/integration/property-based tests, CI/CD, and two front ends — Streamlit and a React+FastAPI SPA — asserted by test to agree on every shared number. I used Claude Code as an implementation pair-programmer, while I owned the architecture, methodology, and increasingly the job of reviewing its output for errors that don't crash anything.
+
+**What surprised you?**
+
+How much of my effort moved from writing code to verifying it. Directing an AI coding agent at this scale meant my job became catching non-crashing errors — look-ahead bias, a missing category silently scored as zero instead of dropped from its weighting, an off-by-one in pattern detection — which otherwise poison every downstream number. Separately: free sources cover price history for 98.8% of current S&P 500 members but only 49% of delisted ones, and one such stock's adjusted close jumped from $0.005 to $305.00 in a single bar from a broken split adjustment. A backtest is only as honest as the data under it.
+
+**What did you do wrong, or what was suboptimal in retrospect?**
+
+My monitoring was shallow exactly where it mattered. The nightly data refresh kept working, but the check gating the live-demo publish step broke silently for 13 straight nights starting August 10 — a test locator matched six page elements instead of one (a ticker-symbol collision) and failed the deploy every time, while data kept updating invisibly. I didn't catch it until the demo's own freshness indicator read "24 days stale" on September 6. I'd designed the app to be ruthlessly honest about data quality but hadn't held my own release process to that bar.
+
+**What's still unresolved or unknown?**
+
+The weekly data branch — fundamentals, analyst consensus, sentiment, the categories that separate a good business from a cheap one — has never completed a full run; the first attempt hit GitHub Actions' six-hour job limit scoring articles through FinBERT. Until it does, the live score runs almost entirely on technicals and momentum, and the backtest can only honestly grade that half. No fix removes the delisted-price gap: some survivorship bias is baked into any backtest built on free data, however careful the point-in-time logic is.
