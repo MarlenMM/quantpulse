@@ -424,3 +424,59 @@ class BacktestRun(BaseModel):
     #: it is one integer, and both front ends have to say the same sentence
     #: about it or they disagree about the app's own limitation.
     composite_history_days: int = 0
+
+
+class ForwardTestPoint(BaseModel):
+    """One day of the paper-traded forward test's equity curve.
+
+    `equity` and `positions_held` are as-of the moment *before* that run's
+    orders (see `storage.models.PaperTradingSnapshot`): orders placed after the
+    close fill at the next open, so a rebalance day's row shows the book the
+    strategy was leaving, not the one it bought.
+    """
+
+    run_date: date
+    equity: float
+    benchmark_close: float | None = None
+    rebalanced: bool = False
+    positions_held: int = 0
+    orders_submitted: int = 0
+    orders_rejected: int = 0
+
+
+class ForwardTest(BaseModel):
+    """The forward test's record and its headline numbers (Sections 10, 32).
+
+    The counterpart to `BacktestRun`, and it carries the signal that one cannot:
+    `backtest_results` ranks `momentum_category`, because five of the
+    composite's seven categories hold weeks of history rather than years, so the
+    published Buy/Sell rating has never been testable against the past. This
+    record is written forward instead of backward, so it accumulates that
+    history rather than needing it to exist.
+
+    **Nothing here is annualised**, and the omission is the point. Two monthly
+    periods spanning 35 days were once published as a 26.6% CAGR
+    (`backtest.MIN_TRACK_RECORD_PERIODS`); a record that starts one day long and
+    grows by one a day would spend months in exactly that trap. `total_return`
+    over a stated window needs no periods-per-year assumption.
+
+    `is_meaningful` says whether the record is long enough to be called a track
+    record yet. The numbers are shown either way -- withholding a measured
+    figure teaches a reader nothing, while showing it beside "8 trading days"
+    teaches them precisely how much to trust it.
+    """
+
+    n_snapshots: int
+    first_date: date | None = None
+    last_date: date | None = None
+    start_equity: float | None = None
+    latest_equity: float | None = None
+    total_return: float | None = None
+    benchmark_total_return: float | None = None
+    rebalances: int = 0
+    signal_name: str | None = None
+    is_meaningful: bool = False
+    #: Trading days needed before `is_meaningful` turns true, so the client can
+    #: say "8 of 20" without a second copy of the threshold in TypeScript.
+    min_days_for_meaning: int
+    points: list[ForwardTestPoint] = []

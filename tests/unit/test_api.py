@@ -774,3 +774,67 @@ class TestRegimeCoverageReachesTheClient:
                 "rather than the row"
             )
             break
+
+
+class TestForwardTestEndpoint:
+    """The forward test's own endpoint (Sections 10, 32)."""
+
+    def test_an_untraded_record_is_an_empty_record_not_a_404(self, client) -> None:
+        """The normal state until someone sets the two Alpaca secrets. "We track
+        this and it has not started" and "this endpoint does not exist" are
+        different answers, and the page needs the first."""
+        response = client.get("/api/forward-test")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["n_snapshots"] == 0
+        assert payload["total_return"] is None
+        assert payload["is_meaningful"] is False
+        assert payload["points"] == []
+
+    def test_the_threshold_is_served_so_the_client_needs_no_copy_of_it(self, client) -> None:
+        """Otherwise "8 of 20 days" needs the 20 in TypeScript as well, and the
+        two can disagree the moment one is changed."""
+        from quantpulse.execution import record
+
+        payload = client.get("/api/forward-test").json()
+        assert payload["min_days_for_meaning"] == record.MIN_FORWARD_TEST_DAYS
+
+    @pytest.fixture
+    def traded_client(self, tmp_path) -> Iterator[TestClient]:
+        def _seed_forward(session: Session) -> None:
+            for offset, equity, close in ((1, 100_000.0, 5000.0), (0, 102_000.0, 5050.0)):
+                persistence.upsert_paper_snapshot(
+                    session,
+                    {
+                        "run_date": date(2026, 9, 7) - timedelta(days=offset),
+                        "equity": equity,
+                        "cash": 0.0,
+                        "positions_held": 20,
+                        "benchmark_close": close,
+                        "rebalanced": offset == 1,
+                        "orders_submitted": 21 if offset == 1 else 0,
+                        "orders_rejected": 0,
+                        "turnover": 1.0 if offset == 1 else None,
+                        "signal_name": "composite_rating",
+                        "profile": "balanced",
+                        "target_positions": 20,
+                    },
+                )
+            session.commit()
+
+        yield from _client(tmp_path, extra=_seed_forward)
+
+    def test_it_serves_the_curve_and_the_summary_together(self, traded_client) -> None:
+        payload = traded_client.get("/api/forward-test").json()
+        assert payload["n_snapshots"] == 2
+        assert payload["total_return"] == pytest.approx(0.02)
+        assert payload["benchmark_total_return"] == pytest.approx(0.01)
+        assert payload["signal_name"] == "composite_rating"
+        assert payload["rebalances"] == 1
+        assert [p["run_date"] for p in payload["points"]] == ["2026-09-06", "2026-09-07"]
+
+    def test_nothing_it_serves_is_annualised(self, traded_client) -> None:
+        """A record that starts one day long would spend months turning a good
+        week into a headline CAGR."""
+        payload = traded_client.get("/api/forward-test").json()
+        assert not any("cagr" in key.lower() or "annual" in key.lower() for key in payload)

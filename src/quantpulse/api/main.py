@@ -48,6 +48,8 @@ from quantpulse.api.schemas import (
     AnalystConsensusModel,
     BacktestRun,
     ForecastRow,
+    ForwardTest,
+    ForwardTestPoint,
     GlossaryTerm,
     HealthResponse,
     InvestorProfileModel,
@@ -68,6 +70,7 @@ from quantpulse.api.schemas import (
     StockDetail,
     TickerSummary,
 )
+from quantpulse.execution import record
 from quantpulse.glossary import TERMS
 from quantpulse.news_intelligence import market_regime
 from quantpulse.portfolio.optimization import kelly_position_fraction
@@ -574,6 +577,37 @@ def market_news(
     """Recent Tier-2/3 industry and macro stories (Section 12's dashboard panel)."""
     frame = persistence.read_market_moving_news(session, limit=limit)
     return [NewsItem(**row) for row in _rows(frame)]
+
+
+@app.get("/api/forward-test", response_model=ForwardTest, tags=["market"])
+def forward_test(session: Session = Depends(db_session)) -> ForwardTest:
+    """The paper-traded forward test: what following the published ratings did (Section 32).
+
+    Summarised server-side by `execution.record.summarise` rather than in each
+    client, for the same reason the Kelly fraction is: two front ends deriving
+    headline numbers from the same rows can quietly disagree about them.
+
+    Returns an empty record rather than a 404 when nothing has been traded,
+    which is the normal state until someone sets the two Alpaca secrets -- "we
+    track this and it has not started" and "this endpoint does not exist" are
+    different answers, and the page needs the first one.
+    """
+    history = persistence.read_paper_trading_history(session)
+    summary = record.summarise(history)
+    return ForwardTest(
+        n_snapshots=summary.n_snapshots,
+        first_date=summary.first_date,
+        last_date=summary.last_date,
+        start_equity=summary.start_equity,
+        latest_equity=summary.latest_equity,
+        total_return=summary.total_return,
+        benchmark_total_return=summary.benchmark_total_return,
+        rebalances=summary.rebalances,
+        signal_name=summary.signal_name,
+        is_meaningful=summary.is_meaningful,
+        min_days_for_meaning=record.MIN_FORWARD_TEST_DAYS,
+        points=[ForwardTestPoint(**row) for row in _rows(history)],
+    )
 
 
 @app.get("/api/backtest", response_model=list[BacktestRun], tags=["market"])

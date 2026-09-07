@@ -340,3 +340,45 @@ export const SUBSCORE_KEYS: Record<Category, keyof ScreenerRow> = {
   industry_macro: "industry_macro_score",
   smart_money: "smart_money_score",
 };
+
+/**
+ * One day of the paper-traded forward test's equity curve.
+ *
+ * `equity` and `positions_held` are as-of the moment *before* that run's
+ * orders: orders placed after the close fill at the next open, so a rebalance
+ * day's row shows the book the strategy was leaving, not the one it bought.
+ */
+export interface ForwardTestPoint {
+  run_date: string;
+  equity: number;
+  benchmark_close: number | null;
+  rebalanced: boolean;
+  positions_held: number;
+  orders_submitted: number;
+  orders_rejected: number;
+}
+
+/**
+ * The forward test's record — the counterpart to `BacktestRun`, carrying the
+ * signal that one cannot.
+ *
+ * Nothing here is annualised, deliberately: a record that starts one day long
+ * and grows by one a day would otherwise spend months turning a good week into
+ * a headline CAGR. `min_days_for_meaning` is served by the API rather than
+ * duplicated here, so "8 of 20 days" cannot disagree between the two front
+ * ends.
+ */
+export interface ForwardTest {
+  n_snapshots: number;
+  first_date: string | null;
+  last_date: string | null;
+  start_equity: number | null;
+  latest_equity: number | null;
+  total_return: number | null;
+  benchmark_total_return: number | null;
+  rebalances: number;
+  signal_name: string | null;
+  is_meaningful: boolean;
+  min_days_for_meaning: number;
+  points: ForwardTestPoint[];
+}

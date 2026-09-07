@@ -119,6 +119,105 @@ function WhatWasRanked({ run }: { run: BacktestRun }) {
   );
 }
 
+/**
+ * The other half of the answer to "you fitted that" (Sections 10, 32).
+ *
+ * Everything else on this page is a claim about a past that has already
+ * happened, ranked by one of the composite's seven categories because the other
+ * five hold weeks of stored history rather than years. This section asks the
+ * same question forward: a paper account trading the *published* rating, whose
+ * every position was chosen before its outcome was known.
+ *
+ * Written to be honest while it is still short, because it will be short for
+ * months. The day count comes before any return, nothing is annualised, and a
+ * record that has not started says so rather than drawing a flat line at zero.
+ */
+function ForwardTestSection() {
+  const { data, error, loading } = useApi(() => api.forwardTest(), []);
+
+  if (loading) return <LoadingMetrics what="the forward test" count={4} />;
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return null;
+
+  if (data.n_snapshots === 0) {
+    return (
+      <p className="callout">
+        <strong>Not started.</strong> The forward test paper-trades the published
+        Buy/Sell rating on Alpaca&rsquo;s paper endpoint — simulated money, real market
+        data, real fills — and records what the account was worth each day. It runs only
+        when the two Alpaca credentials are configured; unset, this stays empty rather
+        than showing a curve nobody traded. It exists because the backtest above cannot
+        rank the full rating until the stored composite history spans its window, and
+        forward testing accumulates that history instead of waiting for it.
+      </p>
+    );
+  }
+
+  const start = data.points[0]?.equity ?? null;
+  const min = Math.min(...data.points.map((p) => p.equity));
+  const max = Math.max(...data.points.map((p) => p.equity));
+  const span = max - min || 1;
+
+  return (
+    <>
+      <div className="metrics">
+        <Metric label="Trading days recorded" value={String(data.n_snapshots)} />
+        <Metric label="Rebalances" value={String(data.rebalances)} />
+        <Metric
+          label="Strategy, total return"
+          value={data.total_return === null ? "—" : formatPercent(data.total_return)}
+        />
+        <Metric
+          label="S&P 500, same window"
+          value={
+            data.benchmark_total_return === null
+              ? "—"
+              : formatPercent(data.benchmark_total_return)
+          }
+        />
+      </div>
+
+      {!data.is_meaningful ? (
+        <p className="callout callout-warn">
+          <strong>
+            {data.n_snapshots} of {data.min_days_for_meaning} trading days.
+          </strong>{" "}
+          The numbers above are what actually happened, but this is a start rather than a
+          track record — treat it as one until the record is longer. Nothing here is
+          annualised: a good first week, annualised, is a headline that describes nothing.
+        </p>
+      ) : null}
+
+      <svg
+        viewBox="0 0 600 160"
+        role="img"
+        aria-label={`Paper account equity from ${data.first_date} to ${data.last_date}`}
+        className="equity-curve"
+      >
+        <polyline
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          points={data.points
+            .map((p, i) => {
+              const x = (i / Math.max(1, data.points.length - 1)) * 600;
+              const y = 150 - ((p.equity - min) / span) * 140;
+              return `${x.toFixed(1)},${y.toFixed(1)}`;
+            })
+            .join(" ")}
+        />
+      </svg>
+      <p className="note">
+        Paper account equity, {data.first_date} to {data.last_date}
+        {start !== null ? `, starting at ${start.toLocaleString()}` : ""}. Equity is read
+        before each run&rsquo;s orders, and orders placed after the close fill at the next
+        open — so a rebalance day&rsquo;s point is the book being left, not the one being
+        bought.
+      </p>
+    </>
+  );
+}
+
 export default function TrackRecord() {
   const { data, error, loading } = useApi(() => api.backtest(20), []);
 
@@ -300,6 +399,11 @@ export default function TrackRecord() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section>
+        <h2>Forward test — the same question, asked forward</h2>
+        <ForwardTestSection />
       </section>
     </>
   );

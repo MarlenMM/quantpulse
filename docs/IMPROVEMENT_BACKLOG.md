@@ -1,11 +1,11 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–10 are fixed
-and live**; **11–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–11 are fixed
+and live**; **12–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** 1,626 tests, 14 Alembic migrations, CI and Pages
+**State at time of writing:** 1,711 tests, 14 Alembic migrations, CI and Pages
 green, working tree clean.
 
 ---
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,626 tests
+uv run pytest                 # 1,711 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -83,6 +83,12 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   three times against real rows, and a 403 from a real socket reported
   `HTTPError` with no status code where the mocked test had asserted a status.
   Both were only visible by running it against `quantpulse_demo.db`.
+- **A test that reads the real weekday is not a test.**
+  `test_run_end_to_end_with_tiny_mocked_universe` derived `is_weekly` from
+  `date.today()`, so it exercised the daily path Tue–Sun and the weekly path on
+  Mondays — where a mocked-empty step correctly downgrades the run and the
+  assertion failed for an unrelated reason. It went red on its own on
+  2026-09-07, the first Monday after it was written. Pin the clock.
 - **`gh run list` first.** A workflow that was cancelled or never created writes
   nothing the app can see, and that has been the single biggest bug twice.
 
@@ -104,6 +110,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 8 | Regime said "built from four inputs" while one had always been null; short interest vanished silently | Server-composed coverage note, per row; short interest explains its absence | `d96cb02` |
 | 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `f12dab1` |
 | 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70 completed within 30 days, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
+| 11 | The Track Record page ranked the momentum category, never the published rating, and could not — 22 days of stored composite history against a 1,183-day window | Alpaca paper trading, forward. Top 20 Buy/Strong Buy, equal-weight, whole shares, weekly rebalance, daily equity snapshot. The endpoint is a module constant with no setting that can reach live money; nothing is annualised | `66a01c9`, `4d697e4`, `840feca` |
 
 ### Two things from those fixes that still need watching
 
@@ -126,30 +133,19 @@ Recorded because several of them explain why the code looks the way it does now.
    never offer to obtain or enter a key or a webhook URL. `FRED_API_KEY`
    (fred.stlouisfed.org) fills the yield curve and macro series;
    `FINNHUB_API_KEY` (finnhub.io) fills short interest;
-   `ALERT_DISCORD_WEBHOOK_URL` (point 10) is where the nightly alert goes —
-   until it is set, the alert step logs one line and sends nothing, by design.
-   All three go in Settings → Secrets and variables → Actions.
+   `ALERT_DISCORD_WEBHOOK_URL` (point 10) is where the nightly alert goes; and
+   `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` (point 11) are the paper
+   account the forward test trades in. Until each is set the matching step logs
+   one line and does nothing, by design. All go in Settings → Secrets and
+   variables → Actions.
 
 ---
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 11–14 are unbuilt features; 15–18 are
+Ordered as the audit ranked them. 12–14 are unbuilt features; 15–18 are
 methodology and hygiene. The numbering is the audit's and is kept stable, so
-11 stays 11 now that 10 is done.
-
-### 11. Forward testing via Alpaca paper trading
-
-Every backtest invites "you fitted that", and no amount of bootstrap rigour
-fully answers it. Alpaca's free paper-trading API would let the app trade its
-own published ratings forward from today and accumulate a record nobody can call
-fitted. Given how much of the project's pitch rests on the Track Record page,
-this is the most valuable unbuilt thing (Sections 10, 32).
-
-Note the honest constraint discovered in point 4: the composite **cannot** drive
-a historical backtest, because five of seven categories have only weeks of
-stored history. Forward testing is the way round that — it accumulates the
-history rather than needing it to already exist.
+12 stays 12 now that 10 and 11 are done.
 
 ### 12. No answer to "why is this one rated Buy?"
 

@@ -984,3 +984,19 @@ pre {
   th, td { padding: 0.4rem 0.5rem; }
   .metrics { gap: var(--s4); }
 }
+
+/* The forward test's equity curve.
+
+   A bare inline SVG polyline rather than a charting library: this is one
+   series with no axes, no tooltip and no legend, and plotly has silently
+   blanked every chart in this app twice on a bundler or wrapper upgrade. A
+   shape that cannot break is worth more here than one that can be styled.
+   `currentColor` keeps it correct in both themes without a second palette. */
+.equity-curve {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  color: var(--accent);
+  margin: var(--s3) 0 var(--s2);
+}
