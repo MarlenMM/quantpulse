@@ -7,6 +7,7 @@ mock was wired up.
 """
 
 import json
+import logging
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 
@@ -838,3 +839,169 @@ class TestForwardTestEndpoint:
         week into a headline CAGR."""
         payload = traded_client.get("/api/forward-test").json()
         assert not any("cagr" in key.lower() or "annual" in key.lower() for key in payload)
+
+
+class TestRatingExplanation:
+    """Section 10's "why is this one rated Buy?" on the stock endpoint."""
+
+    @pytest.fixture
+    def explained_client(self, tmp_path) -> Iterator[TestClient]:
+        """A scored row whose stored composite matches its own sub-scores.
+
+        The shared fixture's does not -- it stores `technical_score=80` with
+        every other category null beside a `composite_score` of 75, which no run
+        of `build_composite` could produce. That inconsistency is what surfaced
+        the guard tested at the bottom of this class; the happy path needs a
+        coherent row.
+        """
+
+        def _seed_consistent(session: Session) -> None:
+            from sqlalchemy import delete as sa_delete
+
+            from quantpulse.storage.models import CompositeScore
+
+            # The shared seed already wrote an AAPL row for this date; replace
+            # it rather than colliding with its primary key.
+            session.execute(sa_delete(CompositeScore).where(CompositeScore.symbol == "AAPL"))
+            session.add(
+                CompositeScore(
+                    symbol="AAPL",
+                    date=TODAY,
+                    profile="balanced",
+                    fundamental_score=90.0,
+                    technical_score=70.0,
+                    analyst_score=60.0,
+                    sentiment_score=20.0,
+                    momentum_score=55.0,
+                    smart_money_score=50.0,
+                    # 0.25*90 + 0.20*70 + 0.10*60 + 0.10*20 + 0.15*55 + 0.10*50,
+                    # over a covered weight of 0.90 (industry/macro absent).
+                    composite_score=(22.5 + 14.0 + 6.0 + 2.0 + 8.25 + 5.0) / 0.90,
+                    percentile_rank=88.0,
+                    rating="buy",
+                    data_confidence=90.0,
+                )
+            )
+            session.commit()
+
+        yield from _client(tmp_path, extra=_seed_consistent)
+
+    def test_a_scored_stock_carries_its_explanation(self, explained_client) -> None:
+        payload = explained_client.get("/api/stocks/AAPL").json()
+        assert payload["explanation"] is not None
+        assert payload["explanation"]["sentence"].startswith("Rated Buy")
+
+    def test_the_contributions_add_up_to_the_composite(self, explained_client) -> None:
+        """The identity the decomposition rests on, asserted through the wire
+        rather than only in the analysis module -- a serialisation that dropped
+        or reordered a field would still look like a valid explanation."""
+        payload = explained_client.get("/api/stocks/AAPL").json()
+        explanation = payload["explanation"]
+        total = sum(c["contribution"] for c in explanation["contributions"])
+        assert total == pytest.approx(
+            payload["score"]["composite_score"] - explanation["baseline"], abs=1e-6
+        )
+
+    def test_effective_weights_sum_to_one(self, explained_client) -> None:
+        explanation = explained_client.get("/api/stocks/AAPL").json()["explanation"]
+        weights = [c["effective_weight"] for c in explanation["contributions"]]
+        assert sum(weights) == pytest.approx(1.0)
+
+    def test_missing_categories_are_named_on_the_wire(self, explained_client) -> None:
+        """484 of 503 names had no industry/macro reading. A client that could
+        not tell "absent" from "average" would draw the second."""
+        explanation = explained_client.get("/api/stocks/AAPL").json()["explanation"]
+        assert explanation["missing"] == ["industry_macro"]
+        assert all(
+            c["category"] not in explanation["missing"] for c in explanation["contributions"]
+        )
+
+    def test_a_row_whose_composite_disagrees_with_its_parts_is_not_explained(
+        self, client, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Refusing to explain a number that is not the one on the page.
+
+        The shared fixture stores a composite of 75 beside sub-scores implying
+        80. A confident sentence accounting for 80, printed next to a displayed
+        75, is worse than no sentence -- so the explanation is withheld and the
+        disagreement logged.
+        """
+        with caplog.at_level(logging.WARNING):
+            payload = client.get("/api/stocks/AAPL").json()
+        assert payload["score"] is not None, "the row itself is still served"
+        assert payload["explanation"] is None
+        assert "stored composite" in caplog.text
+
+    def test_an_unscored_stock_has_no_explanation_rather_than_an_empty_one(
+        self, empty_client
+    ) -> None:
+        """ "We track this and have not scored it" must not render as a
+        confident-looking sentence about nothing."""
+        response = empty_client.get("/api/stocks/AAPL")
+        if response.status_code == 200:
+            assert response.json()["explanation"] is None
+
+
+class TestResponseModelsAreComplete:
+    """No response model should carry an unresolved forward reference.
+
+    `StockDetail.explanation` was first declared as `RatingExplanation | None`
+    with `RatingExplanation` defined 170 lines *below* it, leaving
+    `__pydantic_complete__` False until something forced a rebuild. Pydantic
+    resolves the annotation lazily on first use, so the field was in fact always
+    serialized correctly — that was checked directly against the old ordering
+    rather than assumed.
+
+    The guard is here anyway, because "it happens to work because something else
+    triggers a rebuild first" is a property of import order rather than of this
+    module, and import order is exactly what changes when a new caller appears.
+    Declaring the classes in dependency order costs nothing and removes the
+    question.
+    """
+
+    def test_every_schema_resolved_its_annotations(self) -> None:
+        """Checked in a **subprocess importing only `schemas`**.
+
+        Importing `api.main` first rebuilds the models as a side effect of route
+        registration, so an in-process assertion passes or fails depending on
+        which test ran before it -- it caught the broken ordering when it
+        happened to run first and missed it otherwise. A guard that depends on
+        test ordering is not a guard.
+        """
+        import subprocess
+        import sys
+        import textwrap
+
+        program = textwrap.dedent(
+            """
+            import inspect
+            from pydantic import BaseModel
+            from quantpulse.api import schemas
+
+            bad = [
+                name
+                for name, obj in inspect.getmembers(schemas, inspect.isclass)
+                if issubclass(obj, BaseModel)
+                and obj is not BaseModel
+                and obj.__module__ == schemas.__name__
+                and not obj.__pydantic_complete__
+            ]
+            print(",".join(bad))
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", program], capture_output=True, text=True, check=True
+        )
+        incomplete = [name for name in result.stdout.strip().split(",") if name]
+        assert incomplete == [], (
+            f"unresolved forward references in {incomplete} — a field annotated with a "
+            f"class defined lower in the module is silently dropped from the response "
+            f"payload, with no error and no failing build"
+        )
+
+    def test_the_stock_payload_actually_carries_the_explanation_key(self, client) -> None:
+        """`explanation: null` and no `explanation` key at all are different
+        answers to a client, and only the second is a bug -- so this checks for
+        the key rather than for a truthy value."""
+        payload = client.get("/api/stocks/AAPL").json()
+        assert "explanation" in payload

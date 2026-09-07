@@ -47,7 +47,7 @@ from lib.format import (
 )
 from lib.glossary import tip
 from lib.search import format_choice, search_symbols
-from quantpulse.analysis import backtest, forecasting, macro, risk, smart_money, technical
+from quantpulse.analysis import backtest, forecasting, macro, risk, scoring, smart_money, technical
 from quantpulse.analysis.investor_profiles import CATEGORIES
 from quantpulse.llm import chatbot
 from quantpulse.llm import narrative as llm_narrative
@@ -450,6 +450,56 @@ def rating_narrative(symbol: str, row: pd.Series) -> llm_narrative.RatingNarrati
         data_confidence=_none_if_nan(row["data_confidence"]),
         as_of=row["date"],
     )
+
+
+def render_why_this_rating(sub_scores: dict[str, float | None], row: pd.Series) -> None:
+    """Which categories moved this rating, and which worked against it (Section 10).
+
+    The radar shows seven numbers and leaves the reader to work out which of
+    them mattered. This says it, and it is an attribution rather than a guess:
+    the composite is a weighted mean, so it decomposes exactly, and the
+    contributions printed here sum to `composite - 50`.
+
+    The sentence is built by `scoring.describe_composite` rather than here, so
+    this page and the React one cannot word the same explanation differently.
+    """
+    explained = scoring.explain_composite(sub_scores, profile=row.get("profile"))
+    if explained is None:
+        return
+    rating = str(row["rating"])
+    if rating not in scoring.RATINGS:
+        return
+    # Only explain the number actually on screen. A stored composite that
+    # disagrees with its own sub-scores would otherwise get a confident sentence
+    # accounting for a different figure than the one printed above it.
+    stored = _none_if_nan(row["composite_score"])
+    if stored is not None and abs(stored - explained.composite) > 1e-6:
+        return
+
+    st.markdown(f"**Why this rating?** {scoring.describe_composite(explained, rating=rating)}")
+    with st.expander("Every category's contribution"):
+        st.caption(
+            "Weight × (sub-score − 50), in composite points. The weights are "
+            "renormalized over the categories that had data, so these add up to "
+            f"the composite of {explained.composite:.1f} minus 50."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Category": scoring.CATEGORY_WORDS.get(c.category, c.category),
+                        "Sub-score": c.sub_score,
+                        "Weight used": c.effective_weight,
+                        "Contribution": c.contribution,
+                    }
+                    for c in explained.contributions
+                ]
+            ).style.format(
+                {"Sub-score": "{:.1f}", "Weight used": "{:.0%}", "Contribution": "{:+.2f}"}
+            ),
+            hide_index=True,
+            width="stretch",
+        )
 
 
 def forecast_narrative(
@@ -868,6 +918,7 @@ def main() -> None:
             "Categories with no data are omitted rather than plotted at zero — "
             "a missing score is not a bad score."
         )
+        render_why_this_rating(sub_scores, row)
     with right:
         st.subheader(
             "Detected patterns",
