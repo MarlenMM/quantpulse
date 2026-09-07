@@ -9,6 +9,7 @@
  */
 
 import type {
+  ForwardTest,
   AbsoluteRatingResponse,
   InvestorProfile,
   BacktestRun,
@@ -117,6 +118,7 @@ export const api = {
   regime: (limit = 90) => request<RegimePoint[]>("/regime", { limit }),
   news: (limit = 8) => request<NewsItem[]>("/news", { limit }),
   backtest: (limit = 20) => request<BacktestRun[]>("/backtest", { limit }),
+  forwardTest: () => request<ForwardTest>("/forward-test"),
   sectorRotation: (lookbackDays = 21) =>
     request<SectorStrength[]>("/sectors/rotation", { lookback_days: lookbackDays }),
 };
