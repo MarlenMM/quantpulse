@@ -159,6 +159,13 @@ def backtest_history(limit: int = 20) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def forward_test_history() -> pd.DataFrame:
+    """The paper-traded forward test's record, oldest first (Sections 10, 32)."""
+    with get_session() as session:
+        return persistence.read_paper_trading_history(session)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
 def composite_history_days() -> int:
     """How many distinct dates of composite scores exist — the Track Record page.
 

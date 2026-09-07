@@ -55,6 +55,7 @@ FIXED_REQUESTS: tuple[tuple[str, dict[str, Any] | None], ...] = (
     ("/universe", None),
     ("/profiles", None),
     ("/screener/changes", {"limit": 8}),
+    ("/forward-test", None),
     ("/regime", {"limit": 90}),
     ("/news", {"limit": 6}),
     ("/backtest", {"limit": 20}),

@@ -21,6 +21,7 @@ from lib import charts, data
 from lib.brand import PAGE_ICON
 from lib.format import format_percent, format_ratio
 from lib.glossary import tip
+from quantpulse.execution import record
 from quantpulse.portfolio.optimization import kelly_position_fraction
 
 st.set_page_config(page_title="QuantPulse — Track Record", page_icon=PAGE_ICON, layout="wide")
@@ -327,6 +328,84 @@ def main() -> None:
         runs.to_csv(index=False).encode("utf-8"),
         file_name="quantpulse_backtest_history.csv",
         mime="text/csv",
+    )
+
+    render_forward_test()
+
+
+def render_forward_test() -> None:
+    """The other half of the answer to "you fitted that" (Sections 10, 32).
+
+    Everything above this line is a claim about a past that has already
+    happened, ranked by one of the composite's seven categories because the
+    other five have weeks of stored history rather than years. This section is
+    the same question asked forward: a paper account that trades the *published*
+    rating, whose every position was chosen before its outcome was known.
+
+    It is written to be honest while it is still short, because it will be short
+    for months. The day count is stated before any return, nothing is
+    annualised, and a record that has not started says so rather than showing a
+    flat line at zero.
+    """
+    st.divider()
+    st.header("Forward test — the same question, asked forward")
+
+    history = data.forward_test_history()
+    summary = record.summarise(history)
+
+    if summary.n_snapshots == 0:
+        st.info(
+            "**Not started.** The forward test paper-trades the published Buy/Sell "
+            "rating on Alpaca's paper endpoint (simulated money, real market data and "
+            "real fills), and records what the account was worth each day. It runs "
+            "only when `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY` are set — "
+            "unset, this section stays empty rather than showing a curve nobody "
+            "traded.\n\n"
+            "**Why it exists:** the backtest above ranks "
+            f"{_SIGNAL_LABELS.get('momentum_category', 'one category')}, not the full "
+            "rating, and it cannot rank the full rating until the stored composite "
+            f"history spans its window — **{data.composite_history_days()} day(s)** so "
+            "far. Forward testing accumulates that history instead of waiting for it."
+        )
+        return
+
+    age = st.columns(3)
+    age[0].metric("Trading days recorded", f"{summary.n_snapshots}")
+    age[1].metric("Rebalances", f"{summary.rebalances}")
+    age[2].metric("Signal", "the published rating")
+
+    if not summary.is_meaningful:
+        st.warning(
+            f"**{summary.n_snapshots} of {record.MIN_FORWARD_TEST_DAYS} trading days.** "
+            "The numbers below are what actually happened, but this is a start rather "
+            "than a track record — treat it as such until the record is longer. "
+            "Nothing here is annualised: a good first week, annualised, is a headline "
+            "that describes nothing."
+        )
+
+    left, right = st.columns(2)
+    left.metric(
+        "Strategy, total return",
+        format_percent(summary.total_return) if summary.total_return is not None else "—",
+        help="Total, not annualised, over the window named above.",
+    )
+    right.metric(
+        "S&P 500 over the same window",
+        (
+            format_percent(summary.benchmark_total_return)
+            if summary.benchmark_total_return is not None
+            else "—"
+        ),
+        help="Measured between the first and last days that have a stored index close.",
+    )
+
+    curve = history[["run_date", "equity"]].set_index("run_date")
+    st.line_chart(curve, height=220)
+    st.caption(
+        f"Paper account equity, {summary.first_date} to {summary.last_date}. "
+        "Equity is read before each run's orders, and orders placed after the close "
+        "fill at the next open — so a rebalance day's point is the book being left, "
+        "not the one being bought."
     )
 
 

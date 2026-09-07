@@ -361,6 +361,7 @@ pretending otherwise. Worth knowing which cost what:
    | `FRED_API_KEY` | Fed funds, CPI, unemployment, GDP, and the 10Y/2Y series — so the yield-curve spread drops out of the Market Regime Index |
    | `SEC_EDGAR_USER_AGENT` | Insider (Form 4) and 13F institutional ownership. This one is **not an API key** — SEC only asks for a contact string like `"Your Name your@email.com"`, so it costs nothing but a repo secret |
    | `ALERT_DISCORD_WEBHOOK_URL` | The nightly alert (below). Unset, the refresh logs one line and sends nothing |
+   | `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` | The forward test (below). Unset, nothing is traded and the Track Record page says so |
 
    Everything else — prices, options, news, fundamentals, analyst consensus,
    the index constituent list — comes from sources that need no credential at
@@ -402,6 +403,39 @@ is never written to a log, and revoking it is one click in the same menu.
 Discord rather than Gmail SMTP because of the size of the secret: a webhook is
 one opaque URL, where SMTP needs a host, a port, a from-address, a to-address
 and an app password that authenticates against a whole mailbox.
+
+### Forward test — trading the ratings, not re-reading them
+
+Every backtest invites "you fitted that", and the one on the Track Record page
+has a sharper version of the problem: it ranks the **momentum category**, not
+the published Buy/Sell rating, because five of the composite's seven categories
+hold weeks of stored history rather than years. The rating the whole app
+publishes has never been testable against the past.
+
+So the refresh paper-trades it forward. With Alpaca credentials set, the Monday
+run buys the top 20 names rated Buy or Strong Buy, equal-weight in whole shares,
+and every run records what the account was worth. Simulated money, real market
+data, real fills — and every position chosen before its outcome was known, which
+is the one thing a backtest can never claim.
+
+Two things worth knowing about how it is built:
+
+* **The endpoint is not configurable.** There is no setting, no environment
+  variable and no argument that can point it at `api.alpaca.markets`. The paper
+  host is a module constant, re-validated on every request, and the only other
+  host it will talk to is loopback. An env var carrying `api.` where
+  `paper-api.` was meant is one keystroke, raises nothing, and would trade real
+  money on a schedule with nobody watching.
+* **Nothing is annualised.** A record that starts one day long and grows by one
+  a day would spend months turning a good week into a headline CAGR — the exact
+  trap `backtest.MIN_TRACK_RECORD_PERIODS` exists for, where two monthly periods
+  spanning 35 days were once published as 26.6%. The page shows a total return
+  over a stated window, and says "8 of 20 trading days" until the record is long
+  enough to be called one.
+
+To set it up: sign up at [alpaca.markets](https://alpaca.markets), switch to
+Paper Trading, generate an API key, and put both halves in repo secrets. Unset,
+the step logs one line and the Track Record page explains what would fill it.
 
 ## Development
 
