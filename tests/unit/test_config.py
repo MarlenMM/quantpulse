@@ -174,3 +174,48 @@ class TestAlertingGate:
 
         source = Path(config_module.__file__).read_text()
         assert "from quantpulse" not in source and "import quantpulse" not in source
+
+
+class TestPaperTradingGate:
+    """Whether the forward test may place an order, and with whose account.
+
+    Two credentials, both repo secrets, both unset by default -- every fork of
+    this public repo runs the same refresh workflow, and a fork must neither
+    fail nor trade because of it. There is deliberately no base-URL setting
+    here: see `execution.alpaca` for why the endpoint is not configurable.
+    """
+
+    def test_it_is_off_until_both_credentials_are_present(self) -> None:
+        assert not Settings(_env_file=None).paper_trading_configured()
+        assert not Settings(_env_file=None, alpaca_api_key_id="PK123").paper_trading_configured()
+        assert not Settings(_env_file=None, alpaca_api_secret_key="shh").paper_trading_configured()
+
+    def test_both_credentials_turn_it_on(self) -> None:
+        assert Settings(
+            _env_file=None, alpaca_api_key_id="PK123", alpaca_api_secret_key="shh"
+        ).paper_trading_configured()
+
+    def test_blank_secrets_count_as_unset(self) -> None:
+        assert not Settings(
+            _env_file=None, alpaca_api_key_id="  ", alpaca_api_secret_key="shh"
+        ).paper_trading_configured()
+
+    def test_the_kill_switch_works_without_unsetting_the_credentials(self) -> None:
+        assert not Settings(
+            _env_file=None,
+            alpaca_api_key_id="PK123",
+            alpaca_api_secret_key="shh",
+            paper_trading_enabled=False,
+        ).paper_trading_configured()
+
+    def test_there_is_no_setting_that_can_point_it_at_live_trading(self) -> None:
+        """The guard in `execution.alpaca` is only as good as the absence of a
+        knob beside it. A `base_url`/`endpoint` setting added here later would
+        re-open exactly the hole that module is built to close.
+        """
+        fields = set(Settings.model_fields)
+        for name in fields:
+            assert "alpaca" not in name or not name.endswith(("url", "host", "endpoint")), (
+                f"{name} looks like a configurable Alpaca endpoint; the paper host must "
+                f"stay a module constant in execution.alpaca"
+            )
