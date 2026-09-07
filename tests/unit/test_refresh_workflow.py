@@ -145,3 +145,38 @@ class TestAlertDestination:
             text = path.read_text()
             assert "discord.com/api/webhooks/" not in text, f"{path.name} carries a webhook URL"
             assert "discordapp.com/api/webhooks/" not in text, f"{path.name} carries a webhook URL"
+
+
+class TestPaperTradingCredentials:
+    """Where the forward test's account comes from, and what must never be here.
+
+    The credentials have to reach the job or the step logs "not configured"
+    every night and the record never starts. The *endpoint* must not: the paper
+    host is a module constant precisely so no environment variable can redirect
+    this job at real money, and a well-meaning `ALPACA_BASE_URL` added here
+    later would quietly undo that.
+    """
+
+    def test_both_credentials_reach_the_refresh_step(self, workflow: dict) -> None:
+        env = _refresh_step_env(workflow)
+        assert "ALPACA_API_KEY_ID" in env
+        assert "ALPACA_API_SECRET_KEY" in env
+
+    def test_they_come_from_secrets_and_not_from_literals(self, workflow: dict) -> None:
+        env = _refresh_step_env(workflow)
+        assert env["ALPACA_API_KEY_ID"].strip() == "${{ secrets.ALPACA_API_KEY_ID }}"
+        assert env["ALPACA_API_SECRET_KEY"].strip() == "${{ secrets.ALPACA_API_SECRET_KEY }}"
+
+    def test_no_workflow_sets_an_alpaca_endpoint(self) -> None:
+        for path in WORKFLOW.parent.glob("*.yml"):
+            text = path.read_text()
+            for forbidden in ("ALPACA_BASE_URL", "ALPACA_ENDPOINT", "ALPACA_API_BASE"):
+                assert forbidden not in text, (
+                    f"{path.name} sets {forbidden}; the paper host must stay a module "
+                    f"constant in execution.alpaca so no environment can reach live trading"
+                )
+
+    def test_no_workflow_names_the_live_trading_host(self) -> None:
+        for path in WORKFLOW.parent.glob("*.yml"):
+            text = path.read_text().replace("paper-api.alpaca.markets", "")
+            assert "api.alpaca.markets" not in text, f"{path.name} names the live trading host"

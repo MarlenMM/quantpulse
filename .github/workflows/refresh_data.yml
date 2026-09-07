@@ -125,6 +125,15 @@ jobs:
           # and none of them have a webhook of their own. Unset means the alert
           # step logs one line and does nothing, which must not be an error.
           ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}
+          # Sections 10/32's forward test. Simulated money on Alpaca's paper
+          # endpoint -- there is deliberately no endpoint variable here, and
+          # adding one would defeat the point: `src/quantpulse/execution/
+          # alpaca.py` hard-codes the paper host precisely so no environment
+          # can redirect this job at real money. Unset (the default, and the
+          # state of every fork) means the step logs one line and places
+          # nothing.
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
 
       # ADR 4.4: "commit/store the results" so the live app never needs
       # rate-limited API keys of its own. `quantpulse_demo.db` (not

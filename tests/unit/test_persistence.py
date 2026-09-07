@@ -753,3 +753,72 @@ class TestAlertingReads:
 
         assert len(persistence.read_rating_changes(session, limit=None)) == 30
         assert len(persistence.read_rating_changes(session)) == 25
+
+
+class TestPaperTradingReads:
+    """The forward test's own record (Sections 10, 32)."""
+
+    def _row(self, day: date, equity: float, **overrides) -> dict:
+        return {
+            "run_date": day,
+            "equity": equity,
+            "cash": 1000.0,
+            "positions_held": 20,
+            "benchmark_close": 5000.0,
+            "rebalanced": False,
+            "orders_submitted": 0,
+            "orders_rejected": 0,
+            "turnover": None,
+            "signal_name": "composite_rating",
+            "profile": "balanced",
+            "target_positions": 20,
+            **overrides,
+        }
+
+    def test_a_snapshot_round_trips(self, session: Session) -> None:
+        persistence.upsert_paper_snapshot(session, self._row(date(2026, 9, 7), 100_500.0))
+        session.commit()
+        history = persistence.read_paper_trading_history(session)
+        assert list(history["equity"]) == [100_500.0]
+        assert list(history["signal_name"]) == ["composite_rating"]
+
+    def test_re_running_a_day_corrects_it_rather_than_appending(self, session: Session) -> None:
+        """One equity per trading day. An append-only writer here would leave two
+        contradictory values for the same date and no way to tell which the
+        account actually had."""
+        persistence.upsert_paper_snapshot(session, self._row(date(2026, 9, 7), 100_500.0))
+        session.commit()
+        persistence.upsert_paper_snapshot(
+            session, self._row(date(2026, 9, 7), 101_000.0, rebalanced=True)
+        )
+        session.commit()
+        history = persistence.read_paper_trading_history(session)
+        assert len(history) == 1
+        assert history.iloc[0]["equity"] == 101_000.0
+        assert bool(history.iloc[0]["rebalanced"]) is True
+
+    def test_history_is_oldest_first_so_it_plots_as_a_curve(self, session: Session) -> None:
+        """The equities deliberately *fall* as the dates rise.
+
+        An earlier version had them rising together, so ordering the query by
+        equity instead of by date produced the identical list and the test
+        proved nothing about the ordering it is named for. A losing week is
+        also the case where getting this wrong would matter most: sorted by
+        equity, a drawdown would plot as a rally.
+        """
+        for offset, equity in ((2, 300.0), (0, 100.0), (1, 200.0)):
+            persistence.upsert_paper_snapshot(
+                session, self._row(date(2026, 9, 7) - timedelta(days=offset), equity)
+            )
+        session.commit()
+        history = persistence.read_paper_trading_history(session)
+        assert list(history["run_date"]) == [
+            date(2026, 9, 5),
+            date(2026, 9, 6),
+            date(2026, 9, 7),
+        ]
+        assert list(history["equity"]) == [300.0, 200.0, 100.0]
+
+    def test_an_empty_record_is_an_empty_frame_not_an_error(self, session: Session) -> None:
+        """The normal state until someone sets the two Alpaca secrets."""
+        assert persistence.read_paper_trading_history(session).empty

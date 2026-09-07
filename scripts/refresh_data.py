@@ -48,6 +48,7 @@ from quantpulse.analysis import (
 )
 from quantpulse.analysis.investor_profiles import get_profile
 from quantpulse.config import get_settings
+from quantpulse.execution import alpaca, strategy
 from quantpulse.ingestion import (
     economic_calendar,
     edgar_13f_client,
@@ -1311,6 +1312,102 @@ def send_alerts(session: Session, today: date, *, after_pattern_id: int) -> int:
     return discord.send(str(settings.alert_discord_webhook_url), digest)
 
 
+#: What `paper_trading_snapshots.signal_name` records. The counterpart to
+#: `_BACKTEST_SIGNAL_NAME`, and the point of the whole exercise: the backtest
+#: can only rank one category, this ranks the rating the app actually publishes.
+_PAPER_SIGNAL_NAME = "composite_rating"
+_PAPER_PROFILE = "balanced"
+
+
+def run_paper_trading(session: Session, today: date, *, rebalance: bool) -> int:
+    """Snapshot the paper account, and on a weekly run rebalance it (Sections 10, 32).
+
+    Returns rows written (0 or 1), which is a real row count and so is safe to
+    add to the run's total.
+
+    **Snapshot daily, rebalance weekly.** They are separated because they cost
+    different things and answer different questions: reading the account is one
+    cheap call and gives the equity curve daily resolution, while trading is
+    what the plan says to do at a realistic cadence (Section 7.6 -- "weekly or
+    monthly, not daily", since a daily rebalance racks up turnover no real
+    investor would accept). `rebalanced` is stored per row so a reader can tell
+    a day the book merely drifted from a day it was acted on.
+
+    Order of operations matters. The snapshot is taken **before** any order is
+    placed, so a row always describes a state the account genuinely held --
+    orders submitted after the close fill at the next open, so an equity read
+    afterwards would still be pre-trade anyway, and reading it first means a
+    failed rebalance still leaves a truthful equity point rather than none.
+
+    Nothing here can reach real money: `execution.alpaca` has no configurable
+    endpoint. Nothing runs at all without both Alpaca credentials, which is the
+    default everywhere including every fork of this repository.
+    """
+    settings = get_settings()
+    if not settings.paper_trading_configured():
+        logger.info("Paper trading is not configured (no Alpaca credentials); skipping")
+        return 0
+
+    account = alpaca.get_account()
+    if account.status != "ACTIVE":
+        # A restricted or closed paper account still answers `/v2/account`, and
+        # its equity is still a number. Recording it as a track-record point
+        # would silently flat-line the curve at whatever it froze on.
+        logger.warning("Paper account status is %s, not ACTIVE; recording nothing", account.status)
+        return 0
+
+    positions = alpaca.list_positions()
+    submitted = rejected = 0
+    planned_turnover: float | None = None
+
+    if rebalance:
+        scores = persistence.read_screener_rows(session, profile=_PAPER_PROFILE)
+        wanted = settings.paper_trading_positions or strategy.DEFAULT_POSITIONS
+        if scores.empty:
+            logger.warning("No stored scores to rebalance against; snapshotting only")
+        else:
+            prices = persistence.read_latest_prices(session, list(scores["symbol"]))
+            scores = scores.assign(price=scores["symbol"].map(prices))
+            target = strategy.target_positions(scores, equity=account.equity, positions=wanted)
+            orders = strategy.orders_for(positions, target)
+            planned_turnover = strategy.turnover(positions, target)
+            for order in orders:
+                try:
+                    alpaca.submit_order(order.symbol, qty=order.qty, side=order.side)
+                except alpaca.AlpacaError:
+                    # One rejected order must not abandon the other nineteen --
+                    # a half-rebalanced book is worse than a fully rebalanced
+                    # one, and the count is stored so a run that mostly failed
+                    # is visible rather than looking like a quiet week.
+                    logger.exception(
+                        "Paper order rejected: %s %d %s", order.side, order.qty, order.symbol
+                    )
+                    rejected += 1
+                else:
+                    submitted += 1
+
+    benchmark = persistence.read_benchmark_closes(
+        session, symbol=risk.MARKET_INDEX_SYMBOL, start=today - timedelta(days=10), end=today
+    )
+    return persistence.upsert_paper_snapshot(
+        session,
+        {
+            "run_date": today,
+            "equity": account.equity,
+            "cash": account.cash,
+            "positions_held": len(positions),
+            "benchmark_close": float(benchmark.iloc[-1]) if not benchmark.empty else None,
+            "rebalanced": bool(rebalance),
+            "orders_submitted": submitted,
+            "orders_rejected": rejected,
+            "turnover": planned_turnover,
+            "signal_name": _PAPER_SIGNAL_NAME,
+            "profile": _PAPER_PROFILE,
+            "target_positions": settings.paper_trading_positions or strategy.DEFAULT_POSITIONS,
+        },
+    )
+
+
 def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> int:
     """Generate and persist each name's price forecasts, tagged with the model's track record.
 
@@ -2098,6 +2195,16 @@ def run(
         rows_updated += step(
             "composite_scores",
             lambda: _in_session(lambda s: refresh_composite_scores(s, universe_df, today)),
+        )
+
+        # The forward test, after the scores it trades on and before the weekly
+        # branch's slow half -- for the same reason the alert sits here. It
+        # rebalances on the weekly run and merely snapshots on the others, so
+        # the equity curve gets daily resolution at a weekly trading cadence
+        # (Section 7.6's "weekly or monthly, not daily").
+        rows_updated += step(
+            "paper_trading",
+            lambda: _in_session(lambda s: run_paper_trading(s, today, rebalance=is_weekly)),
         )
 
         # Section 10's alert, immediately after the scores it reports and before
