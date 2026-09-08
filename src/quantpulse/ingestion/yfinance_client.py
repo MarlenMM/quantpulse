@@ -99,6 +99,59 @@ def fetch_price_history(symbol: str, period: str = "5y") -> pd.DataFrame:
     )
 
 
+_DIVIDEND_COLUMNS = ("symbol", "ex_date", "amount")
+
+
+def fetch_dividends(symbol: str) -> pd.DataFrame:
+    """Cash dividends per share by ex-date, normalized to the `dividends` schema.
+
+    yfinance answers with a `Series` here rather than a frame, and answers with
+    an **empty** one for most of the index -- a name that has never paid a
+    dividend is the common case, not a failure, so that comes back as a clean
+    empty frame with the right columns.
+
+    The index is timezone-aware, and the zone is *dropped* rather than
+    converted. An ex-date is a fact about a trading day on an exchange, so the
+    wall-clock date in the exchange's own timezone is the answer; converting to
+    UTC first pushes any timestamp later than 19:00 New York onto the following
+    calendar day, and entitlement to a dividend is decided by exactly which date
+    this is. yfinance stamps these at midnight today, where the two agree --
+    which is precisely why it needs a test rather than a glance.
+
+    Guards against the same shape that once made `fetch_price_history` raise:
+    a throttled or 404 response arrives as an empty object carrying a plain
+    `Index`, which has no `tz_localize`.
+    """
+
+    def _fetch() -> pd.DataFrame:
+        _rate_limiter.wait()
+        with get_breaker(_SOURCE).guard():
+            raw = yf.Ticker(symbol).dividends
+        empty = pd.DataFrame({column: pd.Series(dtype="object") for column in _DIVIDEND_COLUMNS})
+        if raw is None or len(raw) == 0 or not isinstance(raw.index, pd.DatetimeIndex):
+            return empty
+        index = raw.index
+        if index.tz is not None:
+            index = index.tz_localize(None)
+        frame = pd.DataFrame(
+            {
+                "symbol": symbol,
+                "ex_date": index.normalize(),
+                "amount": pd.to_numeric(raw.to_numpy(), errors="coerce"),
+            }
+        )
+        # A zero or negative "dividend" is not one; it would render as a pay
+        # date that paid nothing.
+        return frame[frame["amount"] > 0].reset_index(drop=True)
+
+    return cached_dataframe(
+        f"dividends_{symbol}",
+        _fetch,
+        _cache_dir("dividends"),
+        ttl=timedelta(days=7),
+    )
+
+
 def fetch_fundamentals(symbol: str) -> dict[str, Any]:
     """Sector-agnostic fundamental ratios for `symbol`, normalized to `fundamentals_snapshot`.
 
