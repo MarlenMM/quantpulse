@@ -36,6 +36,7 @@ from quantpulse.storage.models import (
     RefreshLog,
     Ticker,
 )
+from quantpulse.utils.market_calendar import is_trading_day
 
 
 def _empty_df(columns: list[str]) -> pd.DataFrame:
@@ -821,17 +822,22 @@ def test_force_weekly_runs_the_weekly_branch_on_a_non_weekly_day(engine: Engine)
     sentiment come from, and it is the branch that has actually failed on a
     runner. Learning whether a fix worked should not take a week.
 
-    The weekly weekday is patched to whatever today is *not*, so this asserts
-    the same thing on every day of the week rather than passing six days in
-    seven for the wrong reason.
+    The clock is pinned to an ordinary Thursday rather than the weekday constant
+    being patched. The constant stopped deciding this when the weekly branch
+    moved to "the week's first *trading* day" (US market holidays cluster on
+    Mondays, so asking for Monday handed the branch a week off roughly one week
+    in ten) -- after which patching it changed nothing, and the test failed the
+    first time the real date happened to be a week's first trading day: Tuesday
+    2026-09-08, the day after Labor Day.
     """
-    today = datetime.now(refresh_data._MARKET_TZ).date()
-    not_today = (today.weekday() + 1) % 7
+    ordinary_thursday = datetime(2026, 9, 17, 22, 0)
+    assert ordinary_thursday.date().weekday() == 3
 
     with (
         patch("refresh_data.is_trading_day", return_value=True),
-        patch.object(refresh_data, "_WEEKLY_REFRESH_WEEKDAY", not_today),
+        patch("refresh_data.datetime", wraps=datetime) as clock,
     ):
+        clock.now.return_value = ordinary_thursday
         forced, _ = _run_recording_weekly_flag(engine, force_weekly=True)
         default, _ = _run_recording_weekly_flag(engine)
 
@@ -2462,3 +2468,97 @@ class TestPaperTrading:
         for _symbol, qty, side in placed:
             assert isinstance(qty, int) and qty > 0
             assert side in ("buy", "sell")
+
+
+class TestWeeklyBranchCadence:
+    """Which day carries the weekly branch, and why it is not simply "Monday".
+
+    US market holidays cluster on Mondays by construction -- MLK, Presidents'
+    Day, Memorial Day and Labor Day are each "the nth Monday of" a month -- so
+    asking `today.weekday() == 0` hands the whole weekly branch (fundamentals,
+    analyst consensus, 13F, forecasts, backtest, news and sentiment) a silent
+    week off roughly one week in ten.
+
+    That happened: the scheduled run for Monday 2026-09-07 logged
+    `skipped_non_trading_day` because it was Labor Day, and the sector-basket
+    work waiting for a weekly run since 2026-09-03 went untested for another
+    week while the newest stored news article stayed three weeks old. Four of
+    2026's fifty-two Mondays are closed.
+    """
+
+    def test_an_ordinary_monday_carries_it(self) -> None:
+        assert refresh_data.is_weekly_run(date(2026, 9, 14)) is True
+
+    def test_an_ordinary_tuesday_does_not(self) -> None:
+        assert refresh_data.is_weekly_run(date(2026, 9, 15)) is False
+
+    def test_the_tuesday_after_a_closed_monday_carries_it(self) -> None:
+        """The whole point: the weekly work lands one day late rather than not
+        at all."""
+        assert not is_trading_day(date(2026, 9, 7)), "2026-09-07 is Labor Day"
+        assert refresh_data.is_weekly_run(date(2026, 9, 8)) is True
+
+    def test_a_closed_monday_is_not_itself_the_weeks_first_trading_day(self) -> None:
+        assert refresh_data.is_weekly_run(date(2026, 9, 7)) is False
+
+    def test_every_closed_monday_in_2026_hands_off_to_its_tuesday(self) -> None:
+        """All four of them, not just the one that broke."""
+        closed_mondays = [
+            day
+            for day in (date(2026, 1, 1) + timedelta(days=n) for n in range(365))
+            if day.weekday() == 0 and not is_trading_day(day)
+        ]
+        assert len(closed_mondays) == 4, closed_mondays
+        for monday in closed_mondays:
+            assert refresh_data.is_weekly_run(monday) is False, monday
+            assert refresh_data.is_weekly_run(monday + timedelta(days=1)) is True, monday
+
+    def test_exactly_one_day_a_week_carries_it(self) -> None:
+        """Two weekly runs in a week would double the heaviest job in the
+        project; none is the outage this replaced."""
+        for week in range(52):
+            monday = date(2026, 1, 5) + timedelta(weeks=week)
+            carriers = [
+                monday + timedelta(days=n)
+                for n in range(7)
+                if refresh_data.is_weekly_run(monday + timedelta(days=n))
+            ]
+            assert len(carriers) == 1, (monday, carriers)
+
+    def test_a_fully_closed_week_carries_it_on_no_day(self) -> None:
+        """Not reachable from the NYSE calendar, but the arithmetic must not
+        invent a trading day if it ever were."""
+        with patch("refresh_data.is_trading_day", return_value=False):
+            assert refresh_data.is_weekly_run(date(2026, 9, 14)) is False
+
+    def test_the_run_itself_takes_the_weekly_branch_after_a_closed_monday(
+        self, engine: Engine
+    ) -> None:
+        """Asserted through `run()`, not through the helper.
+
+        The first version of these tests checked `is_weekly_run` alone, and
+        reverting `run()`'s call site to `today.weekday() == 0` changed nothing
+        any of them could see -- the same "assert the caller" mistake this
+        project has now made three times.
+        """
+        settings = TestPaperTrading._settings(alpaca_api_key_id=None, alpaca_api_secret_key=None)
+        labor_day_tuesday = date(2026, 9, 8)
+        with TestAlerting()._driven_run(engine, settings=settings, today=labor_day_tuesday) as (
+            _,
+            __,
+        ):
+            with patch("refresh_data.refresh_forecasts", return_value=0) as forecasts:
+                refresh_data.run(job_name="test_cadence")
+
+        forecasts.assert_called(), "the Tuesday after Labor Day must carry the weekly branch"
+
+    def test_the_run_skips_the_weekly_branch_on_an_ordinary_tuesday(self, engine: Engine) -> None:
+        settings = TestPaperTrading._settings(alpaca_api_key_id=None, alpaca_api_secret_key=None)
+        with TestAlerting()._driven_run(engine, settings=settings, today=date(2026, 9, 15)) as (
+            _,
+            __,
+        ):
+            with patch("refresh_data.refresh_forecasts", return_value=0) as forecasts:
+                refresh_data.run(job_name="test_cadence")
+
+        forecasts.assert_not_called()
