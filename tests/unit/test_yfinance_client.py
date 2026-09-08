@@ -322,3 +322,80 @@ def test_fetch_price_history_keeps_zero_volume_bars(tmp_path: Path) -> None:
         df = yfinance_client.fetch_price_history("QUIET", period="5d")
 
     assert len(df) == 1
+
+
+class TestFetchDividends:
+    """Cash dividends per share, by ex-date (Section 13's dividend tracking).
+
+    yfinance returns a `Series` here rather than a frame, indexed by a
+    timezone-aware `DatetimeIndex`, and returns an *empty* one for the many
+    names that have never paid — which is a normal answer, not a failure.
+    """
+
+    def _patched(self, dividends: pd.Series):
+        ticker = MagicMock()
+        ticker.dividends = dividends
+        return patch("quantpulse.ingestion.yfinance_client.yf.Ticker", return_value=ticker)
+
+    def test_it_normalizes_to_the_stored_row_shape(self, tmp_path) -> None:
+        series = pd.Series(
+            [0.24, 0.25],
+            index=pd.DatetimeIndex(["2026-02-06", "2026-05-08"], tz="America/New_York"),
+        )
+        with patch.object(yfinance_client, "_cache_dir", return_value=tmp_path):
+            with self._patched(series):
+                frame = yfinance_client.fetch_dividends("AAPL")
+
+        assert list(frame.columns) == ["symbol", "ex_date", "amount"]
+        assert list(frame["symbol"]) == ["AAPL", "AAPL"]
+        assert list(frame["amount"]) == [0.24, 0.25]
+
+    def test_the_zone_is_dropped_rather_than_converted(self, tmp_path) -> None:
+        """An ex-date is a fact about a trading day on an exchange, so the
+        wall-clock date in the exchange's timezone is the answer.
+
+        The timestamp here is deliberately late in the day. At midnight -- how
+        yfinance actually stamps these -- dropping the zone and converting to
+        UTC agree, so a midnight fixture passes with either and proves nothing.
+        Past 19:00 New York they diverge, and converting would push the ex-date
+        onto the following calendar day, paying the dividend to holders who
+        bought the morning after.
+        """
+        series = pd.Series(
+            [0.24],
+            index=pd.DatetimeIndex(["2026-02-06 20:30:00"], tz="America/New_York"),
+        )
+        with patch.object(yfinance_client, "_cache_dir", return_value=tmp_path):
+            with self._patched(series):
+                frame = yfinance_client.fetch_dividends("AAPL")
+        assert frame["ex_date"].iloc[0] == pd.Timestamp("2026-02-06")
+
+    def test_a_name_that_has_never_paid_is_an_empty_frame(self, tmp_path) -> None:
+        """Most of the index. An exception here would make "pays no dividend"
+        indistinguishable from "the fetch broke"."""
+        with patch.object(yfinance_client, "_cache_dir", return_value=tmp_path):
+            with self._patched(pd.Series(dtype=float)):
+                frame = yfinance_client.fetch_dividends("GOOGL")
+        assert frame.empty
+        assert list(frame.columns) == ["symbol", "ex_date", "amount"]
+
+    def test_a_non_datetime_index_is_treated_as_no_data(self, tmp_path) -> None:
+        """yfinance signals a throttled or 404 response with an empty frame
+        carrying a plain `Index` — the same shape that once made
+        `fetch_price_history` raise `AttributeError` on `tz_localize`."""
+        with patch.object(yfinance_client, "_cache_dir", return_value=tmp_path):
+            with self._patched(pd.Series([0.1], index=pd.Index(["nonsense"]))):
+                frame = yfinance_client.fetch_dividends("AAPL")
+        assert frame.empty
+
+    def test_non_positive_amounts_are_dropped(self, tmp_path) -> None:
+        """A zero or negative "dividend" is not one, and it would show up as a
+        pay date that paid nothing."""
+        series = pd.Series(
+            [0.24, 0.0, -0.1],
+            index=pd.DatetimeIndex(["2026-02-06", "2026-05-08", "2026-08-07"]),
+        )
+        with patch.object(yfinance_client, "_cache_dir", return_value=tmp_path):
+            with self._patched(series):
+                frame = yfinance_client.fetch_dividends("AAPL")
+        assert list(frame["amount"]) == [0.24]

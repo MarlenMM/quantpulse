@@ -2562,3 +2562,89 @@ class TestWeeklyBranchCadence:
                 refresh_data.run(job_name="test_cadence")
 
         forecasts.assert_not_called()
+
+
+class TestDividendRefresh:
+    """The dividend step, asserted through `run()` as well as directly."""
+
+    def _universe(self) -> pd.DataFrame:
+        return pd.DataFrame([{"symbol": "AAA"}, {"symbol": "BBB"}])
+
+    def _history(self, symbol: str, rows: list[tuple[str, float]]) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"symbol": symbol, "ex_date": pd.Timestamp(day), "amount": amount}
+                for day, amount in rows
+            ]
+        )
+
+    def test_it_stores_each_name_s_history(self, session: Session) -> None:
+        from quantpulse.storage.models import Dividend
+
+        session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+        session.add(Ticker(symbol="BBB", name="B", asset_type="equity", is_active=True))
+        session.flush()
+        with patch(
+            "refresh_data.yfinance_client.fetch_dividends",
+            side_effect=lambda s: self._history(s, [("2026-02-06", 0.24)]),
+        ):
+            written = refresh_data.refresh_dividends(session, self._universe())
+        session.flush()
+
+        assert written == 2
+        stored = session.scalars(select(Dividend)).all()
+        assert {row.symbol for row in stored} == {"AAA", "BBB"}
+        assert stored[0].ex_date == date(2026, 2, 6)
+
+    def test_a_second_run_over_the_same_history_stores_nothing(self, session: Session) -> None:
+        """The source returns a name's whole history on every call, so this is
+        what almost every week looks like."""
+        session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+        session.flush()
+        universe = pd.DataFrame([{"symbol": "AAA"}])
+        with patch(
+            "refresh_data.yfinance_client.fetch_dividends",
+            side_effect=lambda s: self._history(s, [("2026-02-06", 0.24)]),
+        ):
+            assert refresh_data.refresh_dividends(session, universe) == 1
+            session.flush()
+            assert refresh_data.refresh_dividends(session, universe) == 0
+
+    def test_a_name_that_pays_nothing_is_not_an_error(self, session: Session) -> None:
+        """Most of the index. This has to be a quiet zero, not a traceback."""
+        session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+        session.flush()
+        with patch("refresh_data.yfinance_client.fetch_dividends", return_value=pd.DataFrame()):
+            assert refresh_data.refresh_dividends(session, pd.DataFrame([{"symbol": "AAA"}])) == 0
+
+    def test_one_failing_symbol_does_not_cost_the_others(self, session: Session) -> None:
+        session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+        session.add(Ticker(symbol="BBB", name="B", asset_type="equity", is_active=True))
+        session.flush()
+
+        def flaky(symbol: str) -> pd.DataFrame:
+            if symbol == "AAA":
+                raise RuntimeError("throttled")
+            return self._history(symbol, [("2026-02-06", 0.24)])
+
+        with patch("refresh_data.yfinance_client.fetch_dividends", side_effect=flaky):
+            assert refresh_data.refresh_dividends(session, self._universe()) == 1
+
+    def _run_on(self, engine: Engine, day: date):
+        settings = TestPaperTrading._settings(alpaca_api_key_id=None, alpaca_api_secret_key=None)
+        with TestAlerting()._driven_run(engine, settings=settings, today=day) as (_, __):
+            with patch("refresh_data.refresh_dividends", return_value=0) as called:
+                refresh_data.run(job_name="test_divs")
+        return called
+
+    def test_the_weekly_run_calls_it(self, engine: Engine) -> None:
+        """Weekly, because the source returns a full history every time and the
+        storage is append-only -- a daily run would re-fetch 503 complete
+        histories to insert nothing."""
+        self._run_on(engine, date(2026, 9, 14)).assert_called()
+
+    def test_a_daily_run_does_not(self, engine: Engine) -> None:
+        """A separate engine from the weekly test on purpose: two `run()` calls
+        against one database collide, because the first writes the very scoring
+        date the second seeds as its "previous" snapshot."""
+        self._run_on(engine, date(2026, 9, 15)).assert_not_called()

@@ -1351,6 +1351,44 @@ _PAPER_SIGNAL_NAME = "composite_rating"
 _PAPER_PROFILE = "balanced"
 
 
+def refresh_dividends(session: Session, universe: pd.DataFrame) -> int:
+    """Fetch and store each active name's cash-dividend history (Sections 9, 13).
+
+    Weekly, not daily. A dividend is declared quarterly at most, the source
+    returns a name's entire history on every call regardless, and the storage is
+    append-only on `(symbol, ex_date)` -- so a daily run would re-fetch 503
+    complete histories to insert nothing. On the weekly cadence the first run
+    stores everything and later ones store the handful newly declared.
+
+    A symbol that has never paid a dividend is the common case, not a failure,
+    and comes back as an empty frame. One symbol's fetch failing costs that
+    symbol rather than the sweep.
+    """
+    records: list[dict[str, Any]] = []
+    for symbol in universe["symbol"]:
+        try:
+            frame = yfinance_client.fetch_dividends(str(symbol))
+        except Exception:
+            logger.exception("Dividend fetch failed for %s; skipping it", symbol)
+            continue
+        # No `if frame.empty` skip: iterating an empty frame yields nothing, so
+        # the guard changed nothing any test could see. A branch no test can
+        # distinguish reads as a case someone considered.
+        records.extend(
+            {
+                "symbol": str(row.symbol),
+                "date": pd.Timestamp(row.ex_date).date(),
+                "amount": float(row.amount),
+            }
+            for row in frame.itertuples(index=False)
+        )
+    # `_append_only` wants the model's own column names.
+    return persistence.upsert_dividends(
+        session,
+        [{"symbol": r["symbol"], "ex_date": r["date"], "amount": r["amount"]} for r in records],
+    )
+
+
 def run_paper_trading(session: Session, today: date, *, rebalance: bool) -> int:
     """Snapshot the paper account, and on a weekly run rebalance it (Sections 10, 32).
 
@@ -2192,6 +2230,10 @@ def run(
             rows_updated += step("macro_indicators", lambda: _in_session(refresh_macro_indicators))
             rows_updated += step(
                 "static_config", lambda: _in_session(lambda s: refresh_static_config(s, today))
+            )
+            rows_updated += step(
+                "dividends",
+                lambda: _in_session(lambda s: refresh_dividends(s, universe_df)),
             )
             rows_updated += step(
                 "institutional_ownership",

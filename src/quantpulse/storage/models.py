@@ -581,6 +581,29 @@ class BacktestResult(Base):
     assumed_txn_cost: Mapped[float] = mapped_column(Float)
 
 
+class Dividend(Base):
+    """One cash dividend per share, by ex-date (Sections 9, 13).
+
+    Append-only and keyed on `(symbol, ex_date)`: a dividend already declared
+    for a date does not change, and re-fetching a name's history every week must
+    recognise the ones already stored rather than duplicating them.
+
+    `ex_date` rather than the pay date, because that is the date entitlement
+    turns on -- whoever holds the shares at the close before the ex-date is paid,
+    and `portfolio.performance.dividend_income` decides on exactly this column.
+    Storing the pay date instead would credit the income to a holder who had
+    already sold.
+
+    Amounts are per share in the listing currency, as the source reports them.
+    """
+
+    __tablename__ = "dividends"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    ex_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    amount: Mapped[float] = mapped_column(Float)
+
+
 class PaperTradingSnapshot(Base):
     """One day of the forward test's record (Sections 10, 32).
 
