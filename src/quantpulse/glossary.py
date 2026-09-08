@@ -198,6 +198,22 @@ TERMS: dict[str, tuple[str, str]] = {
         "have sat through if you had bought at the worst moment and held. Shown as a "
         "negative number.",
     ),
+    "Time-weighted return": (
+        "Portfolio",
+        "How your holdings performed, with the effect of paying money in or taking it "
+        "out removed. It matters because the obvious alternative is misleading: buying "
+        "£10,000 of stock raises your portfolio's value by £10,000 and has earned you "
+        "nothing, so comparing raw value against an index would score a deposit as a "
+        "triumph. Chaining each period's return with that period's cash flow taken out "
+        "leaves only what the holdings did, which is the part worth comparing.",
+    ),
+    "Ex-dividend date": (
+        "Portfolio",
+        "The date that decides who gets a dividend: whoever owns the shares before it "
+        "is paid, and a buyer from that day on is not. It is why this page counts your "
+        "dividend income on the shares you held on each ex-date rather than the shares "
+        "you hold now.",
+    ),
     "Value at Risk": (
         "Risk",
         "VaR: a loss level that only the worst few percent of days exceed. 'Daily VaR "
