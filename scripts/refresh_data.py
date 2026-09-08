@@ -84,7 +84,7 @@ from quantpulse.storage.models import (
     Ticker,
 )
 from quantpulse.utils.log import configure_logging
-from quantpulse.utils.market_calendar import is_trading_day
+from quantpulse.utils.market_calendar import is_trading_day, trading_days_between
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,38 @@ _MAX_WORKERS = 8
 # Fundamentals/analyst consensus/macro don't change daily (Section 6.3) --
 # refresh them once a week rather than on every nightly run.
 _WEEKLY_REFRESH_WEEKDAY = 0  # Monday
+
+
+def is_weekly_run(today: date) -> bool:
+    """Whether `today` carries the weekly branch: the week's **first trading day**.
+
+    Not "today is Monday", which is what this used to ask, and the difference is
+    a silent outage roughly one week in ten. US market holidays cluster on
+    Mondays by design -- MLK, Presidents' Day, Memorial Day and Labor Day are
+    all "the nth Monday of" a month -- so in 2026 four of the fifty-two Mondays
+    are closed. On each of them `run()` correctly declined to do anything at
+    all, and the entire weekly branch (fundamentals, analyst consensus, 13F,
+    forecasts, backtest, news and sentiment) simply never happened that week,
+    behind a green tick and one `skipped_non_trading_day` line.
+
+    That is not hypothetical: Monday 2026-09-07 was Labor Day, the scheduled run
+    no-opped, and the sector-basket fix that had been waiting for a weekly run
+    since 2026-09-03 went untested for another week -- while the newest stored
+    news article stayed three weeks old.
+
+    So the question is asked of the calendar instead. Tuesday is the week's
+    first trading day when Monday is a holiday, and the weekly work lands one
+    day late rather than not at all.
+    """
+    # A closed day is not the week's first *trading* day, however early in the
+    # week it falls. `run()` already declines to do anything on one, so this
+    # only matters for saying the true thing when asked directly.
+    if not is_trading_day(today):
+        return False
+    monday = today - timedelta(days=today.weekday())
+    earlier = [day for day in trading_days_between(monday, today) if day < today]
+    return not earlier
+
 
 _MACRO_SERIES_FETCHERS = (
     fred_client.fetch_fed_funds_rate,
@@ -2081,7 +2113,7 @@ def run(
         name_by_symbol = {symbol: name for symbol, name in active_tickers}
         sector_by_symbol = dict(zip(universe_df["symbol"], universe_df["sector"], strict=True))
 
-        is_weekly = force_weekly or today.weekday() == _WEEKLY_REFRESH_WEEKDAY
+        is_weekly = force_weekly or is_weekly_run(today)
 
         results: list[TickerFetchResult] = []
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
