@@ -73,18 +73,26 @@ def main() -> int:
         from quantpulse.portfolio import holdings as holdings_lib
         from quantpulse.portfolio.transactions import Transaction
 
-        app.session_state["quantpulse_portfolio"] = holdings_lib.PortfolioState(
-            transactions=[
-                Transaction(
-                    symbol=holding,
-                    action="buy",
-                    shares=100.0,
-                    price=42.0,
-                    date=date(2026, 8, 1),
-                )
-            ],
-            cash=500.0,
-        )
+        # `example` loads the demo portfolio: five long-held, well-covered names
+        # with years of stored prices. That is what drives the Portfolio page's
+        # history panels down their real path -- a single unscored ticker has no
+        # price history, so the charts short-circuit to their empty state and
+        # the render proves nothing about them.
+        if holding == "example":
+            app.session_state["quantpulse_portfolio"] = holdings_lib.example_state()
+        else:
+            app.session_state["quantpulse_portfolio"] = holdings_lib.PortfolioState(
+                transactions=[
+                    Transaction(
+                        symbol=holding,
+                        action="buy",
+                        shares=100.0,
+                        price=42.0,
+                        date=date(2026, 8, 1),
+                    )
+                ],
+                cash=500.0,
+            )
     app.run()
 
     if app.exception:
@@ -114,6 +122,12 @@ def main() -> int:
         return 1
 
     print(f"OK: {len(rendered)} chars, {len(app.metric)} metrics, {len(app.dataframe)} tables")
+    # The rendered text itself, so a parent can assert on *what* a page said
+    # rather than only that it said enough. Without this the harness can prove a
+    # page did not crash and nothing else -- and a section that silently returns
+    # early crashes nothing.
+    print("--- RENDERED ---")
+    print(rendered)
     return 0
 
 

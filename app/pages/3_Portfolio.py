@@ -41,7 +41,7 @@ from lib.glossary import tip
 from lib.search import format_choice, search_symbols
 from quantpulse.analysis import clustering, risk
 from quantpulse.portfolio import holdings as holdings_lib
-from quantpulse.portfolio import optimization
+from quantpulse.portfolio import optimization, performance
 from quantpulse.portfolio import recommendations as recs
 from quantpulse.portfolio.rebalancing import (
     DEFAULT_TRANSACTION_COST,
@@ -741,6 +741,105 @@ def render_recommendations(frame: pd.DataFrame, cash: float, plan: RebalancePlan
         st.caption(pointer)
 
 
+#: How far back the portfolio history looks. Two years covers the example
+#: portfolio's oldest lot and keeps the panel read to a few hundred rows per
+#: holding; the curve is clipped to the first day the portfolio held anything
+#: anyway, so a longer window buys nothing but a flat line on the left.
+_HISTORY_LOOKBACK_DAYS = 730
+
+
+def render_history(state: holdings_lib.PortfolioState) -> None:
+    """What the portfolio has been worth, how it has done, and what it paid you.
+
+    Everything else on this page is as of now. This is the time axis, built from
+    the transaction ledger.
+
+    **The comparison against the index is a time-weighted return, not a value
+    ratio**, and the caption says so. Putting portfolio value beside an index
+    level is the obvious thing and it is wrong: buying £10,000 of stock raises
+    the value by £10,000 and has earned nothing. `performance` removes each
+    period's cash flow before chaining, so what is left is what the holdings did.
+
+    Cash is excluded throughout, because `PortfolioState` stores one current
+    balance rather than a history of deposits -- there is no honest way to say
+    what was uninvested on a past date, so the page measures the invested
+    portfolio and says which it means.
+    """
+    st.subheader("History", help=tip("Time-weighted return"))
+
+    symbols = tuple(state.symbols())
+    end = date.today()
+    start = end - timedelta(days=_HISTORY_LOOKBACK_DAYS)
+    prices = data.adj_close_panel(symbols, start, end)
+    if prices.empty:
+        st.info(
+            "No stored price history for these holdings yet, so there is nothing to "
+            "chart. The nightly refresh fills this in."
+        )
+        return
+
+    comparison = performance.compare_to_benchmark(
+        state.transactions, prices, data.benchmark_closes(_HISTORY_LOOKBACK_DAYS)
+    )
+    value = performance.value_series(state.transactions, prices)
+    # Clip to the first day anything was actually held: before that the curve is
+    # a flat line at zero that reads as a portfolio that was worth nothing.
+    invested = value[value > 0]
+    if invested.empty:
+        st.info("These holdings were bought after the end of the stored price history.")
+        return
+    first = invested.index[0]
+
+    left, right = st.columns(2)
+    with left:
+        st.caption("**What it has been worth** — invested value, cash excluded.")
+        st.line_chart(value.loc[first:], height=220)
+    with right:
+        curve = comparison.loc[first:]
+        if "benchmark" in curve.columns:
+            st.caption(
+                "**You versus the S&P 500** — time-weighted, so a deposit is not a "
+                "gain. Both rebased to 1.0 on the first day you held anything."
+            )
+            # Rebase again from the clipped start, or the portfolio line begins
+            # wherever it happened to be rather than beside the benchmark.
+            st.line_chart(curve / curve.iloc[0], height=220)
+        else:
+            st.caption(
+                "**Your time-weighted return** — a deposit is not a gain. No stored "
+                "index history to compare against, so the benchmark line is absent "
+                "rather than drawn flat."
+            )
+            st.line_chart(curve / curve.iloc[0], height=220)
+
+    dividends = data.dividend_history(symbols)
+    paid = performance.dividend_income(state.transactions, dividends)
+    if paid.empty:
+        st.caption(
+            "**Dividends** — nothing recorded for these holdings. Either they do not "
+            "pay one, or the weekly refresh has not yet stored their history."
+        )
+        return
+
+    total = float(paid["income"].sum())
+    by_symbol = (
+        paid.groupby("symbol", as_index=False)["income"]
+        .sum()
+        .sort_values("income", ascending=False)
+    )
+    st.caption(
+        f"**Dividends** — {format_money(total)} received across "
+        f"{len(paid)} payment(s), counted on the shares held on each ex-date."
+    )
+    st.dataframe(
+        by_symbol.rename(columns={"symbol": "Symbol", "income": "Income"}).style.format(
+            {"Income": "${:,.2f}"}
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+
+
 def render_watchlist(store: holdings_lib.PortfolioStore) -> None:
     st.subheader("Watchlist")
     st.caption("Tracked but not owned — same analysis, no shares or cost basis.")
@@ -822,6 +921,8 @@ def main() -> None:
     plan = render_target_allocation(frame, state.cash, panel) if not panel.empty else None
     st.divider()
     render_recommendations(frame, state.cash, plan)
+    st.divider()
+    render_history(state)
     st.divider()
     render_watchlist(store)
 

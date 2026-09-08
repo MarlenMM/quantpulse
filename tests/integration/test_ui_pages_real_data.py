@@ -133,3 +133,30 @@ def test_portfolio_renders_holding_only_a_newly_added_ticker(thin_database: Path
         "Portfolio failed while holding a newly-added, unscored, 8-bar ticker\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr[-2000:]}"
     )
+
+
+def test_portfolio_history_renders_against_the_real_database(real_database: Path) -> None:
+    """The Portfolio page's time axis, holding the example portfolio.
+
+    The default render of this page holds nothing, so `render_history` returns
+    before it draws anything -- the seven-page sweep above proves the section
+    does not crash a page that never reaches it. This one holds five long-held,
+    well-covered names against the committed database, which is the only way the
+    value curve, the time-weighted benchmark comparison and the dividend total
+    are actually exercised.
+    """
+    portfolio = next(page for page in PAGES if page.stem == "3_Portfolio")
+    result = _render(portfolio, real_database, "example")
+
+    assert result.returncode == 0, (
+        f"the Portfolio page failed while rendering its history panels\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr[-2000:]}"
+    )
+    # The section has to have been reached, not merely not-crashed: the page
+    # renders happily without it.
+    assert "History" in result.stdout, result.stdout[-1500:]
+    assert "time-weighted" in result.stdout.lower(), (
+        "the benchmark comparison must be labelled time-weighted -- a portfolio "
+        "curve beside an index without that label is the value-ratio mistake\n"
+        f"{result.stdout[-1500:]}"
+    )

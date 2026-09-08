@@ -280,6 +280,13 @@ def adj_close_panel(symbols: tuple[str, ...], start: date, end: date) -> pd.Data
         )
 
 
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def dividend_history(symbols: tuple[str, ...]) -> pd.DataFrame:
+    """Declared cash dividends for `symbols`, oldest first (Sections 9, 13)."""
+    with get_session() as session:
+        return persistence.read_dividends(session, list(symbols))
+
+
 def has_any_data() -> bool:
     """Whether the pipeline has ever produced scores -- drives the empty-state banner."""
     freshness = data_freshness()

@@ -437,6 +437,29 @@ To set it up: sign up at [alpaca.markets](https://alpaca.markets), switch to
 Paper Trading, generate an API key, and put both halves in repo secrets. Unset,
 the step logs one line and the Track Record page explains what would fill it.
 
+### Portfolio history — value, benchmark, dividends
+
+The Portfolio Manager knows tax lots, three optimisers, correlation clusters,
+VaR and sector gaps, and until now knew all of it only as of *now*. A History
+section adds the time axis, built entirely from the transaction ledger:
+what the holdings have been worth, how they have done against the S&P 500, and
+what they have paid in dividends.
+
+The benchmark comparison is a **time-weighted return**, which is the whole
+point rather than a detail. Laying portfolio value beside an index level is the
+obvious approach and it is wrong: buying £10,000 of stock raises the value by
+£10,000 and has earned nothing. On the example portfolio, adding one purchase
+mid-window makes a naive value ratio report **+171.9%** where the time-weighted
+return is **+33.5%** — and flips the verdict from "beat the index" to "lagged
+it". Chaining each period's return with that period's cash flow removed leaves
+only what the holdings did.
+
+Dividends are counted on the shares held on each **ex-date**, not the shares
+held now — buying the day after an ex-date earns nothing from it. Cash is
+excluded throughout, and the page says so: `PortfolioState` stores one current
+balance rather than a history of deposits, so there is no honest way to say what
+was uninvested on a past date.
+
 ## Development
 
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`
