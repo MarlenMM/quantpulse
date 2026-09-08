@@ -822,3 +822,48 @@ class TestPaperTradingReads:
     def test_an_empty_record_is_an_empty_frame_not_an_error(self, session: Session) -> None:
         """The normal state until someone sets the two Alpaca secrets."""
         assert persistence.read_paper_trading_history(session).empty
+
+
+class TestDividendReads:
+    """Cash dividends by ex-date (Sections 9, 13)."""
+
+    def test_dividends_round_trip_oldest_first(self, session: Session) -> None:
+        persistence.upsert_dividends(
+            session,
+            [
+                {"symbol": "AAPL", "ex_date": date(2026, 5, 8), "amount": 0.25},
+                {"symbol": "AAPL", "ex_date": date(2026, 2, 6), "amount": 0.24},
+            ],
+        )
+        session.commit()
+        frame = persistence.read_dividends(session, ["AAPL"])
+        assert list(frame["ex_date"]) == [date(2026, 2, 6), date(2026, 5, 8)]
+        assert list(frame["amount"]) == [0.24, 0.25]
+
+    def test_refetching_the_same_history_inserts_nothing(self, session: Session) -> None:
+        """The source returns a name's whole history every time, so almost every
+        row offered on any given week is already stored. Counting them as new
+        would report hundreds of writes for a run that stored none."""
+        rows = [{"symbol": "AAPL", "ex_date": date(2026, 2, 6), "amount": 0.24}]
+        assert persistence.upsert_dividends(session, rows) == 1
+        session.commit()
+        assert persistence.upsert_dividends(session, rows) == 0
+
+    def test_reading_no_symbols_is_an_empty_frame_with_the_right_columns(
+        self, session: Session
+    ) -> None:
+        frame = persistence.read_dividends(session, [])
+        assert frame.empty
+        assert list(frame.columns) == ["symbol", "ex_date", "amount"]
+
+    def test_only_the_requested_symbols_come_back(self, session: Session) -> None:
+        session.add(Ticker(symbol="MSFT", name="Microsoft", asset_type="equity", is_active=True))
+        persistence.upsert_dividends(
+            session,
+            [
+                {"symbol": "AAPL", "ex_date": date(2026, 2, 6), "amount": 0.24},
+                {"symbol": "MSFT", "ex_date": date(2026, 2, 6), "amount": 0.75},
+            ],
+        )
+        session.commit()
+        assert list(persistence.read_dividends(session, ["AAPL"])["symbol"]) == ["AAPL"]

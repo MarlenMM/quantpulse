@@ -35,6 +35,7 @@ from quantpulse.storage.models import (
     AnalystConsensus,
     BacktestResult,
     CompositeScore,
+    Dividend,
     EconomicCalendarEvent,
     Forecast,
     FundamentalsSnapshot,
@@ -1436,3 +1437,29 @@ def read_paper_trading_history(session: Session) -> pd.DataFrame:
             "target_positions",
         ],
     )
+
+
+def upsert_dividends(session: Session, records: Sequence[dict[str, Any]]) -> int:
+    """Store declared dividends, skipping ones already recorded (Sections 9, 13).
+
+    Append-only on `(symbol, ex_date)`. The refresh refetches each name's whole
+    dividend history weekly -- the source returns all of it or none -- so almost
+    every row offered on any given week is already stored, and the count
+    returned is the number actually new.
+    """
+    if not records:
+        return 0
+    return _append_only(session, Dividend, list(records))
+
+
+def read_dividends(session: Session, symbols: Sequence[str]) -> pd.DataFrame:
+    """Dividend history for `symbols`, oldest first, in the shape
+    `portfolio.performance.dividend_income` expects."""
+    if not symbols:
+        return pd.DataFrame(columns=["symbol", "ex_date", "amount"])
+    stmt = (
+        select(Dividend.symbol, Dividend.ex_date, Dividend.amount)
+        .where(Dividend.symbol.in_(list(symbols)))
+        .order_by(Dividend.ex_date, Dividend.symbol)
+    )
+    return pd.DataFrame(session.execute(stmt).all(), columns=["symbol", "ex_date", "amount"])
