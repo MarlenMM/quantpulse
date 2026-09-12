@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -79,6 +80,7 @@ from quantpulse.storage.models import (
     FundamentalsSnapshot,
     IndexMembershipHistory,
     MacroIndicator,
+    NewsEvent,
     PriceHistory,
     RefreshLog,
     Ticker,
@@ -247,7 +249,12 @@ _STEP_TIMEOUT_SECONDS: dict[str, int] = {
     # The model-bound steps. Generous enough for a slow runner, far short of
     # the job limit.
     "tier1_news": 90 * 60,
-    "tier2_news": 30 * 60,
+    # Raised from 30 min after the first weekly run carrying 17 sector baskets
+    # exceeded it. The step runs last, after everything a visitor looks at, and
+    # the weekly job measured 3h34m against GitHub's 6h limit -- so a longer
+    # tail here is affordable, and with the deadline above a slow week now
+    # degrades to partial coverage instead of none.
+    "tier2_news": 50 * 60,
     # Measured at ~42 min for 503 names on real history; the ceiling is a
     # backstop against a pathological series, not a target.
     "forecasts": 120 * 60,
@@ -1929,7 +1936,45 @@ def process_tier1_news(
     return sentiment_records, news_records
 
 
-def refresh_tier2_news(session: Session, today: date) -> int:
+def _tier2_baskets_by_staleness(
+    session: Session, universe: pd.DataFrame
+) -> list["thematic_mapping.ThematicBasket"]:
+    """Every Tier-2 basket, least-recently-covered first.
+
+    Ordering matters only because the sweep can now stop on a deadline. With a
+    fixed order a short week would fetch the same leading baskets every time and
+    the tail would never be covered at all -- which is the outage the deadline
+    fixes, wearing a different shape. Sorting by each basket's newest stored
+    article puts the ones that have gone longest without news at the front, so
+    coverage rotates on its own.
+
+    A basket that has never been seen sorts first, which is exactly right the
+    week a new sector basket is added.
+    """
+    baskets = [
+        *thematic_mapping.THEMATIC_BASKETS,
+        *thematic_mapping.sector_baskets(universe),
+    ]
+    newest: dict[str | None, datetime | None] = {
+        theme: seen
+        for theme, seen in session.execute(
+            select(NewsEvent.matched_theme, sa_func.max(NewsEvent.published_at))
+            .where(NewsEvent.tier == 2)
+            .group_by(NewsEvent.matched_theme)
+        ).all()
+    }
+
+    def _key(basket: "thematic_mapping.ThematicBasket") -> tuple[int, datetime]:
+        # Never-seen baskets first (exactly right the week a sector basket is
+        # added), then oldest-news first. `datetime.min` stands in for "never"
+        # so the tuple stays comparable.
+        seen = newest.get(basket.name)
+        return (0, datetime.min) if seen is None else (1, seen)
+
+    return sorted(baskets, key=_key)
+
+
+def refresh_tier2_news(session: Session, today: date, *, deadline: float | None = None) -> int:
     """Ingest Tier-2 industry/thematic news from GDELT into `news_events` (Section 7.3).
 
     One GDELT query per basket -- curated themes **and one per GICS sector** --
@@ -1955,17 +2000,45 @@ def refresh_tier2_news(session: Session, today: date) -> int:
     `_MAX_CLASSIFIED_TIER2_PER_BASKET` of each basket go through the classifier;
     the rest store `event_type=None`, which both front ends already render as
     "unclassified". The Dashboard's eight are drawn from the newest of all, so
-    they fall inside that head by construction. Net effect, at measured rates:
-    ~1,900 articles across 6 baskets costing ~6.7 min becomes ~6,000 across 17
-    costing ~4.1 min -- three times the news and a fifth of the cost per article,
-    which is what makes sector coverage affordable rather than a budget fight.
+    they fall inside that head by construction.
+
+    **That inference budget was right and was not the constraint.** The first
+    weekly run actually carrying 17 baskets -- 2026-09-08 -- blew the step's
+    1800s ceiling and was killed, because the estimate above counted model time
+    and not the network: seventeen serial queries against a rate-limited free
+    API is what spends the half hour, not FinBERT.
+
+    **And the timeout cost everything rather than the tail.** Articles were
+    accumulated into one list and persisted after the loop, so `StepTimeout`
+    discarded the lot: thirty minutes of fetching and scoring, zero rows stored,
+    and `industry_macro` coverage fell from 19/503 to 0/503 -- the composite
+    reads the latest *stored* Tier-2 sentiment, and suddenly there was none.
+
+    So the sweep takes a `deadline` and stops cleanly at it, keeping what it
+    has, exactly as `tier1_news` already did. A slow week now costs the baskets
+    it did not reach instead of the ones it did.
+
+    **Baskets are ordered least-recently-covered first**, so a run that stops
+    early does not stop on the same baskets every week. With a fixed order the
+    tail would never be fetched at all, which is the outage this fixes wearing
+    a different shape.
     """
     records: list[dict[str, Any]] = []
     universe = _active_universe(session)
-    baskets = (*thematic_mapping.THEMATIC_BASKETS, *thematic_mapping.sector_baskets(universe))
+    baskets = _tier2_baskets_by_staleness(session, universe)
+    reached = 0
     for basket in baskets:
         if not basket.keywords:
             continue
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning(
+                "Tier-2 news stopped on its deadline after %d of %d baskets; storing what "
+                "it has rather than losing the run's work",
+                reached,
+                len(baskets),
+            )
+            break
+        reached += 1
         query = "(" + " OR ".join(f'"{keyword}"' for keyword in basket.keywords) + ")"
         try:
             articles = gdelt_client.fetch_articles(query, timespan="1d")
@@ -2339,8 +2412,14 @@ def run(
                 "tier1_news",
                 lambda: _persist_tier1_news(results, universe_df, today, deadline=news_deadline),
             )
+            tier2_deadline = time.monotonic() + (
+                _STEP_TIMEOUT_SECONDS["tier2_news"] - _NEWS_PERSIST_MARGIN_SECONDS
+            )
             rows_updated += step(
-                "tier2_news", lambda: _in_session(lambda s: refresh_tier2_news(s, today))
+                "tier2_news",
+                lambda: _in_session(
+                    lambda s: refresh_tier2_news(s, today, deadline=tier2_deadline)
+                ),
             )
 
     except Exception:
