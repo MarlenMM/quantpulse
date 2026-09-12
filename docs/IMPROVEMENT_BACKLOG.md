@@ -210,6 +210,29 @@ show), or **address it** (orthogonalise momentum against technical so the two
 stop double-counting the same trend). Prefer surfacing first — it is the
 cheaper, more informative half, and it makes the second measurable.
 
+### Note (2026-09-13): a critical advisory landed in plotly's map dependency
+
+`npm audit` started failing CI on every push — `maplibre-gl <= 6.4.0`, an XSS
+sanitizer bypass, reaching us three levels down: `react-plotly.js@4.1.0` →
+`plotly.js@3.7.0` → `maplibre-gl@4.7.1`. Nothing in this repo changed; the
+advisory was published.
+
+`npm audit fix --force` **downgrades** `react-plotly.js` to 2.6.0 — a breaking
+change to the library this file already warns has blanked every chart twice. And
+there is no forward fix: even `plotly.js@4.1.0` pins `maplibre-gl@^5.24.0`,
+still inside the vulnerable range.
+
+Resolved with an `overrides` pin to `maplibre-gl@^6.9.0`, which removes the
+vulnerable code rather than rolling plotly back. Safe here because this app
+draws candlestick, scatter, scatterpolar and indicator traces and **no map
+trace at all** — verified in a real browser, where `window.maplibregl` is not
+even defined on a fully-rendered stock page. Per this file's own standing rule,
+that page was loaded and its console read: three Plotly figures, all with SVG
+and traces, zero console messages.
+
+Revisit when plotly.js ships a release that depends on a patched maplibre; the
+override can then be dropped.
+
 ### 16. Three open Dependabot PRs, one of them the twice-breaking library
 
 ```
