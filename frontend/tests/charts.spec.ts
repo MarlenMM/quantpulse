@@ -1,4 +1,5 @@
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
+import screenerOneRow from "./fixtures/screener-one-row.json" with { type: "json" };
 import stockAIZ from "./fixtures/stock-AIZ.json" with { type: "json" };
 
 /**
@@ -47,6 +48,15 @@ async function stubApi(page: Page): Promise<void> {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith("/api/stocks/")) {
       await route.fulfill({ json: stockAIZ });
+      return;
+    }
+    // A real screener response cut to one row. Captured from the API, not
+    // written by hand -- only rows were dropped, so every field is still the
+    // server's own (the standing rule about fixtures). One row is the shape a
+    // fork with a thin database sees, and the shape that has broken
+    // selection logic here before.
+    if (url.pathname === "/api/screener") {
+      await route.fulfill({ json: screenerOneRow });
       return;
     }
     // Every other endpoint: an empty-but-valid body. The charts under test live
@@ -115,4 +125,37 @@ test("the chart-free pages still render (isolates a chart break from an app brea
   await page.goto("/glossary");
   await expect(page.locator("#root")).not.toBeEmpty();
   expect(errors, `browser reported errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+/**
+ * The watchlist against the stubbed fixture, where the universe is one stock.
+ *
+ * Not a duplicate of the static-site test. That one proves the feature works on
+ * 503 real rows; this one proves it works when the table has a single row, which
+ * is the shape that broke `.slice()`-based selection logic in this project
+ * before, and is the only shape a fork with a thin database ever sees.
+ */
+test("a watchlist star toggles and persists on a single-row universe", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/screener");
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+
+  const star = page.locator("tbody tr").first().getByRole("button", { name: /watchlist/ });
+  await expect(star).toHaveAttribute("aria-pressed", "false");
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+
+  await page.reload();
+  await expect(page.getByText("Watchlist only (1)")).toBeVisible();
+});
+
+test("compare mode asks for a second name rather than rendering one column", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/screener");
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+
+  await page.locator("tbody tr").first().getByRole("checkbox", { name: /Compare/ }).check();
+  // With one stock in the whole fixture there is no second name to tick, so the
+  // panel must explain itself instead of drawing a comparison of one.
+  await expect(page.getByText(/Tick a second name to compare/)).toBeVisible();
 });

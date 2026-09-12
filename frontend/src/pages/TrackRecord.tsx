@@ -3,6 +3,7 @@ import { IntervalWhisker } from "../components/IntervalWhisker";
 import { api } from "../lib/api";
 import { formatPercent, formatScore } from "../lib/format";
 import type { BacktestRun } from "../lib/types";
+import { downloadCsv, toCsv } from "../lib/csv";
 import { useApi } from "../lib/useApi";
 
 /**
@@ -371,6 +372,40 @@ export default function TrackRecord() {
 
       <section className="block">
         <h2>Run history</h2>
+        <button
+          type="button"
+          onClick={() =>
+            downloadCsv(
+              "quantpulse_track_record.csv",
+              toCsv(
+                data.map((r) => ({
+                  run_date: r.run_date,
+                  period_start: r.period_start ?? "",
+                  period_end: r.period_end ?? "",
+                  signal_name: r.signal_name ?? "",
+                  cadence: r.cadence,
+                  n_periods: r.n_periods,
+                  sharpe: r.sharpe ?? "",
+                  cagr: r.cagr ?? "",
+                  max_drawdown: r.max_drawdown ?? "",
+                  benchmark_sharpe: r.benchmark_sharpe ?? "",
+                  benchmark_cagr: r.benchmark_cagr ?? "",
+                  assumed_txn_cost: r.assumed_txn_cost,
+                })),
+                RUN_CSV_COLUMNS,
+              ),
+            )
+          }
+          disabled={data.length === 0}
+        >
+          Download as CSV
+        </button>
+        <p className="muted small">
+          The export carries <code>signal_name</code> and{" "}
+          <code>assumed_txn_cost</code>, which the table above has no room for and
+          without which a row is not interpretable — what was ranked, and what the
+          trading was assumed to cost.
+        </p>
         <div className="tablewrap">
           <table>
             <thead>
@@ -408,3 +443,18 @@ export default function TrackRecord() {
     </>
   );
 }
+
+const RUN_CSV_COLUMNS = [
+  { key: "run_date", label: "Run date" },
+  { key: "period_start", label: "Period start" },
+  { key: "period_end", label: "Period end" },
+  { key: "signal_name", label: "Signal ranked" },
+  { key: "cadence", label: "Rebalance cadence" },
+  { key: "n_periods", label: "Periods" },
+  { key: "sharpe", label: "Sharpe" },
+  { key: "cagr", label: "CAGR" },
+  { key: "max_drawdown", label: "Max drawdown" },
+  { key: "benchmark_sharpe", label: "Benchmark Sharpe" },
+  { key: "benchmark_cagr", label: "Benchmark CAGR" },
+  { key: "assumed_txn_cost", label: "Assumed txn cost" },
+] as const;

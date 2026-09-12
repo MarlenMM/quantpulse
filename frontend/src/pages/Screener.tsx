@@ -1,4 +1,7 @@
 import { useMemo, useState } from "react";
+
+import { downloadCsv, toCsv } from "../lib/csv";
+import { useWatchlist } from "../lib/watchlist";
 import { ErrorBox, LoadingTable, RatingChip } from "../components/Common";
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
@@ -104,6 +107,9 @@ export default function Screener() {
   const [ratingFilter, setRatingFilter] = useState<string[]>([]);
   const [minConfidence, setMinConfidence] = useState(0);
   const [weights, setWeights] = useState<Record<string, number>>(DEFAULT_WEIGHTS);
+  const [watchedOnly, setWatchedOnly] = useState(false);
+  const [compare, setCompare] = useState<string[]>([]);
+  const { symbols: watched, toggle: toggleWatched, isWatched } = useWatchlist();
 
   const { data: profiles } = useApi(() => api.profiles(), []);
   const selected = profiles?.find((p) => p.name === profile);
@@ -167,6 +173,9 @@ export default function Screener() {
     const useAbsolute = absolute && absoluteBySymbol.size > 0;
 
     let result = all;
+    // Before the other filters: "watchlist only" is a change of universe, not
+    // another predicate over the same one.
+    if (watchedOnly) result = result.filter((r) => watched.includes(r.symbol));
     if (sector) result = result.filter((r) => r.sector === sector);
     if (minConfidence > 0) {
       result = result.filter((r) => (r.data_confidence ?? 0) >= minConfidence);
@@ -188,7 +197,18 @@ export default function Screener() {
     if (ratingFilter.length) scored = scored.filter((s) => ratingFilter.includes(s.rating));
     if (!query.trim()) scored.sort((a, b) => (b.custom ?? -Infinity) - (a.custom ?? -Infinity));
     return scored;
-  }, [data, absoluteData, absolute, query, sector, weights, ratingFilter, minConfidence]);
+  }, [
+    data,
+    absoluteData,
+    absolute,
+    query,
+    sector,
+    weights,
+    ratingFilter,
+    minConfidence,
+    watchedOnly,
+    watched,
+  ]);
 
   if (loading) {
     return (
@@ -347,10 +367,62 @@ export default function Screener() {
         </button>
       </details>
 
+      <div className="controls" style={{ alignItems: "center" }}>
+        <button
+          type="button"
+          onClick={() =>
+            downloadCsv(
+              "quantpulse_screener.csv",
+              toCsv(
+                rows.map(({ row, custom, rating }) => ({
+                  symbol: row.symbol,
+                  name: row.name ?? "",
+                  sector: row.sector ?? "",
+                  rating,
+                  score: custom ?? "",
+                  stored_score: row.composite_score ?? "",
+                  data_confidence: row.data_confidence ?? "",
+                })),
+                CSV_COLUMNS,
+              ),
+            )
+          }
+          disabled={rows.length === 0}
+        >
+          Download as CSV
+        </button>
+        <label className="control-row">
+          <input
+            type="checkbox"
+            checked={watchedOnly}
+            onChange={(e) => setWatchedOnly(e.target.checked)}
+          />
+          <span>Watchlist only ({watched.length})</span>
+        </label>
+        {compare.length > 0 ? (
+          <button type="button" onClick={() => setCompare([])}>
+            Clear comparison ({compare.length})
+          </button>
+        ) : null}
+      </div>
+      <p className="muted small">
+        The CSV is exactly the rows below — your weights, filters and rating scheme
+        included, not the stored balanced ranking. The watchlist is kept in this browser
+        only: it is not synced to another device and clearing site data forgets it.
+      </p>
+
       <div className="tablewrap">
         <table>
           <thead>
             <tr>
+              <th scope="col">
+                <span className="sr-only">Watch</span>
+                <span aria-hidden="true">★</span>
+              </th>
+              <th scope="col">
+                <span className="sr-only">Compare</span>
+                <span aria-hidden="true">⇄</span>
+              </th>
               <th scope="col">Symbol</th>
               <th scope="col">Company</th>
               <th scope="col">Sector</th>
@@ -381,6 +453,34 @@ export default function Screener() {
             {rows.map(({ row, custom, rating }) => (
               <tr key={row.symbol}>
                 <td>
+                  <button
+                    type="button"
+                    className="iconbutton"
+                    aria-pressed={isWatched(row.symbol)}
+                    aria-label={`${isWatched(row.symbol) ? "Remove" : "Add"} ${row.symbol} ${
+                      isWatched(row.symbol) ? "from" : "to"
+                    } your watchlist`}
+                    onClick={() => toggleWatched(row.symbol)}
+                  >
+                    {isWatched(row.symbol) ? "★" : "☆"}
+                  </button>
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={compare.includes(row.symbol)}
+                    aria-label={`Compare ${row.symbol}`}
+                    disabled={!compare.includes(row.symbol) && compare.length >= MAX_COMPARE}
+                    onChange={(e) =>
+                      setCompare((current) =>
+                        e.target.checked
+                          ? [...current, row.symbol].slice(0, MAX_COMPARE)
+                          : current.filter((sym) => sym !== row.symbol),
+                      )
+                    }
+                  />
+                </td>
+                <td>
                   <Link to={`/stocks/${row.symbol}`}>
                     <span className="ticker">{row.symbol}</span>
                   </Link>
@@ -404,6 +504,114 @@ export default function Screener() {
           any name whose data is thinner than the threshold.
         </p>
       ) : null}
+
+      <ComparePanel
+        symbols={compare}
+        rows={(data?.rows ?? []).filter((r) => compare.includes(r.symbol))}
+      />
+    </>
+  );
+}
+
+/** How many names fit side by side before the table stops being readable. */
+const MAX_COMPARE = 4;
+
+const CSV_COLUMNS = [
+  { key: "symbol", label: "Symbol" },
+  { key: "name", label: "Company" },
+  { key: "sector", label: "Sector" },
+  { key: "rating", label: "Rating" },
+  { key: "score", label: "Score" },
+  { key: "stored_score", label: "Stored score" },
+  { key: "data_confidence", label: "Data coverage %" },
+] as const;
+
+/**
+ * Section 12's Compare mode: 2–4 tickers' sub-scores side by side.
+ *
+ * Streamlit has had this since Phase 9; the SPA is the front end most visitors
+ * see and had no equivalent. Nothing is fetched — every sub-score is already in
+ * the screener payload, which is why this is a panel rather than a page.
+ *
+ * A missing category renders as an em dash, never as a zero. A stock with no
+ * analyst coverage is not a stock analysts hate, and that distinction is the
+ * one this project keeps having to defend.
+ */
+function ComparePanel({ symbols, rows }: { symbols: string[]; rows: ScreenerRow[] }) {
+  if (symbols.length === 0) return null;
+  if (symbols.length < 2) {
+    return (
+      <>
+        <h2>Compare</h2>
+        <p className="muted">Tick a second name to compare. Up to {MAX_COMPARE} at once.</p>
+      </>
+    );
+  }
+  // Follow the order the boxes were ticked in, not the table's sort.
+  const ordered = symbols
+    .map((symbol) => rows.find((r) => r.symbol === symbol))
+    .filter((r): r is ScreenerRow => r !== undefined);
+
+  return (
+    <>
+      <h2>Compare</h2>
+      <div className="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Category</th>
+              {ordered.map((row) => (
+                <th key={row.symbol} scope="col" className="num">
+                  <Link to={`/stocks/${row.symbol}`}>
+                    <span className="ticker">{row.symbol}</span>
+                  </Link>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {CATEGORIES.map((category) => (
+              <tr key={category}>
+                <th scope="row">{humanize(category)}</th>
+                {ordered.map((row) => (
+                  <td key={row.symbol} className="num">
+                    {formatScore(row[SUBSCORE_KEYS[category]] as number | null)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr>
+              <th scope="row">Composite</th>
+              {ordered.map((row) => (
+                <td key={row.symbol} className="num">
+                  <strong>{formatScore(row.composite_score)}</strong>
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th scope="row">Rating</th>
+              {ordered.map((row) => (
+                <td key={row.symbol} className="num">
+                  <RatingChip rating={row.rating} />
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th scope="row">Coverage</th>
+              {ordered.map((row) => (
+                <td key={row.symbol} className="num muted small">
+                  {confidenceLabel(row.data_confidence)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">
+        Sub-scores are the stored ones, not your re-weighted ranking — they are
+        weight-independent by design, so they are the same numbers whatever the sliders
+        say. A category with no data shows an em dash, never a zero.
+      </p>
     </>
   );
 }
