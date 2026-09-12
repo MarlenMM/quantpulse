@@ -229,3 +229,139 @@ test.describe("routes served as directory pages", () => {
     });
   }
 });
+
+/**
+ * Section 10/12's three SPA features, against the real pre-rendered site.
+ *
+ * All three are pure client-side work over data the screener payload already
+ * carries — which is exactly why they need a browser to test. None of them adds
+ * a request, so a broken one is invisible to the type checker, the build, and
+ * any test that only checks a fetch resolved.
+ */
+test("the screener exports the rows it is showing as CSV", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download as CSV" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe("quantpulse_screener.csv");
+
+  const stream = await file.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const text = Buffer.concat(chunks).toString("utf8");
+
+  // A header plus a body, not an empty file with a header.
+  const lines = text.trim().split("\r\n");
+  expect(lines[0]).toContain("Symbol");
+  expect(lines[0]).toContain("Data coverage %");
+  expect(lines.length).toBeGreaterThan(50);
+
+  // The first data row must be the first table row: the export is what is on
+  // screen, filters and weights included, not the stored balanced ranking.
+  const firstSymbol = await page.locator("tbody tr").first().locator(".ticker").innerText();
+  expect(lines[1]).toContain(firstSymbol);
+
+  // Every row must have exactly as many fields as the header.
+  //
+  // This is the assertion that matters and the one the first version of this
+  // test lacked. 2,976 names in the demo database contain a comma -- "Nike,
+  // Inc.", "Nasdaq, Inc." -- so an unquoted cell shifts every column after it
+  // and produces a file that still opens, still has a plausible header, and is
+  // wrong from the first mega-cap onward. Removing the quoting entirely left
+  // all nineteen tests green.
+  const fields = (line: string): number => {
+    let count = 1;
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') i += 1;
+        else inQuotes = !inQuotes;
+      } else if (char === "," && !inQuotes) count += 1;
+    }
+    return count;
+  };
+  const expected = fields(lines[0]);
+  const ragged = lines.filter((line) => fields(line) !== expected);
+  expect(ragged.slice(0, 3)).toEqual([]);
+
+  // And a name that needs quoting is actually quoted, not merely survivable.
+  const commaName = lines.find((line) => line.includes('", Inc."') || line.includes('"'));
+  expect(commaName, "no quoted cell in the export at all").toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("the watchlist survives a reload and filters the table", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  const first = page.locator("tbody tr").first();
+  const symbol = await first.locator(".ticker").innerText();
+  await first.getByRole("button", { name: new RegExp(`Add ${symbol} to your watchlist`) }).click();
+
+  // Persisted, not merely held in React state.
+  await page.reload();
+  await expect(page.getByText("Watchlist only (1)")).toBeVisible();
+
+  await page.getByRole("checkbox", { name: /Watchlist only/ }).check();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator("tbody tr").first().locator(".ticker")).toHaveText(symbol);
+
+  // And it is reversible from the star it was set with.
+  await page
+    .locator("tbody tr")
+    .first()
+    .getByRole("button", { name: new RegExp(`Remove ${symbol} from your watchlist`) })
+    .click();
+  await expect(page.getByText("Watchlist only (0)")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("compare mode puts two names' sub-scores side by side", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  const rows = page.locator("tbody tr");
+  const firstSymbol = await rows.nth(0).locator(".ticker").innerText();
+  const secondSymbol = await rows.nth(1).locator(".ticker").innerText();
+
+  await rows.nth(0).getByRole("checkbox", { name: `Compare ${firstSymbol}` }).check();
+  // One name is not a comparison, and the panel should say so rather than
+  // render a one-column table.
+  await expect(page.getByText(/Tick a second name to compare/)).toBeVisible();
+
+  await rows.nth(1).getByRole("checkbox", { name: `Compare ${secondSymbol}` }).check();
+
+  const compare = page.locator("table").last();
+  await expect(compare.getByRole("columnheader", { name: firstSymbol })).toBeVisible();
+  await expect(compare.getByRole("columnheader", { name: secondSymbol })).toBeVisible();
+  // Every category is a row, plus composite, rating and coverage.
+  await expect(compare.getByRole("rowheader", { name: "Fundamental" })).toBeVisible();
+  await expect(compare.getByRole("rowheader", { name: "Composite" })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("the track record exports its run history with what each run ranked", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("track-record");
+  await expect(page.getByRole("heading", { name: "Run history" })).toBeVisible();
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download as CSV" }).click();
+  const file = await download;
+  const stream = await file.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const text = Buffer.concat(chunks).toString("utf8");
+
+  // The two columns the on-screen table has no room for, and without which a
+  // row cannot be interpreted at all.
+  expect(text).toContain("Signal ranked");
+  expect(text).toContain("Assumed txn cost");
+  expect(errors).toEqual([]);
+});

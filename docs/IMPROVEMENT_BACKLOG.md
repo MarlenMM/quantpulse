@@ -1,11 +1,11 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–13 are fixed
-and live**; **14–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–14 are fixed
+and live**; **15–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** 1,794 tests, 14 Alembic migrations, CI and Pages
+**State at time of writing:** 1,804 tests, 14 Alembic migrations, CI and Pages
 green, working tree clean.
 
 ---
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,794 tests
+uv run pytest                 # 1,804 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -95,6 +95,13 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   gives a stale file, and doing that produced a completely wrong diagnosis
   (a schema field looked "silently dropped from the published payload" when it
   had always been present). Check `public/data/`, or rebuild both.
+- **A step that accumulates and persists once loses everything to a timeout.**
+  `tier2_news` spent thirty minutes fetching and scoring, was killed on its
+  budget, and stored zero rows. Take a deadline, stop before the alarm, and keep
+  what you have — `tier1_news` already did.
+- **Rebuild `dist/` between Playwright mutation runs.** A restored source file
+  with a stale build is the trap from §2 in a new costume: the suite failed with
+  "element not found" for a mutation that had already been reverted.
 - **US market holidays cluster on Mondays**, so anything pinned to a weekday
   silently skips roughly one week in ten. MLK, Presidents' Day, Memorial Day and
   Labor Day are each "the nth Monday of" a month; four of 2026's Mondays are
@@ -123,6 +130,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 11 | The Track Record page ranked the momentum category, never the published rating, and could not — 22 days of stored composite history against a 1,183-day window | Alpaca paper trading, forward. Top 20 Buy/Strong Buy, equal-weight, whole shares, weekly rebalance, daily equity snapshot. The endpoint is a module constant with no setting that can reach live money; nothing is annualised | `66a01c9`, `4d697e4`, `840feca` |
 | 12 | The radar showed seven sub-scores and never said which moved the rating | An exact decomposition: `composite - 50 = Σ (w/A)(s-50)`, verified to sum for all 503 names. One sentence built server-side, naming the drivers **and** the largest opposing category (that clause fires for 75% of names) | `e5fb095` + this |
 | 13 | The Portfolio Manager was entirely as-of-now | A History section: value over time, a **time-weighted** comparison against the S&P 500, and dividend income counted on the shares held at each ex-date. On the example portfolio a naive value ratio reports **+171.9%** where the time-weighted return is **+33.5%** — and inverts the verdict against the index | `ba157ae`, `2cef83a` + this |
+| 14 | The SPA lacked CSV export, Compare mode and the watchlist | All three, client-side over data the screener payload already carries. The watchlist is `localStorage` — the API is read-only by design, so it is per-browser and says so. A parity test names which Streamlit feature each mirrors | this |
 
 ### Two things from those fixes that still need watching
 
@@ -133,7 +141,19 @@ Recorded because several of them explain why the code looks the way it does now.
    `select count(distinct matched_theme) from news_events where tier=2` should
    be ~17, not 5, and `industry_macro_raw` should be non-null for ~all 503.
 
-   **Re-checked 2026-09-08 (Tuesday): STILL OPEN, and the reason was new.**
+   **Re-checked 2026-09-13: STILL OPEN, third distinct reason, and it briefly
+   got worse.** The cadence fix worked — the 2026-09-08 run took 3h34m, the
+   weekly-branch signature. But `tier2_news` then exceeded its 1800s budget and
+   was killed, and because it accumulated every article and persisted only after
+   the loop, the timeout discarded all of it: tier-2 themes stayed at 5 and
+   `industry_macro` fell from 19/503 to **0/503**. The step's budget had been
+   set from a cost model that counted model inference and ignored the network —
+   17 serial queries against a rate-limited free API is what spends the half
+   hour. Fixed in `032a5ce` (deadline + keep what you fetched + rotate baskets
+   by staleness, budget 50 min). **The next weekly run is the test**; a slow
+   week now degrades to partial coverage rather than none.
+
+   **Re-checked 2026-09-08 (Tuesday): open, and the reason was new.**
    Monday 2026-09-07 was **Labor Day**. The scheduled run resolved the trading
    day in exchange time, found the market shut and logged
    `skipped_non_trading_day` — so the weekly branch did not run at all. That is
@@ -163,16 +183,9 @@ Recorded because several of them explain why the code looks the way it does now.
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 14 is an unbuilt feature; 15–18 are
+Ordered as the audit ranked them. 15–18 are
 methodology and hygiene. The numbering is the audit's and is kept stable, so
 14 stays 14 now that 10-13 are done.
-
-### 14. React SPA is missing three things Streamlit has
-
-CSV export (Streamlit has it on three pages), Compare mode, and the watchlist.
-The Portfolio Manager's absence is a deliberate architectural decision (ADR 4.5,
-the API is read-only) and should stay one — these three are not, they are just
-unbuilt, and the SPA is the front end most visitors ever see.
 
 ### 15. The seven-category composite is, in practice, a price-trend ranking
 

@@ -460,6 +460,31 @@ excluded throughout, and the page says so: `PortfolioState` stores one current
 balance rather than a history of deposits, so there is no honest way to say what
 was uninvested on a past date.
 
+### The SPA reaches parity with Streamlit
+
+Three things the Streamlit app had and the public demo — the front end most
+visitors actually see — did not:
+
+- **CSV export** on the Screener and the Track Record. The screener export is
+  the rows on screen, with your weights, filters and rating scheme applied, not
+  the stored balanced ranking. The track-record export carries `signal_name` and
+  `assumed_txn_cost`, which the table has no room for and without which a row is
+  not interpretable.
+- **Compare mode** — 2–4 names' sub-scores side by side. Nothing is fetched; the
+  sub-scores are already in the screener payload and are weight-independent by
+  design. A category with no data shows an em dash, never a zero.
+- **A watchlist**, as a star on each row and on every stock page, plus a
+  "watchlist only" filter.
+
+The watchlist lives in `localStorage`, and every surface says so. It cannot be
+anything else: the API is read-only by design (ADR 4.5) and the site is static
+files on GitHub Pages, so there is nowhere on a server to put it. It is
+per-browser, not synced to another device, and cleared with site data — a list
+that silently failed to follow you would be worse than one you knew was local.
+
+The Portfolio Manager's absence from the SPA stays deliberate for the same
+reason, and a test asserts it does not appear.
+
 ## Development
 
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`
