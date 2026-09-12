@@ -10,6 +10,7 @@ import {
 import { Tip } from "../components/Tip";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
+import { useWatchlist } from "../lib/watchlist";
 import type { ForecastRow, RatingExplanation } from "../lib/types";
 import { CATEGORIES, SUBSCORE_KEYS } from "../lib/types";
 import {
@@ -180,6 +181,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
   const { data, error, loading } = useApi(() => api.stock(symbol), [symbol]);
   const [model, setModel] = useState<string | null>(null);
   const theme = useThemeTokens();
+  const { toggle: toggleWatched, isWatched } = useWatchlist();
 
   // The whole page comes from one request, so a bare "Loading AIZ…" left the
   // viewport empty until it landed — on the published demo, long enough to read
@@ -220,7 +222,19 @@ export default function StockDetail({ symbol }: { symbol: string }) {
     <>
       <h1>
         <span className="ticker">{data.symbol}</span>
-        {data.summary.name ? ` — ${data.summary.name}` : ""}
+        {data.summary.name ? ` — ${data.summary.name}` : ""}{" "}
+        <button
+          type="button"
+          className="iconbutton"
+          aria-pressed={isWatched(data.symbol)}
+          aria-label={`${isWatched(data.symbol) ? "Remove" : "Add"} ${data.symbol} ${
+            isWatched(data.symbol) ? "from" : "to"
+          } your watchlist`}
+          title="Kept in this browser only — not synced, and cleared with site data"
+          onClick={() => toggleWatched(data.symbol)}
+        >
+          {isWatched(data.symbol) ? "★" : "☆"}
+        </button>
       </h1>
       <p className="standfirst">
         {data.summary.sector ?? "Sector unknown"} · every figure below is computed from stored

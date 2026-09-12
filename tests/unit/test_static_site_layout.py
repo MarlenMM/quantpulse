@@ -31,6 +31,8 @@ import pytest
 from build_static_site import FIXED_REQUESTS, PROFILE_REQUESTS, static_path
 
 REPO = Path(__file__).resolve().parents[2]
+FRONTEND = REPO / "frontend"
+APP = REPO / "app"
 API_CLIENT = REPO / "frontend" / "src" / "lib" / "api.ts"
 PAGES = REPO / "frontend" / "src" / "pages"
 
@@ -144,3 +146,54 @@ def test_unused_client_methods_are_still_generated() -> None:
     methods = _client_methods()
     for name in UNUSED:
         assert methods[name][0] in generated_paths
+
+
+class TestSpaParityWithStreamlit:
+    """Point 14's three features, asserted as parity rather than as existence.
+
+    The SPA is the front end most visitors ever see, and it was missing three
+    things Streamlit has had since Phase 9. The Portfolio Manager's absence is
+    deliberate (ADR 4.5, the API is read-only) and is deliberately not counted
+    here -- these three were simply unbuilt.
+
+    Checked by grepping the sources rather than by rendering, because what this
+    guards against is a *deletion*: the Playwright suites cover the behaviour,
+    and this says which Streamlit feature each one is the counterpart of, so
+    removing one is a visibly failing claim rather than a quiet divergence.
+    """
+
+    @staticmethod
+    def _spa(name: str) -> str:
+        return (FRONTEND / "src" / name).read_text()
+
+    def test_both_front_ends_export_the_screener_as_csv(self) -> None:
+        assert "download_button" in (APP / "pages" / "1_Screener.py").read_text()
+        assert "downloadCsv" in self._spa("pages/Screener.tsx")
+
+    def test_both_front_ends_export_the_track_record(self) -> None:
+        assert "download_button" in (APP / "pages" / "4_Backtest.py").read_text()
+        assert "downloadCsv" in self._spa("pages/TrackRecord.tsx")
+
+    def test_both_front_ends_have_a_compare_mode(self) -> None:
+        assert "Compare" in (APP / "pages" / "1_Screener.py").read_text()
+        assert "ComparePanel" in self._spa("pages/Screener.tsx")
+
+    def test_both_front_ends_have_a_watchlist(self) -> None:
+        assert "render_watchlist" in (APP / "pages" / "3_Portfolio.py").read_text()
+        assert "useWatchlist" in self._spa("pages/Screener.tsx")
+        assert "useWatchlist" in self._spa("pages/StockDetail.tsx")
+
+    def test_the_spa_watchlist_says_it_is_local_to_the_browser(self) -> None:
+        """It cannot be anything else -- the API is read-only and the site is
+        static files -- so the one thing it must not do is imply it syncs."""
+        # Whitespace-collapsed: JSX wraps prose across lines wherever the
+        # formatter decides, and where the line break falls is not semantic.
+        screener = " ".join(self._spa("pages/Screener.tsx").split())
+        assert "this browser only" in screener, screener[:0] or "watchlist scope not stated"
+        assert "not synced" in screener
+
+    def test_the_spa_does_not_grow_a_portfolio_manager(self) -> None:
+        """ADR 4.5 is a decision, not a gap. A write path here would need the
+        read-only API to stop being read-only."""
+        pages = sorted((FRONTEND / "src" / "pages").glob("*.tsx"))
+        assert not any("Portfolio" in page.stem for page in pages), pages
