@@ -2648,3 +2648,174 @@ class TestDividendRefresh:
         against one database collide, because the first writes the very scoring
         date the second seeds as its "previous" snapshot."""
         self._run_on(engine, date(2026, 9, 15)).assert_not_called()
+
+
+class TestTier2NewsDeadline:
+    """Why a slow Tier-2 week must not cost the whole week's Tier-2 news.
+
+    The sector baskets took this step from 6 GDELT queries to 17, and on
+    2026-09-08 -- the first weekly run that carried them -- it exceeded its
+    1800s budget and was killed. It had accumulated every article into one list
+    and persisted after the loop, so the `StepTimeout` discarded all of it:
+    thirty minutes of fetching and FinBERT scoring, zero rows stored, and
+    `industry_macro` coverage fell from 19/503 to **0/503** because the
+    composite reads the latest stored Tier-2 sentiment and there was none.
+
+    The step's own docstring had budgeted for model inference and not for the
+    network: 17 serial fetches against a rate-limited free API is what actually
+    spends the half hour.
+
+    So it now stops cleanly on a deadline, keeping what it has, exactly as
+    `tier1_news` already did.
+    """
+
+    def _baskets(self, count: int):
+        from quantpulse.news_intelligence.thematic_mapping import ThematicBasket
+
+        return [
+            ThematicBasket(name=f"theme_{i}", members=frozenset({"AAA"}), keywords=(f"kw{i}",))
+            for i in range(count)
+        ]
+
+    def _articles(self, n: int = 2) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "title": f"headline {i}",
+                    "url": f"https://example.test/{i}",
+                    "published_at": pd.Timestamp("2026-09-08"),
+                }
+                for i in range(n)
+            ]
+        )
+
+    @contextmanager
+    def _stubbed(self, baskets):
+        """GDELT and both models replaced; only the loop's control flow is real.
+
+        Yields the `fetch_articles` mock, because how many baskets the sweep
+        actually reached is the thing under test -- asserting only that rows
+        were written passes whether or not the deadline is honoured, which is
+        how the first version of these tests let two mutations through.
+        """
+        scores = pd.DataFrame([{"polarity": 0.1}] * 50)
+        with (
+            patch("refresh_data.thematic_mapping.THEMATIC_BASKETS", tuple(baskets)),
+            patch("refresh_data.thematic_mapping.sector_baskets", return_value=()),
+            patch(
+                "refresh_data.gdelt_client.fetch_articles", return_value=self._articles()
+            ) as fetch,
+            patch("refresh_data.event_classifier.classify_articles", return_value=None),
+            patch("refresh_data.sentiment.score_articles", return_value=scores),
+        ):
+            yield fetch
+
+    def _sweep(self, engine: Engine, baskets, *, deadline=None, clock=None):
+        factory = sessionmaker(bind=engine)
+        with self._stubbed(baskets) as fetch:
+            ticker = patch("refresh_data.time.monotonic", side_effect=clock) if clock else None
+            if ticker:
+                ticker.start()
+            try:
+                with factory() as session:
+                    # `merge`, not `add`: a test may have seeded this ticker
+                    # already in order to set up the basket ordering.
+                    session.merge(
+                        Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True)
+                    )
+                    session.flush()
+                    written = refresh_data.refresh_tier2_news(
+                        session, date(2026, 9, 8), deadline=deadline
+                    )
+                    session.commit()
+            finally:
+                if ticker:
+                    ticker.stop()
+        return written, fetch
+
+    def test_an_expired_deadline_stops_the_sweep_and_keeps_what_it_fetched(
+        self, engine: Engine
+    ) -> None:
+        """The regression, directly: some baskets and some rows, rather than
+        thirty minutes of work discarded.
+
+        Both halves are asserted. Checking only that rows were written passes
+        even when the deadline is ignored entirely -- a sweep that runs to
+        completion also writes rows -- so the fetch count is what proves it
+        stopped. The first version of this test asserted only the rows and let
+        two mutations through.
+        """
+        from quantpulse.storage.models import NewsEvent
+
+        # Time jumps past the deadline once the first basket is done.
+        elapsed = iter([0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0])
+        written, fetch = self._sweep(
+            engine, self._baskets(6), deadline=50.0, clock=lambda: next(elapsed, 100.0)
+        )
+
+        assert written > 0, "a deadline that expires mid-sweep must keep what it fetched"
+        assert fetch.call_count < 6, (
+            f"the sweep reached {fetch.call_count} of 6 baskets; the deadline did not stop it"
+        )
+        factory = sessionmaker(bind=engine)
+        with factory() as session:
+            stored = session.scalars(select(NewsEvent).where(NewsEvent.tier == 2)).all()
+        assert len(stored) == written
+
+    def test_no_deadline_processes_every_basket(self, engine: Engine) -> None:
+        written, fetch = self._sweep(engine, self._baskets(4))
+        assert written > 0
+        assert fetch.call_count == 4, "every basket must be fetched when there is time"
+
+    def test_baskets_are_ordered_least_recently_covered_first(self, engine: Engine) -> None:
+        """Ordering only matters because the sweep can now stop early.
+
+        With a fixed order a short week would fetch the same leading baskets
+        every time and the tail would never be covered at all -- which is the
+        outage the deadline fixes, wearing a different shape.
+        """
+        from quantpulse.storage.models import NewsEvent
+
+        factory = sessionmaker(bind=engine)
+        baskets = self._baskets(3)
+        with factory() as session:
+            session.add(Ticker(symbol="AAA", name="A", asset_type="equity", is_active=True))
+            # theme_0 is freshest, theme_1 older, theme_2 never seen at all.
+            for theme, when in (
+                ("theme_0", datetime(2026, 9, 11)),
+                ("theme_1", datetime(2026, 8, 1)),
+            ):
+                session.add(
+                    NewsEvent(
+                        article_id=f"id-{theme}",
+                        tier=2,
+                        title="t",
+                        published_at=when,
+                        matched_theme=theme,
+                        source="gdelt",
+                        source_url=f"https://example.test/{theme}",
+                    )
+                )
+            session.commit()
+
+        _, fetch = self._sweep(engine, baskets)
+        queried = [call.args[0] for call in fetch.call_args_list]
+        # The query string carries the basket's own keyword, so the order of
+        # calls is the order of baskets.
+        assert queried[0].count("kw2"), f"never-seen basket must go first: {queried}"
+        assert queried[1].count("kw1"), f"then the stalest: {queried}"
+        assert queried[2].count("kw0"), f"freshest last: {queried}"
+
+    def test_the_run_gives_the_step_a_deadline(self, engine: Engine) -> None:
+        """Asserted at the caller. A deadline the step supports and `run()` never
+        passes is the same outage with more code."""
+        settings = TestPaperTrading._settings(alpaca_api_key_id=None, alpaca_api_secret_key=None)
+        with TestAlerting()._driven_run(engine, settings=settings, today=date(2026, 9, 14)) as (
+            _,
+            __,
+        ):
+            with patch("refresh_data.refresh_tier2_news", return_value=0) as tier2:
+                refresh_data.run(job_name="test_tier2")
+
+        tier2.assert_called()
+        assert tier2.call_args.kwargs.get("deadline") is not None, tier2.call_args
