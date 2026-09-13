@@ -1,8 +1,8 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–16 are fixed
-and live**; **17–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–17 are fixed
+and live**; **18 remains**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
 **State at time of writing:** 1,824 tests, 14 Alembic migrations, CI and Pages
@@ -119,6 +119,14 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   silently skips roughly one week in ten. MLK, Presidents' Day, Memorial Day and
   Labor Day are each "the nth Monday of" a month; four of 2026's Mondays are
   closed. Ask the calendar ("the week's first trading day"), never the weekday.
+- **A mutation harness that hides build failures proves nothing.** Redirecting
+  `npm run build` to /dev/null meant an invalid mutation left the previous
+  `dist/` in place and the suite passed against unmutated code — two mutations
+  "survived" that way before the harness was made to fail loudly.
+- **Adjust state during render, not in an effect, when a filter resets a page.**
+  An effect runs after the commit, so there is one painted frame where the new
+  result set is sliced by the old page index. The clamp that hid it was
+  untestable and survived every mutation.
 - **A `-dist-min` package can be dead weight.** `plotly.js-dist-min` was a direct
   dependency for months while `react-plotly.js` resolved its peer `plotly.js`
   instead. Removing it left the largest built chunk byte-identical — that
@@ -150,6 +158,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 14 | The SPA lacked CSV export, Compare mode and the watchlist | All three, client-side over data the screener payload already carries. The watchlist is `localStorage` — the API is read-only by design, so it is per-browser and says so. A parity test names which Streamlit feature each mirrors | this |
 | 15 | Four of seven categories barely moved the ranking, and nothing said so | An **Effective weights** panel in Settings: stated weight beside realised influence (rank correlation with the composite), plus the pair that causes it. Technical is 2nd by weight and **1st** by influence; fundamental is 1st by weight and 3rd. The obvious measure — variance share — would have recovered the weights exactly and shown nothing | this |
 | 16 | Three open Dependabot PRs, one the twice-breaking charting library | Routine three taken together (one CI run, no rebase churn). `plotly.js-dist-min` turned out to be **unused** — removing it left the largest chunk byte-identical — so it is gone and `plotly.js` is explicit at **4.1.0**, verified in a real browser across all four trace types | `ae8154e`, `a0edfc0` |
+| 17 | 503 rows, no skip link — and point 14's star + checkbox had tripled the focusable count to **1,535** | Skip link that actually moves focus, and the table paginated at 50 with the rank kept absolute. **1,535 → 178 focusable, 7,695 → 962 DOM nodes.** Paginated rather than virtualised: virtualising hides rows from find-in-page and misreports table size to a screen reader, trading one accessibility problem for two | this |
 
 ### Two things from those fixes that still need watching
 
@@ -202,16 +211,9 @@ Recorded because several of them explain why the code looks the way it does now.
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 17–18 are
+Ordered as the audit ranked them. 18 is
 methodology and hygiene. The numbering is the audit's and is kept stable, so
 14 stays 14 now that 10-13 are done.
-
-### 17. The Screener renders all 503 rows, and there is no skip link
-
-525 focusable elements on one page, every row in the DOM whether visible or not.
-Fine on a laptop, heavy on the phone that point 7 was about. Landmarks and image
-alt text are in good shape; a skip-to-content link is the obvious gap.
-Virtualising or paginating the table helps both at once.
 
 ### 18. The repository grows by a 60 MB binary per refresh
 

@@ -501,6 +501,24 @@ direct dependency without ever being used: `react-plotly.js` resolves its peer
 byte-identical. `plotly.js` is now an explicit dependency, which is what the
 code imports its types from anyway.
 
+### Keyboard and screen-reader budget
+
+The Screener ranks 503 names, and rendering all of them put **1,535 focusable
+elements and 7,695 DOM nodes** on one page — 1,509 of those controls inside the
+table body, so a keyboard user leaving it had that many stops to get past, with
+no skip link to avoid the header either.
+
+It now renders 50 rows a page: **178 focusable elements, 962 DOM nodes**. The
+rank column stays absolute, so paginating a *ranked* table does not lose the one
+thing the ordering means, and the CSV still exports every row the filters match
+rather than the page on screen.
+
+Paginated rather than virtualised, deliberately. Virtualising keeps the feel of
+one long list, but it hides rows from the browser's own find-in-page and
+misreports the table's size to a screen reader unless `aria-rowcount` is handled
+carefully — so the usual fix for an accessibility problem would have traded one
+for two.
+
 ## Development
 
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`

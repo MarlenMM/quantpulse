@@ -108,6 +108,7 @@ export default function Screener() {
   const [minConfidence, setMinConfidence] = useState(0);
   const [weights, setWeights] = useState<Record<string, number>>(DEFAULT_WEIGHTS);
   const [watchedOnly, setWatchedOnly] = useState(false);
+  const [page, setPage] = useState(0);
   const [compare, setCompare] = useState<string[]>([]);
   const { symbols: watched, toggle: toggleWatched, isWatched } = useWatchlist();
 
@@ -209,6 +210,41 @@ export default function Screener() {
     watchedOnly,
     watched,
   ]);
+
+  // Back to page one whenever the filters change underneath us.
+  //
+  // Adjusted **during render** rather than in an effect, which is React's own
+  // pattern for this and is the difference between correct and nearly correct:
+  // an effect runs after the render commits, so there is one painted frame
+  // where the new (shorter) result set is sliced by the old page index and the
+  // table is empty. React discards this render and re-runs immediately, so
+  // nothing is painted out of range and there is no frame to miss.
+  //
+  // It also leaves nothing untestable. The clamp this replaces guarded exactly
+  // that one frame, which no test here could catch — so it survived every
+  // mutation and would have stayed in the file unexamined.
+  const filterKey = JSON.stringify([
+    query,
+    sector,
+    ratingFilter,
+    minConfidence,
+    watchedOnly,
+    absolute,
+    weights,
+  ]);
+  const [lastFilterKey, setLastFilterKey] = useState(filterKey);
+  if (filterKey !== lastFilterKey) {
+    setLastFilterKey(filterKey);
+    setPage(0);
+  }
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const current = page;
+
+  const visible = useMemo(
+    () => rows.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE),
+    [rows, current],
+  );
 
   if (loading) {
     return (
@@ -406,15 +442,20 @@ export default function Screener() {
         ) : null}
       </div>
       <p className="muted small">
-        The CSV is exactly the rows below — your weights, filters and rating scheme
-        included, not the stored balanced ranking. The watchlist is kept in this browser
-        only: it is not synced to another device and clearing site data forgets it.
+        The CSV is <strong>every row your filters match</strong>, not just the page on
+        screen — your weights, filters and rating scheme included, not the stored
+        balanced ranking. The watchlist is kept in this browser only: it is not synced
+        to another device and clearing site data forgets it.
       </p>
 
       <div className="tablewrap">
         <table>
           <thead>
             <tr>
+              <th scope="col" className="num">
+                <span className="sr-only">Rank in the filtered ranking</span>
+                <span aria-hidden="true">#</span>
+              </th>
               <th scope="col">
                 <span className="sr-only">Watch</span>
                 <span aria-hidden="true">★</span>
@@ -450,8 +491,12 @@ export default function Screener() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ row, custom, rating }) => (
+            {visible.map(({ row, custom, rating }, offset) => (
               <tr key={row.symbol}>
+                {/* The absolute position in the filtered ranking, not the
+                    position on this page — paginating a *ranked* table without
+                    it would lose the one thing the ordering means. */}
+                <td className="num muted">{current * PAGE_SIZE + offset + 1}</td>
                 <td>
                   <button
                     type="button"
@@ -498,6 +543,31 @@ export default function Screener() {
           </tbody>
         </table>
       </div>
+      {rows.length > PAGE_SIZE ? (
+        <nav className="pager" aria-label="Screener pages">
+          <button type="button" onClick={() => setPage(current - 1)} disabled={current === 0}>
+            ← Previous
+          </button>
+          {/*
+            `aria-live` so a screen reader is told where it landed. Paging with
+            no announcement moves 50 rows under someone who cannot see it
+            happen.
+          */}
+          <span aria-live="polite">
+            Showing <strong>{current * PAGE_SIZE + 1}</strong>–
+            <strong>{Math.min((current + 1) * PAGE_SIZE, rows.length)}</strong> of{" "}
+            <strong>{rows.length}</strong> · page {current + 1} of {pageCount}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage(current + 1)}
+            disabled={current >= pageCount - 1}
+          >
+            Next →
+          </button>
+        </nav>
+      ) : null}
+
       {rows.length === 0 ? (
         <p className="muted" style={{ marginTop: "var(--s4)" }}>
           Nothing matches these filters. The coverage slider is the usual culprit — it hides
@@ -512,6 +582,28 @@ export default function Screener() {
     </>
   );
 }
+
+/**
+ * Rows rendered at once.
+ *
+ * The table used to render all 503, which on the live site meant **1,509
+ * focusable controls inside `<tbody>`** and 7,695 DOM nodes on one page — a
+ * keyboard user leaving the table had that many stops to get past, and every
+ * keystroke in the search box re-rendered the lot (~25 ms median measured on a
+ * desktop browser, and a phone CPU is several times slower).
+ *
+ * Paginated rather than virtualised, deliberately. Virtualising keeps the feel
+ * of one long list, but it hides rows from the browser's own find-in-page and
+ * needs `aria-rowcount` handled carefully or it misreports the table's size to
+ * a screen reader — so the usual fix for an accessibility problem would have
+ * traded one for two. A page of rows is plain DOM: findable, announceable, and
+ * no library.
+ *
+ * 50 because the ranking is the point of this table: a reader wanting a
+ * specific name filters or searches for it, and a reader browsing wants the top
+ * of the ranking, which is page one.
+ */
+const PAGE_SIZE = 50;
 
 /** How many names fit side by side before the table stops being readable. */
 const MAX_COMPARE = 4;

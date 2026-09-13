@@ -55,6 +55,21 @@ export default function App() {
   const path = usePath();
   return (
     <div className="app">
+      {/*
+        Skip link, and it is first in the DOM because that is the whole point:
+        it must be the first thing a keyboard lands on. Without it, reaching the
+        page content from the address bar means tabbing the brand link and every
+        nav item on every navigation — and on the Screener, leaving the content
+        again means tabbing past 1,509 controls inside the table.
+
+        Visible only when focused. A skip link that is always visible is a
+        design decision this layout has not made; one that never becomes visible
+        is a trap, because a sighted keyboard user cannot tell what they have
+        focused.
+      */}
+      <a href="#content" className="skiplink">
+        Skip to content
+      </a>
       <header className="topbar">
         <Link to="/dashboard" className="brand">
           <Mark />
@@ -73,7 +88,13 @@ export default function App() {
         </nav>
       </header>
 
-      <main className="content">
+      {/*
+        `tabIndex={-1}` so the skip link's target can actually receive focus.
+        Without it the browser scrolls to the landmark but leaves focus on the
+        link, and the next Tab returns to the nav — the link appears to work
+        and does nothing for the keyboard user it exists for.
+      */}
+      <main className="content" id="content" tabIndex={-1}>
         <Routes />
       </main>
 
