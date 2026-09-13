@@ -91,12 +91,33 @@ class TestDemoDatabaseIsFetched:
             # comment on line 9, so searching for the filename compared the
             # fetch against a sentence about the file and failed on a workflow
             # that was correctly ordered.
-            fetch = text.index("run: ./scripts/fetch_demo_db.sh")
+            fetch = text.index("./scripts/fetch_demo_db.sh")
+            # After the install, because the fetch imports `quantpulse`. Pages
+            # failed in nine seconds on `ModuleNotFoundError: No module named
+            # 'quantpulse'` with the step correctly placed before every reader
+            # and wrongly placed before `uv sync` -- which the reader-only
+            # version of this assertion could not see.
+            install = text.index("run: uv sync --locked")
+            assert install < fetch, f"{name} fetches the database before installing the package"
             for reader in ("run: uv run pytest", "run: uv run python scripts/build_static_site.py"):
                 if reader in text:
                     assert fetch < text.index(reader), (
                         f"{name} runs `{reader}` before fetching the database"
                     )
+
+    def test_every_workflow_is_parseable_yaml(self) -> None:
+        """A syntax error here is only ever found by pushing it.
+
+        `run: echo "publishing $(...): $(...)"` on one line is invalid YAML --
+        the colon inside the string ends the mapping key -- and GitHub answers
+        that with a job that fails in nine seconds having run nothing. Nothing
+        else in this repository parses these files.
+        """
+        yaml = pytest.importorskip("yaml")
+        for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+            document = yaml.safe_load(path.read_text())
+            assert isinstance(document, dict), f"{path.name} is not a mapping"
+            assert document.get("jobs"), f"{path.name} defines no jobs"
 
     def test_the_database_is_not_tracked_in_git(self) -> None:
         """The whole point. A file both ignored and tracked stays tracked, and
