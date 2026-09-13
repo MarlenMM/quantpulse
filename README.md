@@ -485,6 +485,22 @@ that silently failed to follow you would be worse than one you knew was local.
 The Portfolio Manager's absence from the SPA stays deliberate for the same
 reason, and a test asserts it does not appear.
 
+### Charting dependency, handled deliberately
+
+Plotly has silently blanked every chart in this app twice — once on Vite 7→8's
+CJS interop, once on `react-plotly.js` 2→4 shipping a `forwardRef` object — and
+both times TypeScript, the build and CI stayed green throughout. So the standing
+rule is that any charting or bundler upgrade is verified by loading a chart page
+in a real browser and reading the console, and `components/Chart.tsx` resolves
+the component by asking what a React element type looks like rather than by
+pattern-matching one version's packaging.
+
+Taking plotly to 4.1.0 also retired `plotly.js-dist-min`, which had been a
+direct dependency without ever being used: `react-plotly.js` resolves its peer
+`plotly.js`, and removing the dist package left the largest built chunk
+byte-identical. `plotly.js` is now an explicit dependency, which is what the
+code imports its types from anyway.
+
 ## Development
 
 - Lint/format: `uv run ruff check .` / `uv run ruff format .`
