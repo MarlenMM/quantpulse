@@ -59,10 +59,21 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
+      # The database is a release asset, not a committed file (it was 97.5% of
+      # the repository and grew ~7.7 MB per refresh). Fetched before anything
+      # that reads it, and the job fails here rather than four steps later with
+      # an empty site, which is the failure mode this deploy has had before.
+      - name: Fetch the demo database
+        run: ./scripts/fetch_demo_db.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Report what is being published
         run: |
           echo "publishing $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
-          echo "demo database last changed in $(git log -1 --pretty='%h %ad' --date=short -- quantpulse_demo.db)"
+          echo "demo database: $(du -h quantpulse_demo.db | cut -f1), $(
+            sqlite3 quantpulse_demo.db 'select max(date) from composite_scores'
+          ) is the newest scoring date"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

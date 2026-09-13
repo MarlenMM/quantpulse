@@ -28,6 +28,16 @@ jobs:
       - name: Type-check
         run: uv run mypy src scripts app
 
+      # `tests/integration/test_ui_pages_real_data.py` renders every Streamlit
+      # page against the real database and skips itself when the file is
+      # absent. Now that the database is a release asset rather than a
+      # committed file, not fetching it here would turn ten passing tests into
+      # ten silent skips -- a green CI that stopped checking the pages.
+      - name: Fetch the demo database
+        run: ./scripts/fetch_demo_db.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Test
         run: uv run pytest
 

@@ -1,8 +1,7 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–17 are fixed
-and live**; **18 remains**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. **All eighteen points are fixed and live.**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
 **State at time of writing:** 1,824 tests, 14 Alembic migrations, CI and Pages
@@ -159,6 +158,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 15 | Four of seven categories barely moved the ranking, and nothing said so | An **Effective weights** panel in Settings: stated weight beside realised influence (rank correlation with the composite), plus the pair that causes it. Technical is 2nd by weight and **1st** by influence; fundamental is 1st by weight and 3rd. The obvious measure — variance share — would have recovered the weights exactly and shown nothing | this |
 | 16 | Three open Dependabot PRs, one the twice-breaking charting library | Routine three taken together (one CI run, no rebase churn). `plotly.js-dist-min` turned out to be **unused** — removing it left the largest chunk byte-identical — so it is gone and `plotly.js` is explicit at **4.1.0**, verified in a real browser across all four trace types | `ae8154e`, `a0edfc0` |
 | 17 | 503 rows, no skip link — and point 14's star + checkbox had tripled the focusable count to **1,535** | Skip link that actually moves focus, and the table paginated at 50 with the rank kept absolute. **1,535 → 178 focusable, 7,695 → 962 DOM nodes.** Paginated rather than virtualised: virtualising hides rows from find-in-page and misreports table size to a screen reader, trading one accessibility problem for two | this |
+| 18 | 40 revisions of a 66 MB binary were **309 MB of a 317 MB repo** (97.5%), growing ~7.7 MB per refresh | Moved to the rolling `demo-data` release asset, fetched by `run.sh`, both workflows and the Streamlit app. Repo stops growing; **the 309 MB already in history is not reclaimed** — that needs a force-push, see below | this |
 
 ### Two things from those fixes that still need watching
 
@@ -215,23 +215,31 @@ Ordered as the audit ranked them. 18 is
 methodology and hygiene. The numbering is the audit's and is kept stable, so
 14 stays 14 now that 10-13 are done.
 
-### 18. The repository grows by a 60 MB binary per refresh
+---
 
-```
-quantpulse_demo.db committed revisions   33
-local .git                              143 MB
-GitHub's packed size                     57 MB
+## 5. The one thing left, and why it is the user's call
+
+Point 18 **stopped** the growth; it did not reclaim it. The 309 MB of old
+`quantpulse_demo.db` blobs are still in history, so a fresh clone is still
+~317 MB even though nothing new is being added.
+
+Reclaiming them means rewriting history:
+
+```bash
+uvx git-filter-repo --invert-paths --path quantpulse_demo.db
+git push --force --all && git push --force --tags
 ```
 
-The trade — repo size against a reader's first five minutes — is the right one,
-and a fresh clone is still fine. But the refresh is back on a daily schedule
-(point 6), so the number now moves five times a week. Worth deciding **now**
-whether the demo database eventually moves to a release asset or an orphan
-branch, before the decision is forced.
+That changes every commit hash in the repository. Every existing clone must be
+re-cloned, every fork is orphaned, and open PRs break. It is safe here in the
+sense that nothing depends on those hashes — but it is a one-way, outward-facing
+action on a public repository, so it is a decision to take deliberately rather
+than a step to fold into a fix. Nothing forces it: the repo is stable at its
+current size now.
 
 ---
 
-## 5. How these fixes have been done
+## 6. How these fixes have been done
 
 Nine for nine, the pattern that worked:
 

@@ -12,13 +12,15 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 
-> **Why a fresh clone is ~70 MB.** `quantpulse_demo.db` (63 MB) is committed on
-> purpose: it is what makes `./run.sh`, the test suite and the public demo work
-> immediately, with no hours-long seeding run and no API keys — a deliberate
-> trade of repository size against a reader's first five minutes. Your own
-> working database (`quantpulse.db`) is gitignored and never committed. The
-> reasoning, and how to rebuild the demo database from scratch, are under
-> [Data and secrets](#data-and-secrets).
+> **The demo database is a release asset, not a committed file.** It is ~66 MB,
+> and forty committed revisions of it had reached **309 MB of a 317 MB
+> repository** — 97.5%, against 8 MB for every source file, test and document
+> put together — growing about 7.7 MB per refresh, five refreshes a week. It now
+> lives on the rolling [`demo-data`](https://github.com/MarlenMM/quantpulse/releases/tag/demo-data)
+> release tag. `./run.sh` downloads it once on first run, and so do CI, the
+> Pages build and the Streamlit app; nothing needs an API key. A clone is small
+> again, and the file is fetched once rather than every version of it ever made
+> arriving with the clone.
 
 ![QuantPulse walkthrough: Dashboard, Screener, Stock Detail, and Backtest / Track Record](docs/screenshots/demo.gif)
 
@@ -310,14 +312,19 @@ suite asserts none of the three ends up in `sys.modules`.
 visitor's holdings in their own browser session rather than the shared committed
 file. An LLM key (Section 4.3) is optional — the app runs fine without one.
 
-Streamlit Community Cloud auto-redeploys on every push to `main`, so each
-night's data commit refreshes the live app with no separate step.
+Streamlit Community Cloud auto-redeploys on every push to `main`. The data
+itself no longer arrives that way — the database is a release asset, and
+`app/Home.py` downloads it on first run through `quantpulse.demo_data`, which is
+in the package precisely because that host puts only `app/` on `sys.path` and
+could not import anything under `scripts/`. A restarted container picks up the
+current data without a redeploy.
 
 ### Data and secrets
 
-`.github/workflows/refresh_data.yml` updates the repo-committed demo database
+`.github/workflows/refresh_data.yml` rebuilds the demo database
 (`quantpulse_demo.db` — distinct from your own local `quantpulse.db`, see
-`.gitignore`), so neither deployment needs API keys of its own (ADR 4.4). It runs
+`.gitignore`) and publishes it to the `demo-data` release, so neither deployment
+needs API keys of its own (ADR 4.4). It runs
 **weekday evenings at 22:00 UTC**, one to two hours after the New York close, and
 can also be dispatched by hand (Actions → Data Refresh → Run workflow) to catch a
 database up or to test a fix without waiting for the next run. Monday's run
@@ -343,10 +350,10 @@ immediately, which is why `./run.sh` needs no setup. To rebuild it from scratch
 ```bash
 DATABASE_URL=sqlite:///./quantpulse_demo.db uv run alembic upgrade head
 DATABASE_URL=sqlite:///./quantpulse_demo.db uv run python scripts/seed_initial_data.py
-git add quantpulse_demo.db && git commit -m "Reseed the live-demo database" && git push
+gh release upload demo-data quantpulse_demo.db --clobber
 ```
 
-The schedule then keeps it current, committing an updated `quantpulse_demo.db`
+The schedule then keeps it current, publishing an updated `quantpulse_demo.db`
 back to `main` (the workflow file's own comments explain why that is safe given
 ADR 4.5's session-vs-sqlite split) and republishing the Pages site against it.
 
