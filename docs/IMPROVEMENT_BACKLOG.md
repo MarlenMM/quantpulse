@@ -1,8 +1,8 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–15 are fixed
-and live**; **16–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–16 are fixed
+and live**; **17–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
 **State at time of writing:** 1,824 tests, 14 Alembic migrations, CI and Pages
@@ -119,6 +119,10 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   silently skips roughly one week in ten. MLK, Presidents' Day, Memorial Day and
   Labor Day are each "the nth Monday of" a month; four of 2026's Mondays are
   closed. Ask the calendar ("the week's first trading day"), never the weekday.
+- **A `-dist-min` package can be dead weight.** `plotly.js-dist-min` was a direct
+  dependency for months while `react-plotly.js` resolved its peer `plotly.js`
+  instead. Removing it left the largest built chunk byte-identical — that
+  comparison is how to tell, not reading imports.
 - **`gh run list` first.** A workflow that was cancelled or never created writes
   nothing the app can see, and that has been the single biggest bug twice.
 
@@ -145,6 +149,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 13 | The Portfolio Manager was entirely as-of-now | A History section: value over time, a **time-weighted** comparison against the S&P 500, and dividend income counted on the shares held at each ex-date. On the example portfolio a naive value ratio reports **+171.9%** where the time-weighted return is **+33.5%** — and inverts the verdict against the index | `ba157ae`, `2cef83a` + this |
 | 14 | The SPA lacked CSV export, Compare mode and the watchlist | All three, client-side over data the screener payload already carries. The watchlist is `localStorage` — the API is read-only by design, so it is per-browser and says so. A parity test names which Streamlit feature each mirrors | this |
 | 15 | Four of seven categories barely moved the ranking, and nothing said so | An **Effective weights** panel in Settings: stated weight beside realised influence (rank correlation with the composite), plus the pair that causes it. Technical is 2nd by weight and **1st** by influence; fundamental is 1st by weight and 3rd. The obvious measure — variance share — would have recovered the weights exactly and shown nothing | this |
+| 16 | Three open Dependabot PRs, one the twice-breaking charting library | Routine three taken together (one CI run, no rebase churn). `plotly.js-dist-min` turned out to be **unused** — removing it left the largest chunk byte-identical — so it is gone and `plotly.js` is explicit at **4.1.0**, verified in a real browser across all four trace types | `ae8154e`, `a0edfc0` |
 
 ### Two things from those fixes that still need watching
 
@@ -197,23 +202,9 @@ Recorded because several of them explain why the code looks the way it does now.
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 16–18 are
+Ordered as the audit ranked them. 17–18 are
 methodology and hygiene. The numbering is the audit's and is kept stable, so
 14 stays 14 now that 10-13 are done.
-
-### 16. Three open Dependabot PRs, one of them the twice-breaking library
-
-```
-#23  plotly.js-dist-min  3.7.0 -> 4.0.0     <- major bump
-#24  @types/react-dom    19.2.4 -> 19.2.5
-#25  @vitejs/plugin-react 6.1.0 -> 6.1.1
-```
-
-Plotly has silently blanked every chart in this app **twice** — once on Vite
-7→8's CJS interop, once on react-plotly.js 2→4 shipping a `forwardRef` object —
-and both times `tsc`, the build and CI were green throughout. The standing rule:
-after any charting or bundler upgrade, **load a chart page in a real browser and
-read the console**. Merge the two routine ones first; do plotly on its own.
 
 ### 17. The Screener renders all 503 rows, and there is no skip link
 
