@@ -17,7 +17,8 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 > repository** — 97.5%, against 8 MB for every source file, test and document
 > put together — growing about 7.7 MB per refresh, five refreshes a week. It now
 > lives on the rolling [`demo-data`](https://github.com/MarlenMM/quantpulse/releases/tag/demo-data)
-> release tag. `./run.sh` downloads it once on first run, and so do CI, the
+> release tag, and its old revisions were removed from history on 2026-09-13 —
+> a full clone went from ~317 MB to 13 MB. `./run.sh` downloads it once on first run, and so do CI, the
 > Pages build and the Streamlit app; nothing needs an API key. A clone is small
 > again, and the file is fetched once rather than every version of it ever made
 > arriving with the clone.

@@ -217,27 +217,45 @@ methodology and hygiene. The numbering is the audit's and is kept stable, so
 
 ---
 
-## 5. The one thing left, and why it is the user's call
+## 5. The history rewrite, done 2026-09-13
 
-Point 18 **stopped** the growth; it did not reclaim it. The 309 MB of old
-`quantpulse_demo.db` blobs are still in history, so a fresh clone is still
-~317 MB even though nothing new is being added.
-
-Reclaiming them means rewriting history:
+Point 18 stopped the growth. This reclaimed what was already there.
 
 ```bash
-uvx git-filter-repo --invert-paths --path quantpulse_demo.db
-git push --force --all && git push --force --tags
+uvx git-filter-repo --invert-paths --path quantpulse_demo.db --force
+git push --force origin main
+git push --force origin refs/tags/demo-data
 ```
 
-That changes every commit hash in the repository. Every existing clone must be
-re-cloned, every fork is orphaned, and open PRs break. It is safe here in the
-sense that nothing depends on those hashes — but it is a one-way, outward-facing
-action on a public repository, so it is a decision to take deliberately rather
-than a step to fold into a fix. Nothing forces it: the repo is stable at its
-current size now.
+| | before | after |
+|---|---|---|
+| fresh full clone | ~317 MB | **13 MB** |
+| local `.git` | 321 MB | 29 MB |
+| commits | 207 | 175 |
 
----
+**The 32 dropped commits were exactly the pure data-refresh ones** — 24 "Nightly
+data refresh", 6 "Data refresh", 2 reseeds — whose entire content was the file
+that no longer exists, so `filter-repo` pruned them as empty. Every commit that
+touched code survived: the non-data subject lists match exactly, 175 to 175, and
+every tracked file at HEAD has an identical content hash to before. The dates
+those refreshes ran are still in `refresh_log` and in the Actions history.
+
+Three things worth knowing if this is ever done again:
+
+- **The tag had to move too.** `demo-data` pointed at a pre-rewrite commit, and
+  leaving it would have kept all 309 MB reachable through it — the rewrite would
+  have reclaimed nothing. The GitHub Release survived the tag being force-moved,
+  because a release references the tag by *name*: asset still attached, still
+  downloadable, still byte-identical.
+- **GitHub's reported repository size did not change** (84 MB before and after).
+  The old objects are unreachable but not yet garbage-collected; that is on
+  GitHub's schedule and can be hurried with a support request. What a reader
+  actually pays — the clone — dropped immediately.
+- **`filter-repo` removes the `origin` remote** on purpose, so it has to be
+  re-added before pushing.
+
+Safe here because there were **0 forks and 0 open PRs**; a full mirror backup
+was taken first. With either of those non-zero this is a different decision.
 
 ## 6. How these fixes have been done
 
