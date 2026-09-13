@@ -40,7 +40,8 @@ from quantpulse.analysis.investor_profiles import (
 
 st.set_page_config(page_title="QuantPulse — Screener", page_icon=PAGE_ICON, layout="wide")
 
-SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
+# `SCORE_COLUMNS` now lives in `scoring`, beside the `_raw` map it mirrors.
+SCORE_COLUMNS = scoring.CATEGORY_SCORE_COLUMNS
 # The pre-normalization inputs absolute mode re-scores from (see `rescore_absolute`).
 RAW_COLUMNS = {category: f"{category}_raw" for category in CATEGORIES}
 # Result-table columns that hold a number and therefore need a format. The

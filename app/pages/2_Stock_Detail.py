@@ -55,7 +55,8 @@ from quantpulse.llm.providers import get_provider
 
 st.set_page_config(page_title="QuantPulse — Stock Detail", page_icon=PAGE_ICON, layout="wide")
 
-SCORE_COLUMNS = {category: f"{category}_score" for category in CATEGORIES}
+# `SCORE_COLUMNS` now lives in `scoring`, beside the `_raw` map it mirrors.
+SCORE_COLUMNS = scoring.CATEGORY_SCORE_COLUMNS
 
 # Monte Carlo settings. A quarter ahead is long enough for the fan to visibly
 # widen without running past the point the calibration means anything; the path

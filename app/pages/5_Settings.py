@@ -18,11 +18,16 @@ Secrets are never displayed — only whether each one is set (Section 18).
 
 from datetime import datetime
 
+import pandas as pd
 import streamlit as st
 
 from lib import data, refresh
 from lib.brand import PAGE_ICON
 from lib.format import freshness_label, humanize
+from lib.glossary import tip
+from quantpulse.analysis import scoring
+from quantpulse.analysis.investor_profiles import CATEGORIES
+from quantpulse.analysis.scoring import CATEGORY_SCORE_COLUMNS
 from quantpulse.config import get_settings
 from quantpulse.llm.providers import get_provider
 
@@ -231,6 +236,93 @@ def render_configuration() -> None:
     )
 
 
+def render_effective_weights() -> None:
+    """What each category is weighted, against what it actually does to the ranking.
+
+    An unusual thing for a screener to show, and the reason it is here is that
+    the two disagree. The weights are honoured arithmetically -- the stock
+    pages' own decomposition sums exactly -- but a weight is an *input*, and
+    influence on the final ordering is an *output*. Measured over all 503
+    balanced scores, technical carries a fifth of the weight and steers the
+    ranking more than fundamental, which carries a quarter; analyst and smart
+    money carry a tenth each and barely steer it at all.
+
+    The obvious version of this panel would have hidden that. A variance-share
+    chart recovers the stated weights almost exactly, because every sub-score is
+    a percentile and so every category has the same dispersion by construction --
+    seven bars matching seven weights, reporting that all is well.
+    """
+    st.subheader("Effective weights", help=tip("Effective weight"))
+    frame = data.scored_subscores()
+    if frame.empty:
+        st.info("No scores stored yet, so there is no ranking to measure influence against.")
+        return
+
+    subs = frame[[CATEGORY_SCORE_COLUMNS[category] for category in CATEGORIES]].rename(
+        columns={CATEGORY_SCORE_COLUMNS[category]: category for category in CATEGORIES}
+    )
+    rows = scoring.effective_weights(subs, frame["composite_score"], profile="balanced")
+
+    st.caption(
+        f"Measured over the {len(frame)} names in the latest stored ranking. "
+        "**Influence** is the rank correlation between a category's sub-score and the "
+        "published composite — how much that category actually moves a name's position, "
+        "as against how much weight it is given."
+    )
+    table = pd.DataFrame(
+        [
+            {
+                "Category": humanize(row.category),
+                "Stated weight": row.stated_weight,
+                "Coverage": row.coverage,
+                "Influence": row.influence,
+                "By weight": row.weight_rank,
+                "By influence": row.influence_rank,
+            }
+            for row in rows
+        ]
+    )
+    st.dataframe(
+        table.style.format(
+            {
+                "Stated weight": "{:.0%}",
+                "Coverage": "{:.0%}",
+                "Influence": lambda v: "—" if pd.isna(v) else f"{v:.2f}",
+                "By influence": lambda v: "—" if pd.isna(v) else f"{int(v)}",
+            },
+            na_rep="—",
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+
+    uncovered = [row for row in rows if row.coverage == 0.0]
+    if uncovered:
+        names = ", ".join(humanize(row.category) for row in uncovered)
+        share = sum(row.stated_weight for row in uncovered)
+        st.warning(
+            f"**{names} had no data at all for this ranking**, so its influence cannot "
+            f"be measured — an em dash, not a zero. Its {share:.0%} of weight was "
+            "renormalized across the categories that did have data, which means every "
+            "other category is currently doing more work than its stated weight says."
+        )
+
+    pairs = scoring.category_correlations(subs)
+    if pairs:
+        lines = "\n".join(
+            f"- **{humanize(pair.a)} ↔ {humanize(pair.b)}: {pair.correlation:+.2f}** "
+            f"(over {pair.overlap} names)"
+            for pair in pairs
+        )
+        st.markdown(
+            "**Categories that move together.** Two categories carrying separate "
+            "weights while measuring the same thing are counted twice, which is the "
+            "mechanism behind the column above:\n\n" + lines
+        )
+    else:
+        st.caption("No two categories move together strongly enough to be worth flagging.")
+
+
 def render_methodology() -> None:
     st.subheader("Methodology")
     st.markdown(
@@ -273,6 +365,8 @@ def main() -> None:
     render_pipeline_health()
     st.divider()
     render_configuration()
+    st.divider()
+    render_effective_weights()
     st.divider()
     render_methodology()
     st.divider()
