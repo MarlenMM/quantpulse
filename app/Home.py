@@ -210,6 +210,13 @@ def render_sector_rotation() -> None:
 
 
 def main() -> None:
+    # Before any page reads the database. On Streamlit Community Cloud the
+    # repository is cloned and `app/Home.py` is run with no shell step in
+    # between, and the database is a release asset rather than a committed file
+    # -- so this is that host's equivalent of what `run.sh` does locally. A
+    # no-op everywhere the file is already present.
+    data.ensure_demo_database()
+
     st.title("Today's read")
     st.markdown(
         "The S&P 500, scored across seven categories of public data — fundamentals, "

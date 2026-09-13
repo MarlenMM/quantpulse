@@ -157,52 +157,48 @@ jobs:
       # success for days). Whatever data did land before the failure is still
       # worth committing -- the point of the exit code is visibility, not
       # discarding a partly-successful run's work.
-      - name: Commit refreshed demo database
+      # ADR 4.4's "commit/store the results" -- as a release asset rather than
+      # a commit.
+      #
+      # It was committed for 40 revisions, and those 40 blobs were **309 MB of a
+      # 317 MB repository**: 97.5%, against 8 MB for every source file, test and
+      # document put together. Each refresh added about 7.7 MB packed, five
+      # nights a week -- roughly 2 GB a year, on a repository GitHub asks to
+      # keep under 1 GB. Git cannot delta-compress a SQLite file usefully, so
+      # every night's copy is very nearly a whole new 66 MB object.
+      #
+      # A release asset costs nothing against repository size, has a 2 GB
+      # per-file ceiling, and is what `./run.sh` and both workflows now fetch.
+      # The reader's promise is unchanged and paid for differently: one download
+      # on first run, rather than every version of the file ever made arriving
+      # at `git clone`.
+      #
+      # `--clobber` because the tag is deliberately rolling: there is one
+      # current database, not a numbered series of them, and keeping 40 of these
+      # is the thing being fixed.
+      #
+      # `if: always()` for the same reason the commit step had it -- whatever
+      # landed before a failure is still worth publishing.
+      - name: Publish the refreshed database
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add quantpulse_demo.db
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+          if [[ ! -f quantpulse_demo.db ]]; then
+            echo "::error::no database to publish"
+            exit 1
           fi
-          git commit -m "Data refresh [skip ci]"
-
-          # Retry on a rejected push, replaying this run's database on top of
-          # whatever landed meanwhile.
-          #
-          # This is not defensive decoration. The weekly branch runs for hours,
-          # and a single human push during that window makes the job's own push
-          # a non-fast-forward -- at which point every hour of fetching is
-          # discarded and the only trace is a red job with a one-second failing
-          # step. That happened: a 3h27m run that had successfully refreshed
-          # fundamentals, analyst consensus, forecasts and the backtest threw all
-          # of it away because a commit landed while it was working.
-          #
-          # Replaying rather than merging is safe *because* the database is the
-          # only file this job writes and this job is the only thing that writes
-          # it: take main for everything else, keep this run's data for that one
-          # file. A merge would have to resolve a binary conflict with no basis
-          # for choosing.
-          for attempt in 1 2 3; do
-            if git push; then
-              exit 0
-            fi
-            echo "::warning::push rejected (attempt $attempt) -- main moved while this run was fetching; replaying on top of it"
-            cp quantpulse_demo.db "$RUNNER_TEMP/refreshed.db"
-            git fetch origin main
-            git reset --hard origin/main
-            cp "$RUNNER_TEMP/refreshed.db" quantpulse_demo.db
-            git add quantpulse_demo.db
-            if git diff --cached --quiet; then
-              echo "main already carries this data."
-              exit 0
-            fi
-            git commit -m "Data refresh [skip ci]"
-          done
-          echo "::error::could not push the refreshed database after 3 attempts"
-          exit 1
+          # Guard against uploading a truncated or corrupt file over the only
+          # copy the demo has. `--clobber` is destructive by design, so the
+          # check belongs before it rather than in the consumer.
+          if ! sqlite3 quantpulse_demo.db 'pragma integrity_check' | grep -qx ok; then
+            echo "::error::refreshed database fails its own integrity check; not publishing"
+            exit 1
+          fi
+          echo "publishing $(du -h quantpulse_demo.db | cut -f1), newest scoring date $(
+            sqlite3 quantpulse_demo.db 'select max(date) from composite_scores'
+          )"
+          gh release upload demo-data quantpulse_demo.db --clobber
 
   # Republish the public demo against the data this run just committed.
   #

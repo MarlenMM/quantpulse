@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -32,6 +33,43 @@ from quantpulse.analysis import risk
 from quantpulse.config import get_settings
 from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session
+
+
+@st.cache_resource(show_spinner="Downloading the demo database (~66 MB, once)...")
+def ensure_demo_database() -> bool:
+    """Download the demo database if this host has not got it. True if it did.
+
+    Streamlit Community Cloud clones the repository and runs `app/Home.py` with
+    no opportunity for a shell step in between, and the database is a release
+    asset rather than a committed file -- 40 committed revisions of it were
+    309 MB of a 317 MB repository. So the app fetches it the same way `run.sh`
+    and both workflows do, through the one implementation in
+    `scripts/fetch_demo_db.py`.
+
+    `@st.cache_resource` so it is attempted once per container rather than on
+    every script re-run, which is every interaction.
+
+    A failure is swallowed on purpose. The configured `DATABASE_URL` may point
+    somewhere else entirely -- a local dev database, a path the operator
+    supplied -- in which case there is nothing to download and nothing wrong;
+    the pages' own empty states say what is missing. Raising here would replace
+    every one of those with a stack trace.
+    """
+    url = get_settings().database_url
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return False
+    target = Path(url[len(prefix) :])
+    if target.exists():
+        return False
+    try:
+        from quantpulse.demo_data import fetch
+
+        return fetch(target)
+    except Exception:
+        logger.exception("Could not download the demo database")
+        return False
+
 
 logger = logging.getLogger(__name__)
 

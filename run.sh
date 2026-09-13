@@ -10,7 +10,9 @@
 # Portfolio Manager, against the demo database that is committed to this repo.
 #
 # It needs no API key and no account. Everything it shows comes from
-# `quantpulse_demo.db`, which a dispatched GitHub Actions run refreshes.
+# `quantpulse_demo.db`, which the scheduled refresh rebuilds and publishes as a
+# GitHub Release asset -- downloaded here on first run if it is not already
+# present, and left alone if it is.
 #
 # Deliberately built from `requirements.txt` rather than `uv sync`: that is the
 # app's own dependency set (18 packages, ~30 seconds) instead of the whole
@@ -24,10 +26,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 VENV=".venv-app"
 STAMP="$VENV/.requirements-stamp"
 
+# The database is a release asset rather than a committed file: forty revisions
+# of it were 309 MB of a 317 MB repository, growing ~7.7 MB per refresh. A
+# reader pays for it once here instead of paying for every version of it ever
+# made at `git clone`.
 if [[ ! -f quantpulse_demo.db ]]; then
-  echo "quantpulse_demo.db is missing. It is committed to this repository -- if" >&2
-  echo "you are in a shallow or partial clone, run: git checkout quantpulse_demo.db" >&2
-  exit 1
+  ./scripts/fetch_demo_db.sh
 fi
 
 # Reinstall only when requirements.txt has actually changed. Without this every
