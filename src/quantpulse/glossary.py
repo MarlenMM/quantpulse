@@ -198,6 +198,15 @@ TERMS: dict[str, tuple[str, str]] = {
         "have sat through if you had bought at the worst moment and held. Shown as a "
         "negative number.",
     ),
+    "Effective weight": (
+        "QuantPulse scores",
+        "How much a scoring category actually moves a stock's position in the ranking, "
+        "as against how much weight it is given. The two are not the same: a category "
+        "that correlates with another is counted twice and steers more than its weight "
+        "suggests, while one that is independent of the rest gets averaged away and "
+        "steers less. Measured as the rank correlation between the category's own "
+        "sub-score and the published composite.",
+    ),
     "Time-weighted return": (
         "Portfolio",
         "How your holdings performed, with the effect of paying money in or taking it "

@@ -65,6 +65,11 @@ from quantpulse.analysis import technical
 from quantpulse.analysis.investor_profiles import CATEGORIES, InvestorProfile, get_profile
 
 # Column name each category writes to `composite_scores` (Section 13).
+#
+# Already exported, and `app/pages/1_Screener.py` and `2_Stock_Detail.py` each
+# rebuilt their own identical copy anyway -- the duplication that has made the
+# two front ends disagree before, hiding in plain sight beside the value it
+# duplicates. Both now import this one.
 CATEGORY_SCORE_COLUMNS: dict[str, str] = {category: f"{category}_score" for category in CATEGORIES}
 # The pre-normalization inputs, carried through to `composite_scores` alongside
 # the normalized ones. The normalized columns are cross-sectional percentiles,
@@ -752,3 +757,175 @@ def _coverage_clause(explanation: CompositeExplanation) -> str:
     # it was 110 of a 188-character sentence, which is how a reader learns to
     # skip it. Short enough to read every time, specific enough to act on.
     return f" No {listed} data, so this rests on {share:.0f}% of the profile's weight."
+
+
+# --------------------------------------------------------------------------- #
+# Effective weights: what each category actually does to the ranking
+#
+# The stated weights are honoured arithmetically -- `explain_composite` asserts
+# the decomposition sums exactly. This answers a different question. A weight is
+# an *input*; influence on the final ordering is an *output*, and on real data
+# the two disagree badly. Measured over all 503 balanced scores on 2026-09-11:
+#
+#     category        stated   rank correlation with the composite
+#     technical         0.20   0.701
+#     momentum          0.15   0.646
+#     fundamental       0.25   0.483
+#     smart_money       0.10   0.193
+#     analyst           0.10   0.133
+#
+# Technical carries a fifth of the weight and steers the ranking more than
+# fundamental, which carries a quarter; analyst and smart money carry a tenth
+# each and barely steer it at all. The reason is correlation structure, not
+# arithmetic: technical and momentum move together (+0.685 measured), so they
+# reinforce, while the independent categories average one another away.
+#
+# **The obvious measure would have hidden all of it.** A variance-share panel --
+# each category's share of the spread in contributions -- recovers the stated
+# weight almost exactly (25/20/10/10/15/9/10% against .25/.20/.10/.10/.15/
+# .10/.10), because every sub-score is a percentile and therefore every category
+# has near-identical dispersion by construction. Seven bars matching seven
+# weights, reporting that everything is fine.
+#
+# So influence is measured as the **rank** correlation between a category's
+# sub-score and the published composite. Rank rather than linear because the
+# composite's product is an ordering -- the Screener is a ranked table and the
+# ratings are percentile cutoffs -- so how a category moves *positions* is the
+# question a reader has.
+# --------------------------------------------------------------------------- #
+
+#: Below this many jointly-present names, a rank correlation's confidence
+#: interval spans most of [-1, 1]. Printing its point estimate beside a stated
+#: weight would be exactly the false precision this project keeps removing, so
+#: it is reported as "cannot say" instead.
+MIN_NAMES_FOR_INFLUENCE = 30
+
+#: Pairs weaker than this are ordinary and not worth a reader's attention.
+DEFAULT_MIN_PAIR_CORRELATION = 0.3
+
+
+@dataclass(frozen=True)
+class CategoryInfluence:
+    """One category's stated weight beside what it actually did to the ordering."""
+
+    category: str
+    stated_weight: float
+    #: Share of names that had a usable sub-score, 0-1.
+    coverage: float
+    #: Spearman correlation between this category's sub-score and the published
+    #: composite. `None` when it cannot honestly be computed -- no data, no
+    #: variance, or too few names. Never 0.0 as a stand-in: "this category does
+    #: nothing" and "we cannot say" are different answers.
+    influence: float | None
+    #: 1 = heaviest. Always defined, because a weight is always stated.
+    weight_rank: int
+    #: 1 = most influential, among the categories that could be measured.
+    influence_rank: int | None
+
+
+@dataclass(frozen=True)
+class CategoryPair:
+    """Two categories that move together, and how many names that was measured over."""
+
+    a: str
+    b: str
+    correlation: float
+    overlap: int
+
+
+def _spearman(left: pd.Series, right: pd.Series) -> float | None:
+    """Rank correlation, or `None` when it cannot honestly be computed.
+
+    scipy returns NaN rather than raising for a constant input, which would
+    otherwise reach a page as "nan" -- so that case is converted here rather
+    than left for each caller to remember.
+    """
+    from scipy.stats import spearmanr
+
+    both = pd.concat([left, right], axis=1).dropna()
+    if len(both) < MIN_NAMES_FOR_INFLUENCE:
+        return None
+    if both.iloc[:, 0].nunique() < 2 or both.iloc[:, 1].nunique() < 2:
+        return None
+    # No `pd.isna` fallback after this: scipy returns NaN here only for a
+    # constant input, which the guard above has already refused. A branch no
+    # test can reach reads as a case someone considered.
+    return float(spearmanr(both.iloc[:, 0], both.iloc[:, 1]).statistic)
+
+
+def effective_weights(
+    sub_scores: pd.DataFrame,
+    composite: pd.Series,
+    *,
+    profile: InvestorProfile | str | None = None,
+) -> list[CategoryInfluence]:
+    """Each category's stated weight, coverage and realised influence.
+
+    `sub_scores` is one column per category (0-100 normalized), indexed like
+    `composite`. Categories absent from the frame are reported with zero
+    coverage and no influence rather than omitted -- a category that the
+    pipeline failed to produce is the single most useful thing this panel can
+    show, and dropping the row would hide it.
+    """
+    resolved = profile if isinstance(profile, InvestorProfile) else get_profile(profile)
+    weights = resolved.weights
+    total = len(composite)
+
+    by_weight = sorted(CATEGORIES, key=lambda c: (-weights[c], c))
+    weight_rank = {category: index + 1 for index, category in enumerate(by_weight)}
+
+    measured: dict[str, float | None] = {}
+    coverage: dict[str, float] = {}
+    for category in CATEGORIES:
+        column = sub_scores[category] if category in sub_scores.columns else None
+        if column is None or total == 0:
+            coverage[category] = 0.0
+            measured[category] = None
+            continue
+        coverage[category] = float(column.notna().sum()) / total
+        measured[category] = _spearman(column, composite)
+
+    ranked = sorted(
+        (c for c in CATEGORIES if measured[c] is not None),
+        key=lambda c: (-(measured[c] or 0.0), c),
+    )
+    influence_rank = {category: index + 1 for index, category in enumerate(ranked)}
+
+    return [
+        CategoryInfluence(
+            category=category,
+            stated_weight=weights[category],
+            coverage=coverage[category],
+            influence=measured[category],
+            weight_rank=weight_rank[category],
+            influence_rank=influence_rank.get(category),
+        )
+        for category in CATEGORIES
+    ]
+
+
+def category_correlations(
+    sub_scores: pd.DataFrame,
+    *,
+    min_abs_correlation: float = DEFAULT_MIN_PAIR_CORRELATION,
+) -> list[CategoryPair]:
+    """Category pairs that move together, strongest first.
+
+    This is the half that explains the other. Technical and momentum measured
+    +0.685 on real data: two of the three heaviest inputs are largely one
+    signal, which is why they jointly steer the ranking more than their weights
+    suggest. A reader shown only the influence column would see the effect and
+    not the cause.
+    """
+    pairs: list[CategoryPair] = []
+    present = [c for c in CATEGORIES if c in sub_scores.columns]
+    for index, first in enumerate(present):
+        for second in present[index + 1 :]:
+            both = sub_scores[[first, second]].dropna()
+            correlation = _spearman(sub_scores[first], sub_scores[second])
+            if correlation is None or abs(correlation) < min_abs_correlation:
+                continue
+            pairs.append(
+                CategoryPair(a=first, b=second, correlation=correlation, overlap=len(both))
+            )
+    return sorted(pairs, key=lambda p: (-abs(p.correlation), p.a, p.b))

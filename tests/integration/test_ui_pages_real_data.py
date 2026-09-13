@@ -160,3 +160,68 @@ def test_portfolio_history_renders_against_the_real_database(real_database: Path
         "curve beside an index without that label is the value-ratio mistake\n"
         f"{result.stdout[-1500:]}"
     )
+
+
+def test_settings_reports_effective_weights_against_the_real_ranking(
+    real_database: Path,
+) -> None:
+    """Point 15's panel: what each category is weighted, against what it does.
+
+    Asserted on the real database because the finding only exists there — the
+    disagreement between weight and influence comes from the correlation
+    structure of 503 real names, and any fixture small enough to hand-write
+    would have to have that structure planted in it, at which point the test is
+    asserting the plant rather than the pipeline.
+    """
+    settings = next(page for page in PAGES if page.stem == "5_Settings")
+    result = _render(settings, real_database)
+    assert result.returncode == 0, (
+        f"the Settings page failed rendering its effective-weights panel\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr[-2000:]}"
+    )
+    rendered = result.stdout
+
+    assert "Effective weights" in rendered
+    # Influence is named as a rank correlation, not left to look like a weight.
+    assert "rank correlation" in rendered, rendered[-1500:]
+    # The pair that explains the column must be shown, not just the column.
+    assert "move together" in rendered, rendered[-1500:]
+    assert "Technical" in rendered and "Momentum" in rendered
+
+    # Whether the zero-coverage warning should appear is read from the database
+    # rather than from the page. Phrasing it as `if "had no data" in rendered`
+    # made the assertion cancel itself: deleting the sentence also deleted the
+    # check, and that mutation passed.
+    import sqlite3
+
+    from quantpulse.analysis.investor_profiles import CATEGORIES
+
+    connection = sqlite3.connect(real_database)
+    try:
+        as_of = connection.execute(
+            "select max(date) from composite_scores where profile='balanced'"
+        ).fetchone()[0]
+        uncovered = [
+            category
+            for category in CATEGORIES
+            if connection.execute(
+                f"select count({category}_score) from composite_scores "
+                f"where profile='balanced' and date=?",
+                (as_of,),
+            ).fetchone()[0]
+            == 0
+        ]
+    finally:
+        connection.close()
+
+    if uncovered:
+        assert "had no data at all" in rendered, (uncovered, rendered[-1500:])
+        # A phrase unique to this warning. Asserting on "renormalized" passed
+        # with the whole sentence rewritten, because the Methodology section
+        # further down the same page uses that word too.
+        assert "doing more work than its stated weight says" in rendered, (
+            uncovered,
+            rendered[-1500:],
+        )
+    else:
+        assert "had no data at all" not in rendered, rendered[-1500:]

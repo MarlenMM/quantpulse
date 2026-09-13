@@ -102,7 +102,19 @@ def main() -> int:
 
     rendered = "".join(
         str(element.value)
-        for group in (app.title, app.header, app.subheader, app.markdown, app.caption, app.info)
+        # `warning` and `error` included: a page's honest limitations are stated
+        # in exactly those, so a harness that collected only the cheerful
+        # elements could not assert a page had disclosed anything.
+        for group in (
+            app.title,
+            app.header,
+            app.subheader,
+            app.markdown,
+            app.caption,
+            app.info,
+            app.warning,
+            app.error,
+        )
         for element in group
     )
     if len(rendered) < MIN_RENDERED_CHARS:

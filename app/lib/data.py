@@ -287,6 +287,18 @@ def dividend_history(symbols: tuple[str, ...]) -> pd.DataFrame:
         return persistence.read_dividends(session, list(symbols))
 
 
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def scored_subscores(profile: str = "balanced") -> pd.DataFrame:
+    """The latest scoring date's sub-scores and composite, one row per name.
+
+    The raw material for the effective-weights panel: `read_screener_rows`
+    already returns exactly these columns, so this is a projection rather than a
+    new query.
+    """
+    with get_session() as session:
+        return persistence.read_screener_rows(session, profile=profile)
+
+
 def has_any_data() -> bool:
     """Whether the pipeline has ever produced scores -- drives the empty-state banner."""
     freshness = data_freshness()

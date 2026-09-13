@@ -1,11 +1,11 @@
 # QuantPulse — improvement backlog and session handoff
 
 An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. Points **1–14 are fixed
-and live**; **15–18 remain**. This file is the handoff: what was done, what is
+demo database, and the pipeline's own upstream sources. Points **1–15 are fixed
+and live**; **16–18 remain**. This file is the handoff: what was done, what is
 left, and the things a new session would otherwise rediscover the hard way.
 
-**State at time of writing:** 1,804 tests, 14 Alembic migrations, CI and Pages
+**State at time of writing:** 1,824 tests, 14 Alembic migrations, CI and Pages
 green, working tree clean.
 
 ---
@@ -32,7 +32,7 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,804 tests
+uv run pytest                 # 1,824 tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
@@ -95,6 +95,13 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   gives a stale file, and doing that produced a completely wrong diagnosis
   (a schema field looked "silently dropped from the published payload" when it
   had always been present). Check `public/data/`, or rebuild both.
+- **A variance-share "effective weights" chart is a trap.** Every sub-score is a
+  percentile, so every category has identical dispersion and the shares come
+  back equal to the stated weights. Rank correlation with the composite is the
+  measure that actually differs.
+- **Don't assert on a word that appears elsewhere on the same page.** A test for
+  the zero-coverage warning passed with the whole sentence rewritten, because
+  "renormalized" also appears in the Methodology section below it.
 - **A step that accumulates and persists once loses everything to a timeout.**
   `tier2_news` spent thirty minutes fetching and scoring, was killed on its
   budget, and stored zero rows. Take a deadline, stop before the alarm, and keep
@@ -131,6 +138,7 @@ Recorded because several of them explain why the code looks the way it does now.
 | 12 | The radar showed seven sub-scores and never said which moved the rating | An exact decomposition: `composite - 50 = Σ (w/A)(s-50)`, verified to sum for all 503 names. One sentence built server-side, naming the drivers **and** the largest opposing category (that clause fires for 75% of names) | `e5fb095` + this |
 | 13 | The Portfolio Manager was entirely as-of-now | A History section: value over time, a **time-weighted** comparison against the S&P 500, and dividend income counted on the shares held at each ex-date. On the example portfolio a naive value ratio reports **+171.9%** where the time-weighted return is **+33.5%** — and inverts the verdict against the index | `ba157ae`, `2cef83a` + this |
 | 14 | The SPA lacked CSV export, Compare mode and the watchlist | All three, client-side over data the screener payload already carries. The watchlist is `localStorage` — the API is read-only by design, so it is per-browser and says so. A parity test names which Streamlit feature each mirrors | this |
+| 15 | Four of seven categories barely moved the ranking, and nothing said so | An **Effective weights** panel in Settings: stated weight beside realised influence (rank correlation with the composite), plus the pair that causes it. Technical is 2nd by weight and **1st** by influence; fundamental is 1st by weight and 3rd. The obvious measure — variance share — would have recovered the weights exactly and shown nothing | this |
 
 ### Two things from those fixes that still need watching
 
@@ -183,55 +191,9 @@ Recorded because several of them explain why the code looks the way it does now.
 
 ## 4. Points 10–18 — the remaining backlog
 
-Ordered as the audit ranked them. 15–18 are
+Ordered as the audit ranked them. 16–18 are
 methodology and hygiene. The numbering is the audit's and is kept stable, so
 14 stays 14 now that 10-13 are done.
-
-### 15. The seven-category composite is, in practice, a price-trend ranking
-
-Spearman correlation with the final composite, measured 2026-09-05 on all 503
-balanced scores:
-
-```
-technical        0.716      fundamental      0.434
-momentum         0.633      sentiment        0.335
-industry_macro   0.566 *    smart_money      0.198
-                            analyst          0.159
-
-technical <-> momentum      0.646   (the two dominant inputs are largely one signal)
-* over 19 covered names only; see the point-3 watch item above
-```
-
-The stated weights are honoured arithmetically — that was fixed in an earlier
-pass. But four of seven categories barely move the ranking. Two honest options:
-**surface it** (an "effective weights" panel in Settings showing each category's
-realised influence, which is an unusual and creditable thing for a screener to
-show), or **address it** (orthogonalise momentum against technical so the two
-stop double-counting the same trend). Prefer surfacing first — it is the
-cheaper, more informative half, and it makes the second measurable.
-
-### Note (2026-09-13): a critical advisory landed in plotly's map dependency
-
-`npm audit` started failing CI on every push — `maplibre-gl <= 6.4.0`, an XSS
-sanitizer bypass, reaching us three levels down: `react-plotly.js@4.1.0` →
-`plotly.js@3.7.0` → `maplibre-gl@4.7.1`. Nothing in this repo changed; the
-advisory was published.
-
-`npm audit fix --force` **downgrades** `react-plotly.js` to 2.6.0 — a breaking
-change to the library this file already warns has blanked every chart twice. And
-there is no forward fix: even `plotly.js@4.1.0` pins `maplibre-gl@^5.24.0`,
-still inside the vulnerable range.
-
-Resolved with an `overrides` pin to `maplibre-gl@^6.9.0`, which removes the
-vulnerable code rather than rolling plotly back. Safe here because this app
-draws candlestick, scatter, scatterpolar and indicator traces and **no map
-trace at all** — verified in a real browser, where `window.maplibregl` is not
-even defined on a fully-rendered stock page. Per this file's own standing rule,
-that page was loaded and its console read: three Plotly figures, all with SVG
-and traces, zero console messages.
-
-Revisit when plotly.js ships a release that depends on a patched maplibre; the
-override can then be dropped.
 
 ### 16. Three open Dependabot PRs, one of them the twice-breaking library
 
