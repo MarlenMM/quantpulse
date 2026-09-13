@@ -27,6 +27,9 @@ import { defineConfig, devices } from "@playwright/test";
 const BASE = process.env.VITE_BASE ?? "/";
 
 export default defineConfig({
+  // Fails fast and by name when `dist/` is the wrong artifact, rather than
+  // letting fourteen content tests fail with "element not found".
+  globalSetup: "./tests-static/assert-static-build.ts",
   testDir: "./tests-static",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
