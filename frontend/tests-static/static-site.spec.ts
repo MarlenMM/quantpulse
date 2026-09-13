@@ -50,7 +50,11 @@ test("the screener loads a full ranked universe", async ({ page }) => {
   // "503 symbols scored" comes straight out of the screener response. A shell
   // that rendered with an empty table would not produce it.
   await expect(page.getByText(/symbols scored/)).toBeVisible();
-  expect(await page.locator("tbody tr").count()).toBeGreaterThan(50);
+  // The table is paginated, so the row count is the page size by design. What
+  // proves the whole universe arrived is the count the pager states -- asserting
+  // rendered rows would now be asserting PAGE_SIZE and nothing about the fetch.
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+  await expect(page.getByText(/Showing 1–50 of \d{3}/)).toBeVisible();
 
   expect(errors).toEqual([]);
 });
@@ -60,7 +64,9 @@ test("switching investor profile fetches a different pre-rendered ranking", asyn
   await page.goto("screener");
   await expect(page.locator("tbody tr").first()).toBeVisible();
 
-  const firstRow = async () => page.locator("tbody tr td").first().innerText();
+  // The symbol, not the first cell: the first cell is now the rank, which reads
+  // "1" for every profile and would make the comparison below vacuous.
+  const firstRow = async () => page.locator("tbody tr .ticker").first().innerText();
   const balanced = await firstRow();
 
   // `income` genuinely re-scores, so it has its own generated file. If that
@@ -70,7 +76,9 @@ test("switching investor profile fetches a different pre-rendered ranking", asyn
   await page.getByText("Investor profile & rating scheme").click();
   await page.getByLabel("Start from profile").selectOption("income");
   await expect(page.locator("tbody tr").first()).toBeVisible();
-  expect(await page.locator("tbody tr").count()).toBeGreaterThan(50);
+  // Same reasoning as above: the pager's total is what shows the other
+  // pre-rendered file was fetched, not the number of rows on screen.
+  await expect(page.getByText(/Showing 1–50 of \d{3}/)).toBeVisible();
   expect(await firstRow()).not.toBe("");
 
   expect(errors).toEqual([]);
@@ -363,5 +371,153 @@ test("the track record exports its run history with what each run ranked", async
   // row cannot be interpreted at all.
   expect(text).toContain("Signal ranked");
   expect(text).toContain("Assumed txn cost");
+  expect(errors).toEqual([]);
+});
+
+/**
+ * Section 12 accessibility: the skip link and the Screener's row budget.
+ *
+ * Measured on the live site before this landed: **1,535 focusable elements**,
+ * 1,509 of them inside `<tbody>`, and 7,695 DOM nodes — a keyboard user leaving
+ * the table had that many stops to get past, and there was no skip link to
+ * avoid the header either. The audit recorded 525; the watchlist star and
+ * compare checkbox added per row since then had nearly tripled it.
+ */
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),' +
+  'textarea:not([disabled]),[tabindex]:not([tabindex="-1"]),details>summary';
+
+test("a skip link is the first thing the keyboard reaches, and it moves focus", async ({
+  page,
+}) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  await page.keyboard.press("Tab");
+  const skip = page.getByRole("link", { name: "Skip to content" });
+  await expect(skip).toBeFocused();
+  // Hidden until focused, visible once it is — a permanently invisible skip
+  // link is a trap for a sighted keyboard user.
+  await expect(skip).toBeInViewport();
+
+  await page.keyboard.press("Enter");
+  // Focus must actually land on the landmark. Without tabIndex=-1 the browser
+  // scrolls there and leaves focus on the link, so the next Tab goes back to
+  // the nav and the link silently does nothing.
+  await expect(page.locator("main#content")).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test("the screener renders one page of rows, not the whole universe", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  const rows = await page.locator("tbody tr").count();
+  expect(rows).toBeLessThanOrEqual(50);
+
+  // The budget this exists for. 503 rows carried 1,509 focusable controls.
+  const focusable = await page.locator(FOCUSABLE).count();
+  expect(focusable).toBeLessThan(250);
+
+  // And the full count is still stated, so nothing looks lost.
+  await expect(page.getByText(/Showing 1–50 of \d+/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("paging keeps the ranking's numbering and does not restart it", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  const firstRank = await page.locator("tbody tr").first().locator("td").first().innerText();
+  expect(firstRank.trim()).toBe("1");
+
+  await page.getByRole("button", { name: "Next →" }).click();
+  const nextRank = await page.locator("tbody tr").first().locator("td").first().innerText();
+  expect(nextRank.trim()).toBe("51");
+  await expect(page.getByText(/Showing 51–100 of \d+/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("the CSV exports every filtered row, not just the page on screen", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  // Deliberately from page 2: the export must not follow the viewport.
+  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText(/Showing 51–100/)).toBeVisible();
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download as CSV" }).click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const lines = Buffer.concat(chunks).toString("utf8").trim().split("\r\n");
+
+  expect(lines.length).toBeGreaterThan(200);
+  expect(errors).toEqual([]);
+});
+
+test("changing a filter returns to the first page of the new ranking", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  // To page 5, then filter to a sector that leaves exactly two pages.
+  for (let i = 0; i < 4; i += 1) await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText(/page 5 of/)).toBeVisible();
+
+  await page.getByLabel("Sector").selectOption("Financials");
+
+  // Distinguishes the reset from the clamp. Clamping alone would land on the
+  // *last* page of the new ranking ("page 2 of 2") -- past the top of a ranking
+  // the reader has just asked a new question of. The clamp is still what stops
+  // an empty table; this is the behaviour on top of it, and without its own
+  // case the two are indistinguishable.
+  await expect(page.getByText(/page 1 of 2/)).toBeVisible();
+  await expect(page.locator("tbody tr").first().locator("td").first()).toHaveText("1");
+  expect(errors).toEqual([]);
+});
+
+test("re-weighting a category also returns to the first page", async ({ page }) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  for (let i = 0; i < 2; i += 1) await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText(/page 3 of/)).toBeVisible();
+
+  // Moving a slider re-ranks the whole universe, so page 3 is now a different
+  // slice of a differently-ordered list -- the reader is looking at names they
+  // never asked to see. The weights belong in the filter signature for exactly
+  // this reason, and without their own case they can be dropped from it with
+  // every other test still green.
+  await page.getByText("Re-weight categories").click();
+  const slider = page.getByLabel("Fundamental", { exact: false }).first();
+  await slider.fill("0.05");
+
+  await expect(page.getByText(/page 1 of/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("narrowing a filter while deep in the pages does not show an empty table", async ({
+  page,
+}) => {
+  const errors = watchForErrors(page);
+  await page.goto("screener");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText(/page 3 of/)).toBeVisible();
+
+  // A filter that leaves far fewer than three pages. Without a reset the table
+  // would render nothing and read as "no matches" when the truth is "you are
+  // past the end".
+  await page.getByLabel("Search symbol or company").fill("AAPL");
+  await expect(page.locator("tbody tr").first()).toBeVisible();
   expect(errors).toEqual([]);
 });
