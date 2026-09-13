@@ -50,6 +50,12 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   fallback and returns 200 for everything, including `/totally-made-up`. To
   model GitHub Pages, serve `dist/` with `python3 -m http.server` — directory
   indexes, 301s and real 404s.
+- **`npm run test:e2e` leaves `dist/` in the wrong state for `test:static`.**
+  `playwright.config.ts` rebuilds with `npm run build` and no `VITE_STATIC_API`,
+  so running the stubbed suite then the static one hands the second an API-mode
+  bundle: all fourteen content tests fail with "element not found" and none says
+  why. `tests-static/assert-static-build.ts` now refuses to run and says so.
+  `reuseExistingServer` makes a stale dev server on :4177 do the same thing.
 - **There are two Playwright suites and they test different things.**
   `test:e2e` stubs the API from `frontend/tests/fixtures/stock-AIZ.json`;
   `test:static` runs against the real pre-rendered `dist/`. Running one is not
