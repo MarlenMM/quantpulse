@@ -873,6 +873,12 @@ def main() -> None:
     st.caption(
         f"{confidence_label(row['data_confidence'])} · scored {freshness_label(row['date'])}"
     )
+    # The percentage above says how much of the profile's weight had data behind
+    # it. It never says *what* was missing, and between 10 Aug and 14 Sep 2026
+    # every one of 503 names was scored with no news sentiment while the only
+    # visible trace was that number falling from 90 to 80. Same function the API
+    # sends React, so this page and that one cannot describe a score differently.
+    st.caption(scoring.describe_composite_coverage(row))
 
     bars = data.ohlcv(symbol, lookback_days=400)
     overlays: dict[str, pd.Series] = {}

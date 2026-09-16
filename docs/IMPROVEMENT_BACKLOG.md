@@ -353,6 +353,96 @@ now rejects `runner.`, `steps.`, `job.` and `env.` in any job-level `env` value;
 mutation-checked by putting the expression back, which fails it with the job and
 key named while the YAML-parse test still passes.
 
+### Point 21 — CI read a file that changed nightly
+
+Fixed 2026-09-16, in the same session. The symptom was the three Dependabot
+pull requests going red on
+`test_settings_reports_effective_weights_against_the_real_ranking`: a Streamlit
+test about the ranking, failing because of a database none of those pull
+requests had touched. **A test job whose inputs change underneath it is not
+testing the diff**, and nothing on screen said which of the two it was.
+
+There are two release assets now, and the split is the fix:
+
+| asset | who reads it | changes |
+|---|---|---|
+| `demo-data` | the public demo, the Pages build, `./run.sh` | every refresh |
+| `ci-fixture` | the CI test job | only when someone rolls it forward |
+
+`ci-fixture` is verified against `demo_data.CI_FIXTURE_SHA256` on download, so
+a bad night cannot reach a pull request, and a fixture replaced without its
+digest being updated fails *at the fetch step*, naming the database rather than
+a test.
+
+**To roll the fixture forward** (worth doing when the data shapes the tests care
+about have genuinely moved): upload a newer database to the `ci-fixture`
+release, then put its `shasum -a 256` in `demo_data.CI_FIXTURE_SHA256` in the
+same commit. Both halves in one commit is the point — the change to what CI
+tests against becomes reviewable, with a reason attached.
+
+CI also migrates the fixture to head before running pytest. A pinned snapshot is
+a schema snapshot, so a migration landing in the pull request under test would
+otherwise run against a database that predates it — something the rolling asset
+never exposed, because the refresh migrates it nightly.
+
+**What this deliberately does not do** is stop testing the current data. The
+publish workflow still runs the static-site suite against the rolling asset
+before the demo updates, which is precisely what kept the gutted database off
+the public site on both nights it was published.
+
+### Point 22 — the composite scored without a whole category for five weeks
+
+Fixed 2026-09-16. Between **2026-08-10 and 2026-09-14** every one of 503 names
+was scored with no news sentiment at all, and nothing anywhere said so.
+
+The chain: `tier1_news` died on its 90-minute budget each weekly run, so no
+sentiment rows were written; `read_latest_sentiment` looks back thirty days, so
+past that the category simply stopped arriving; `build_composite` renormalized
+over the six categories that remained, which is correct behaviour; and the only
+visible trace was `data_confidence` falling from 90 to 80, rendered as "good
+coverage (80%)". **No step raised, so `step()` saw nothing. No step wrote zero
+rows, so `_STEPS_EXPECTED_TO_WRITE` saw nothing. Every run logged success.**
+
+Three parts, because the silence had three causes:
+
+1. **Say which categories are behind a score.** `scoring.describe_composite_coverage`
+   composes one sentence server-side and both front ends print it verbatim — the
+   same pattern as `market_regime.describe_regime_coverage`, for the same
+   reason. On the current database it reads: *"Five of the seven categories are
+   behind this score — news sentiment and industry/macro are missing, so the
+   weights are renormalized over the rest rather than counting them as
+   neutral."* It deliberately does not guess *why*: a stock with no analyst
+   coverage and a step that died last night look identical from there.
+2. **Make a universe-wide absence loud.** `scoring.zero_coverage_categories`
+   plus a new `degrade()` beside `step()` in the refresh: a category empty for
+   every name now marks the run `partial` and names itself in the closing line.
+   `degrade()` is a third kind of signal — every step ran, every step wrote, and
+   the output is still wrong.
+3. **Stop sentiment being what a slow week drops.** `_MAX_CLASSIFIED_ARTICLES`
+   1,500 → 500, from a runner measurement: BART classification cost **3.1s per
+   article** there (4,674s for 1,500) against the 192–347ms measured locally,
+   leaving the step finishing 5,327s into a 5,400s budget. Section 7.3's
+   priority is unchanged and is what makes this the right thing to cut:
+   `event_type` is read by one surface, `sentiment_score` feeds every tilt.
+
+**`MIN_UNIVERSE_FOR_COVERAGE_CLAIM = 20`, and it is not tidiness.** On a
+one-name universe "absent from every row" and "absent from this row" are the
+same statement, and without the floor the refresh's end-to-end test — which
+scores a single mocked symbol with two price bars — reported six categories as
+an outage and turned a healthy run "partial".
+
+**Two traps worth keeping from this one:**
+
+- **`degrade()` logs its own reason, so asserting on `caplog.text` proved
+  nothing about the summary.** The mutation that dropped `degraded_reasons`
+  from the closing line's guard *survived* the first version of the test. Assert
+  the run's last line, which is what a reader of a three-hour log actually sees.
+- **zsh does not word-split unquoted parameters.** `run "$1"` with `"a.py b.py"`
+  hands pytest one nonexistent path and prints "no tests ran in 0.00s", which
+  reads like a passing mutation if you are grepping for failures. It cost two
+  full mutation rounds here and a broken merge loop earlier the same day. Use
+  `"$@"`, and make the harness print the real pytest tail rather than a grep.
+
 **A trap worth keeping.** The new test failed on correct YAML at first:
 `text.index("alembic upgrade head")` matched the *comment* in the fetch step
 that explains this bug, several hundred bytes before the step that runs it.

@@ -185,6 +185,18 @@ def universe(session: Session = Depends(db_session)) -> list[TickerSummary]:
 # --------------------------------------------------------------------------- #
 
 
+def _screener_row(row: dict[str, Any]) -> ScreenerRow:
+    """One scored row, carrying the sentence that says what is behind it.
+
+    The coverage *percentage* has always travelled with the row; the sentence
+    naming the absent categories is composed here rather than in each client,
+    for the reason `market_regime.describe_regime_coverage` gives: two front
+    ends assembling their own version of a claim about how a number was
+    computed is how they come to describe one number differently.
+    """
+    return ScreenerRow(**row, coverage_note=scoring.describe_composite_coverage(row))
+
+
 @app.get("/api/screener", response_model=ScreenerResponse, tags=["screener"])
 def screener(
     profile: str = Query("balanced", description="Investor-profile weighting to read."),
@@ -197,7 +209,7 @@ def screener(
     property that lets the Streamlit sidebar recompute instantly.
     """
     frame = persistence.read_screener_rows(session, profile=profile)
-    rows = [ScreenerRow(**row) for row in _rows(frame)]
+    rows = [_screener_row(row) for row in _rows(frame)]
     as_of = rows[0].date if rows else None
     return ScreenerResponse(
         as_of=as_of,
@@ -346,7 +358,7 @@ def stock_detail(
     return StockDetail(
         symbol=ticker,
         summary=TickerSummary(**_rows(match)[0]),
-        score=ScreenerRow(**score_rows[0]) if score_rows else None,
+        score=_screener_row(score_rows[0]) if score_rows else None,
         explanation=_rating_explanation(score_rows[0]) if score_rows else None,
         prices=[PriceBar(**row) for row in _rows(bars)],
         forecasts=[

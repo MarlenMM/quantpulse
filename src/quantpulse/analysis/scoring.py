@@ -585,6 +585,115 @@ CATEGORY_WORDS: dict[str, str] = {
     "smart_money": "smart money",
 }
 
+#: Words rather than digits, so the sentence below reads as prose.
+_COUNT_WORDS: tuple[str, ...] = (
+    "None",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+)
+
+
+def missing_categories(row: "Mapping[str, object] | pd.Series") -> list[str]:
+    """Which of the seven categories have no sub-score in a stored row.
+
+    Reads the `<category>_score` columns, which is the shape `composite_scores`
+    rows and the API's `ScreenerRow` both carry.
+    """
+    absent: list[str] = []
+    for category in CATEGORIES:
+        value = row.get(CATEGORY_SCORE_COLUMNS[category]) if hasattr(row, "get") else None
+        if value is None or bool(pd.isna(value)):
+            absent.append(category)
+    return absent
+
+
+def describe_composite_coverage(row: "Mapping[str, object] | pd.Series") -> str:
+    """A sentence naming which categories are actually behind this score.
+
+    **`build_composite` renormalizes over whatever it has**, which is the right
+    behaviour and the reason this exists. A name scored without news sentiment
+    and a name scored with all seven both render as a coverage percentage --
+    "good coverage (80%)" -- which says *how much* is missing and never *what*.
+
+    That gap is not hypothetical. Between 2026-08-10 and 2026-09-14 the tier-1
+    news step failed on its budget, sentiment aged past the thirty days
+    `read_latest_sentiment` looks back over, and every one of 503 names was
+    scored with no sentiment at all. Nothing on any page named the category. The
+    only visible trace was a percentage dropping from 90 to 80 and a freshness
+    strip on another page.
+
+    Composed on the server and printed verbatim by both front ends, the same way
+    `market_regime.describe_regime_coverage` is -- the alternative is each
+    surface assembling its own claim about how a number was computed.
+
+    Deliberately does not say *why* a category is absent: a stock with no
+    analyst coverage and a pipeline step that failed last night look identical
+    from here. It says what is missing and points at the freshness strip, which
+    is the surface that does know.
+    """
+    absent = missing_categories(row)
+    total = len(CATEGORIES)
+    if not absent:
+        return f"All {_COUNT_WORDS[total].lower()} categories are behind this score."
+    live = total - len(absent)
+    if live == 0:
+        return "No category produced a reading, so there is no score to read."
+    joined = _join_words([CATEGORY_WORDS[category] for category in absent])
+    return (
+        f"{_COUNT_WORDS[live]} of the {_COUNT_WORDS[total].lower()} categories "
+        f"{'is' if live == 1 else 'are'} behind "
+        f"this score — {joined} {'is' if len(absent) == 1 else 'are'} missing, so the "
+        f"weights are renormalized over the rest rather than counting "
+        f"{'it' if len(absent) == 1 else 'them'} as neutral. The dashboard's data-freshness "
+        "strip shows when each source last updated."
+    )
+
+
+#: Below this many scored names, "absent from every row" is not evidence about
+#: the pipeline at all. One name missing a category is ordinary -- the median
+#: name in the committed database carries 0.90 of its profile's weight -- and on
+#: a universe of one the two statements are literally the same statement. The
+#: real run scores 503; the refresh's end-to-end test scores one, and went red
+#: the moment this function existed without a floor. It also keeps the Screener
+#: quiet when a reader's filters narrow the table to a handful of rows.
+MIN_UNIVERSE_FOR_COVERAGE_CLAIM = 20
+
+
+def zero_coverage_categories(
+    scores: pd.DataFrame, *, min_symbols: int = MIN_UNIVERSE_FOR_COVERAGE_CLAIM
+) -> list[str]:
+    """Categories that produced nothing for the *entire* universe.
+
+    A single name missing a category is ordinary. A category missing for every
+    name is a broken input, and it looked exactly the same from the outside for
+    five weeks. The refresh calls this and degrades the run, so the next one
+    cannot be quiet about it.
+
+    `min_symbols` is what separates the two readings; see
+    `MIN_UNIVERSE_FOR_COVERAGE_CLAIM`.
+    """
+    if len(scores) < min_symbols:
+        return []
+    return [
+        category
+        for category in CATEGORIES
+        if CATEGORY_SCORE_COLUMNS[category] in scores.columns
+        and not scores[CATEGORY_SCORE_COLUMNS[category]].notna().any()
+    ]
+
+
+def _join_words(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
 
 @dataclass(frozen=True)
 class CategoryContribution:

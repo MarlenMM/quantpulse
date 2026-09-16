@@ -81,6 +81,13 @@ class ScreenerRow(BaseModel):
     percentile_rank: float | None = None
     rating: str
     data_confidence: float | None = None
+    #: Which categories are actually behind this score, in words. The percentage
+    #: above says how much of the weight had data; it never says *what* was
+    #: missing, and for five weeks in 2026 that difference hid an entire
+    #: category being absent for all 503 names. Composed server-side so both
+    #: front ends print the same sentence (see
+    #: `scoring.describe_composite_coverage`).
+    coverage_note: str = ""
 
 
 class ScreenerResponse(BaseModel):

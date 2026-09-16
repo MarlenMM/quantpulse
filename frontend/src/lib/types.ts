@@ -44,6 +44,11 @@ export interface ScreenerRow {
   percentile_rank: number | null;
   rating: string;
   data_confidence: number | null;
+  // Which categories are actually behind this score, in words. The percentage
+  // says how much of the weight had data and never says *what* was missing —
+  // the difference that hid an entire category being absent for all 503 names
+  // for five weeks. Composed server-side so both front ends say the same thing.
+  coverage_note: string;
 }
 
 export interface ScreenerResponse {
