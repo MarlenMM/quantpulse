@@ -113,6 +113,42 @@ def test_page_renders_against_the_committed_demo_database(page: Path, real_datab
     )
 
 
+def test_stock_detail_names_the_categories_behind_the_score(real_database: Path) -> None:
+    """Not the coverage percentage -- the categories themselves.
+
+    "good coverage (80%)" says how much of the profile's weight had data and
+    never says what was missing. On the committed database that 80% is news
+    sentiment and industry/macro being absent from all 503 names, and for five
+    weeks in 2026 that state was indistinguishable on this page from a fully
+    covered one.
+
+    Asserted against the real database rather than a fixture because the finding
+    only exists there: a hand-built row would have to have the absence planted
+    in it, at which point the test asserts the plant.
+    """
+    page = next(candidate for candidate in PAGES if candidate.stem == "2_Stock_Detail")
+    result = _render(page, real_database)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "behind this score" in result.stdout, result.stdout[-1500:]
+    # The sentence has to name a category, not merely count them.
+    assert "news sentiment" in result.stdout, result.stdout[-1500:]
+
+
+def test_the_screener_says_when_a_category_is_missing_from_every_row(
+    real_database: Path,
+) -> None:
+    """The universe-level half of the same finding.
+
+    One name missing a category is ordinary. Every name missing it is a broken
+    input, and the table looks identical either way: 503 valid rows, all reading
+    "good coverage (80%)".
+    """
+    page = next(candidate for candidate in PAGES if candidate.stem == "1_Screener")
+    result = _render(page, real_database)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "Missing from every row below" in result.stdout, result.stdout[-1500:]
+
+
 def test_portfolio_renders_holding_only_a_newly_added_ticker(thin_database: Path) -> None:
     """The Portfolio page, holding nothing but an eight-bar unscored symbol.
 

@@ -251,6 +251,31 @@ class TestScreener:
         assert row["fundamental_score"] is None
         assert row["technical_score"] == pytest.approx(80.0)
 
+    def test_every_row_says_which_categories_are_behind_it(self, client: TestClient) -> None:
+        """The coverage percentage says how much of the weight had data. It never
+        says *what* was missing, and that difference hid news sentiment being
+        absent from all 503 names for five weeks in 2026.
+        """
+        row = next(r for r in client.get("/api/screener").json()["rows"] if r["symbol"] == "AAPL")
+        assert row["fundamental_score"] is None
+        assert "fundamentals" in row["coverage_note"]
+        # Not counted as a neutral 50 -- which is the thing a reader would
+        # otherwise assume about a category that is simply not shown.
+        assert "renormalized over the rest" in row["coverage_note"]
+
+    def test_the_stock_page_gets_the_same_sentence_as_the_table(self, client: TestClient) -> None:
+        """Both front ends print this verbatim, so the server has to hand both
+        surfaces one string. Two surfaces composing their own version of a claim
+        about how a number was computed is how they come to disagree -- which has
+        happened three times in this project's history.
+        """
+        screener = next(
+            row for row in client.get("/api/screener").json()["rows"] if row["symbol"] == "AAPL"
+        )
+        detail = client.get("/api/stocks/AAPL").json()["score"]
+        assert detail["coverage_note"] == screener["coverage_note"]
+        assert detail["coverage_note"] != ""
+
     def test_response_is_strictly_valid_json(self, client: TestClient) -> None:
         # A pandas NaN would serialize as a bare `NaN` literal, which is not
         # valid JSON and which JSON.parse rejects outright.

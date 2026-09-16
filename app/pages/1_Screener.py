@@ -375,6 +375,20 @@ def main() -> None:
         },
     )
 
+    # A category missing for *one* name is ordinary -- the median name carries
+    # 0.90 of the profile's weight. A category missing for every name in the
+    # table is a broken input, and it looks identical from here: 503 rows, all
+    # valid, all reading "good coverage (80%)". That was the state of this page
+    # for five weeks while news sentiment was absent from every score.
+    absent_everywhere = scoring.zero_coverage_categories(filtered)
+    if absent_everywhere:
+        st.caption(
+            "Missing from every row below: "
+            + ", ".join(scoring.CATEGORY_WORDS[category] for category in absent_everywhere)
+            + " — each score is renormalized over the categories that had data. "
+            "Settings shows when each source last updated."
+        )
+
     export, _ = st.columns([1, 4])
     export.download_button(
         "Download as CSV",

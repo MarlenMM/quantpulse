@@ -274,6 +274,13 @@ export default function StockDetail({ symbol }: { symbol: string }) {
         </p>
       )}
 
+      {/* "good coverage (80%)" says how much of the weight had data behind it and
+          never says what was missing. Between 10 Aug and 14 Sep 2026 every one of
+          503 names was scored with no news sentiment at all, and nothing on any
+          page named the category. The sentence comes from the server so this and
+          Streamlit cannot describe the same score differently. */}
+      {score?.coverage_note ? <p className="muted">{score.coverage_note}</p> : null}
+
       {/* The price history is the one thing a reader opening a stock page came
           for, so it is the only card on the page. Everything after it is a
           plain section separated by a rule — nine identical rounded panels in a

@@ -448,6 +448,97 @@ def test_run_end_to_end_with_tiny_mocked_universe(engine: Engine) -> None:
     assert len(regimes) == 1  # computed even with sparse inputs (breadth None here)
 
 
+@pytest.mark.parametrize(
+    ("absent", "expected_status"),
+    [(["sentiment"], "partial"), ([], "success")],
+)
+def test_a_category_empty_across_the_universe_degrades_the_run(
+    engine: Engine,
+    caplog: pytest.LogCaptureFixture,
+    absent: list[str],
+    expected_status: str,
+) -> None:
+    """The outage that produced no other evidence for five weeks.
+
+    Between 2026-08-10 and 2026-09-14 the tier-1 news step died on its budget
+    every week, sentiment aged past `read_latest_sentiment`'s thirty-day window,
+    and `refresh_composite_scores` went on writing 503 valid rows a night with
+    that category null in every one. No step raised, so `step()` saw nothing. No
+    step wrote zero rows, so `_STEPS_EXPECTED_TO_WRITE` saw nothing. Every run
+    logged "success".
+
+    The detector is patched rather than provoked with a 500-name fixture, and
+    that still asserts the *caller*: if `run()` stopped calling it, the patched
+    function would never fire and the run would come back "success" — which is
+    exactly the parametrized second case, holding this honest in both
+    directions.
+    """
+    fake_get_session, factory = _fake_session_factory(engine)
+    tiny_universe = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "name": "Apple Inc.",
+                "sector": "Technology",
+                "industry": "Consumer Electronics",
+                "exchange": None,
+                "asset_type": "equity",
+                "is_active": True,
+            }
+        ]
+    )
+    with (
+        patch("refresh_data.get_session", fake_get_session),
+        patch("refresh_data.datetime", wraps=datetime) as clock,
+        patch("refresh_data.is_trading_day", return_value=True),
+        patch("refresh_data.wikipedia_client.fetch_sp500_constituents", return_value=tiny_universe),
+        patch(
+            "refresh_data.yfinance_client.fetch_price_history",
+            return_value=_price_df("AAPL", rows=2),
+        ),
+        patch("refresh_data.options_client.fetch_options_signals", return_value=None),
+        patch("refresh_data.yfinance_client.fetch_fundamentals", return_value={"symbol": "AAPL"}),
+        patch(
+            "refresh_data.short_interest_client.fetch_short_interest",
+            return_value={"symbol": "AAPL", "pct_float_short": None, "days_to_cover": None},
+        ),
+        patch(
+            "refresh_data.edgar_client.fetch_insider_transactions",
+            return_value=_empty_df(list(refresh_data._INSIDER_COLUMNS)),
+        ),
+        patch("refresh_data.gdelt_client.fetch_articles", return_value=_empty_df(["title", "url"])),
+        patch(
+            "refresh_data.gdelt_client.fetch_tone_timeline",
+            return_value=_empty_df(["date", "tone", "query"]),
+        ),
+        patch.object(refresh_data.scoring, "zero_coverage_categories", return_value=absent),
+        caplog.at_level(logging.WARNING),
+    ):
+        clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday: the daily path
+        refresh_data.run(job_name="coverage_run")
+
+    with factory() as session:
+        logs = session.scalars(select(RefreshLog)).all()
+
+    assert [log.status for log in logs] == [expected_status]
+    summaries = [
+        record.getMessage() for record in caplog.records if "finished" in record.getMessage()
+    ]
+    if absent:
+        # **The run's closing line, not merely somewhere in the log.**
+        # `degrade()` writes its own warning the moment it fires, so asserting
+        # on `caplog.text` passed whether or not the summary guard included
+        # these reasons -- the mutation that dropped `degraded_reasons` from
+        # that guard survived this test until it was written this way. The last
+        # line is what a reader of a three-hour log actually sees, and it is
+        # where "partial" has to say *what* was partial.
+        assert summaries, caplog.text
+        assert "finished partial" in summaries[-1], summaries
+        assert "news sentiment produced no data for any symbol" in summaries[-1], summaries
+    else:
+        assert "produced no data for any symbol" not in caplog.text
+
+
 def test_refresh_cross_asset_macro_writes_series(session: Session) -> None:
     from quantpulse.storage.models import MacroIndicator
 

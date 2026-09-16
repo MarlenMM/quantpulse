@@ -220,7 +220,22 @@ _NEWS_REFRESH_ON_WEEKLY_ONLY = True
 # x 347 ms = ~9 min of classification, so ~13 min locally and ~40 on the runner
 # -- comfortably inside the 90-minute step budget below.
 _MAX_SENTIMENT_ARTICLES = 7_000
-_MAX_CLASSIFIED_ARTICLES = 1_500
+#: **Measured on a runner, not estimated.** The 2026-09-14 run classified 1,500
+#: articles in 4,674s -- 3.1s each, against the 192-347ms this project measured
+#: locally, an order of magnitude out. That left the step finishing 5,327s into
+#: a 5,400s budget: 73 seconds of slack in front of the category that feeds
+#: every score. The week before, it had no slack at all and sentiment landed
+#: nowhere for five weeks.
+#:
+#: 500 puts classification near 26 minutes and the whole step near 37, which
+#: survives a slow week rather than depending on one. The deadline added in
+#: `classify_articles` already truncates cleanly, but a cap that fits the budget
+#: means the newest 500 are classified on purpose rather than an arbitrary
+#: prefix being cut off by an alarm. Section 7.3's priority is unchanged and is
+#: what makes this the right thing to spend: `event_type` is read by one
+#: surface, the Dashboard's eight newest stories, while `sentiment_score` feeds
+#: every tilt in the composite.
+_MAX_CLASSIFIED_ARTICLES = 500
 
 # Tier-2 articles per basket that go through the BART event classifier. The rest
 # are still sentiment-scored -- see `refresh_tier2_news` for the measured
@@ -2141,6 +2156,9 @@ def run(
     rows_updated = 0
     failed_steps: list[str] = []
     empty_steps: list[str] = []
+    #: Things that are wrong without any step having failed or written nothing.
+    #: A category empty for the whole universe is the one that has happened.
+    degraded_reasons: list[str] = []
 
     if not is_trading_day(today) and not ignore_market_calendar:
         logger.info("%s: market closed today (%s), skipping refresh", job_name, today)
@@ -2197,6 +2215,27 @@ def run(
             elif status != "failed":
                 status = "partial"
             return 0
+
+    def degrade(reason: str) -> None:
+        """Mark the run degraded for something that is not a step failing.
+
+        `step()` can only judge a step by whether it raised or wrote rows, and
+        the worst outage this pipeline has had did neither: between 2026-08-10
+        and 2026-09-14 the tier-1 news step failed on its budget, sentiment aged
+        past the thirty days `read_latest_sentiment` looks back over, and the
+        composite went on writing 503 perfectly valid rows a night with an
+        entire category empty in every one of them. Every run reported success.
+
+        So a category producing nothing for the *whole* universe reports itself
+        here instead. The run still writes its ratings -- they are the best
+        available and the coverage percentage is honest about them -- but it
+        stops calling that a clean night.
+        """
+        nonlocal status
+        logger.warning("%s: %s", job_name, reason)
+        degraded_reasons.append(reason)
+        if status != "failed":
+            status = "partial"
 
     try:
         with get_session() as session:
@@ -2344,6 +2383,30 @@ def run(
             lambda: _in_session(lambda s: refresh_composite_scores(s, universe_df, today)),
         )
 
+        # **A category empty for the entire universe is not a missing row, it is
+        # a missing input**, and nothing in this job could previously say so.
+        # Between 2026-08-10 and 2026-09-14 the tier-1 news step died on its
+        # budget every week, sentiment aged past the thirty days
+        # `read_latest_sentiment` looks back over, and the composite went on
+        # writing 503 valid rows a night with that category null in every one.
+        # No step failed. No step wrote zero rows. Every run said success.
+        #
+        # Read back from storage rather than checked in memory, deliberately:
+        # this is the shape the Screener and both front ends actually read, and
+        # the earlier lesson here was that asserting the helper rather than the
+        # caller proves nothing.
+        # The shared session, not `_in_session`: that helper coerces its result
+        # to `int` because every *step* returns a row count, and this is a read
+        # that returns category names. A read cannot leave the session needing a
+        # rollback, which is the reason the write steps get their own.
+        for absent in scoring.zero_coverage_categories(
+            persistence.read_screener_rows(session, profile="balanced")
+        ):
+            degrade(
+                f"{scoring.CATEGORY_WORDS[absent]} produced no data for any symbol -- "
+                "every rating written tonight renormalized that category away"
+            )
+
         # The forward test, after the scores it trades on and before the weekly
         # branch's slow half -- for the same reason the alert sits here. It
         # rebalances on the weekly run and merely snapshots on the others, so
@@ -2426,17 +2489,25 @@ def run(
         logger.exception("%s failed", job_name)
         status = "failed"
 
-    if failed_steps or empty_steps:
+    if failed_steps or empty_steps or degraded_reasons:
         # Name them. "partial" on its own sends a reader to grep a long log for
         # a traceback; this puts the answer in the last line. An *empty* step is
         # reported separately from a failed one because they need different
         # answers: a failure has a traceback above it, while "wrote no rows" has
         # nothing above it at all and is the one a reader would otherwise miss.
+        #
+        # And a `degrade()` reason is a third kind again: every step ran, every
+        # step wrote, and the output is still wrong -- a whole category empty
+        # across the universe. It has to be in this guard as well as in the
+        # detail, or the one failure mode that produces no other evidence would
+        # print nothing at all.
         detail = []
         if failed_steps:
             detail.append(f"failed step(s): {', '.join(failed_steps)}")
         if empty_steps:
             detail.append(f"step(s) that wrote nothing: {', '.join(empty_steps)}")
+        if degraded_reasons:
+            detail.append("; ".join(degraded_reasons))
         logger.warning("%s finished %s -- %s", job_name, status, "; ".join(detail))
     else:
         logger.info("%s finished %s (%d rows)", job_name, status, rows_updated)
