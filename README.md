@@ -325,7 +325,21 @@ current data without a redeploy.
 `.github/workflows/refresh_data.yml` rebuilds the demo database
 (`quantpulse_demo.db` — distinct from your own local `quantpulse.db`, see
 `.gitignore`) and publishes it to the `demo-data` release, so neither deployment
-needs API keys of its own (ADR 4.4). It runs
+needs API keys of its own (ADR 4.4).
+
+**There are two database assets, and the split is deliberate.** `demo-data` is
+rolling — replaced every refresh, read by the demo, the Pages build and
+`./run.sh`, because those want the current data. [`ci-fixture`](https://github.com/MarlenMM/quantpulse/releases/tag/ci-fixture)
+is pinned, verified on download against `demo_data.CI_FIXTURE_SHA256`, and read
+only by the CI test job. CI used to read the rolling one, so a refresh that
+published a gutted database on 2026-09-15 turned three unrelated frontend pull
+requests red on a Streamlit test about effective weights — a test job whose
+inputs change underneath it is not testing the diff. Rolling the fixture forward
+is a deliberate commit: upload a newer database to that release and put its
+digest in the same change. The current data is still gated by the publish
+workflow's static-site suite, which runs before the demo updates.
+
+The refresh runs
 **weekday evenings at 22:00 UTC**, one to two hours after the New York close, and
 can also be dispatched by hand (Actions → Data Refresh → Run workflow) to catch a
 database up or to test a fix without waiting for the next run. Monday's run
@@ -344,8 +358,8 @@ The in-app refresh button stays off in hosted `session` mode
 hours-long job on rate-limited quota, and that host omits the model stack the
 refresh needs anyway.
 
-That database is already seeded and committed — a fresh clone has real data
-immediately, which is why `./run.sh` needs no setup. To rebuild it from scratch
+That database is already seeded and published — `./run.sh` downloads it on first
+run, which is why a fresh clone needs no setup. To rebuild it from scratch
 (after a long gap, or to change the history depth):
 
 ```bash
@@ -355,8 +369,12 @@ gh release upload demo-data quantpulse_demo.db --clobber
 ```
 
 The schedule then keeps it current, publishing an updated `quantpulse_demo.db`
-back to `main` (the workflow file's own comments explain why that is safe given
-ADR 4.5's session-vs-sqlite split) and republishing the Pages site against it.
+to the `demo-data` release and republishing the Pages site against it. The
+refresh job fetches that asset before it migrates or writes anything: skipping
+that step is how it once rebuilt an empty database from scratch and clobbered
+three years of history with four weeks of it, so the upload is now gated by
+`scripts/demo_db_guard.py`, which refuses to publish a database that came out of
+a run with fewer rows than it went in with.
 
 Fresher data needs **repo secrets** (Settings → Secrets and variables →
 Actions). **Without them the job still runs, but some datasets stay

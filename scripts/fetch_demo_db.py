@@ -10,17 +10,33 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from quantpulse.demo_data import DEFAULT_TARGET, fetch
+from quantpulse.demo_data import (
+    CI_FIXTURE_SHA256,
+    CI_FIXTURE_URL,
+    DEFAULT_TARGET,
+    RELEASE_URL,
+    fetch,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = argv if argv is not None else sys.argv[1:]
-    target = Path(arguments[0]) if arguments else DEFAULT_TARGET
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # `--ci-fixture` asks for the pinned copy the test job reads, verified by
+    # digest, rather than the rolling one the demo and `./run.sh` read. See
+    # `quantpulse.demo_data` for why those are two different files.
+    pinned = "--ci-fixture" in arguments
+    positional = [argument for argument in arguments if not argument.startswith("-")]
+    target = Path(positional[0]) if positional else DEFAULT_TARGET
     if target.exists():
         print(f"{target} is already here; leaving it alone.")
         return 0
-    print(f"Downloading the demo database (~66 MB) to {target}...")
-    fetch(target)
+    source = "pinned test" if pinned else "demo"
+    print(f"Downloading the {source} database (~70 MB) to {target}...")
+    fetch(
+        target,
+        url=CI_FIXTURE_URL if pinned else RELEASE_URL,
+        expected_sha256=CI_FIXTURE_SHA256 if pinned else None,
+    )
     print(f"Wrote {target} ({target.stat().st_size // 1048576} MB).")
     return 0
 
