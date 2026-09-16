@@ -75,8 +75,15 @@ jobs:
       # Written by the fetch step, read by the publish step at the bottom of the
       # job: the census of the database as it was published *before* this run,
       # and a byte copy of it kept as the one-deep rollback asset.
-      DEMO_DB_BASELINE: ${{ runner.temp }}/demo-db-baseline.json
-      DEMO_DB_PREVIOUS: ${{ runner.temp }}/quantpulse_demo.previous.db
+      #
+      # **Literal paths, not `${{ runner.temp }}`.** The `runner` context does
+      # not exist at job level -- only inside a step -- and GitHub answers a
+      # job-level `env` that uses it by refusing to parse the whole file: the
+      # run is created, fails in zero seconds, and is listed under the file's
+      # path instead of its name. `yaml.safe_load` parses that file happily, so
+      # nothing local catches it; the test added alongside this does.
+      DEMO_DB_BASELINE: /tmp/demo-db-baseline.json
+      DEMO_DB_PREVIOUS: /tmp/quantpulse_demo.previous.db
     steps:
       - uses: actions/checkout@v7
 
