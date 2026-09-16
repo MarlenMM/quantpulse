@@ -154,6 +154,29 @@ class TestDemoDatabaseIsFetched:
                     f"{name} runs the census guard after the upload it is supposed to prevent"
                 )
 
+    def test_no_job_level_env_uses_a_step_only_context(self) -> None:
+        """Valid YAML is not the same as a valid workflow.
+
+        `runner`, `steps`, `job` and `env` itself are step-level contexts.
+        A job-level `env:` that references one -- `${{ runner.temp }}/x.json`
+        was this file's version -- is refused by GitHub *as a whole file*: the
+        run is created, fails in zero seconds with "workflow file issue", and
+        appears in the run list under `.github/workflows/<name>.yml` rather than
+        the workflow's name. `yaml.safe_load` reads it without complaint, so
+        `test_every_workflow_is_parseable_yaml` passes throughout, and the only
+        feedback is a red run after a push.
+        """
+        yaml = pytest.importorskip("yaml")
+        step_only = ("runner.", "steps.", "job.", "env.")
+        for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+            document = yaml.safe_load(path.read_text())
+            for job_name, job in document["jobs"].items():
+                for key, value in (job.get("env") or {}).items():
+                    assert not any(context in str(value) for context in step_only), (
+                        f"{path.name}: job `{job_name}` sets env `{key}` from a step-level "
+                        f"context ({value!r}). GitHub refuses to parse the whole file."
+                    )
+
     def test_every_workflow_is_parseable_yaml(self) -> None:
         """A syntax error here is only ever found by pushing it.
 
