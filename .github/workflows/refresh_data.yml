@@ -71,6 +71,12 @@ jobs:
     # GITHUB_TOKEN is read-only unless a job explicitly asks for more.
     permissions:
       contents: write
+    env:
+      # Written by the fetch step, read by the publish step at the bottom of the
+      # job: the census of the database as it was published *before* this run,
+      # and a byte copy of it kept as the one-deep rollback asset.
+      DEMO_DB_BASELINE: ${{ runner.temp }}/demo-db-baseline.json
+      DEMO_DB_PREVIOUS: ${{ runner.temp }}/quantpulse_demo.previous.db
     steps:
       - uses: actions/checkout@v7
 
@@ -81,6 +87,30 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      # **This job both reads and republishes the database, so it has to start
+      # from the published one.** Without this step `alembic upgrade head`
+      # creates an empty `quantpulse_demo.db`, the refresh builds about a month
+      # of data into it from nothing, and the publish step below clobbers the
+      # release asset with that. That is exactly what happened on 2026-09-15:
+      # the published database went from 417,993 price rows to 9,577, from
+      # 33,320 forecasts to none, and from three years of history to four
+      # weeks. The integrity check guarding the upload passed throughout,
+      # because a small database is still a well-formed one.
+      #
+      # `ci.yml` and `pages.yml` had this step; this job never did, and the test
+      # that asserts the ordering named those two files literally, so nothing
+      # was watching the one workflow that can destroy the asset.
+      #
+      # After `uv sync --locked`, because the fetch imports `quantpulse`; before
+      # the migrations, because an empty file is what they silently create.
+      - name: Fetch the demo database
+        run: |
+          ./scripts/fetch_demo_db.sh
+          uv run python scripts/demo_db_guard.py capture "$DEMO_DB_BASELINE"
+          cp quantpulse_demo.db "$DEMO_DB_PREVIOUS"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # The weekly branch runs three local models, and the two Hugging Face ones
       # -- facebook/bart-large-mnli and FinBERT -- are about 2 GB of weights
@@ -195,9 +225,23 @@ jobs:
             echo "::error::refreshed database fails its own integrity check; not publishing"
             exit 1
           fi
+          # Well-formed is not the same as right. On 2026-09-15 a database
+          # holding four weeks of data passed the check above and replaced one
+          # holding three years. Every writer here is append-only (Section
+          # 6.8), so no table may come out of a run with fewer rows than it
+          # went in with -- measured against the census taken at fetch time. A
+          # missing baseline means the fetch step never ran, which is that same
+          # failure wearing a different hat, and is refused too.
+          uv run python scripts/demo_db_guard.py check "$DEMO_DB_BASELINE" quantpulse_demo.db
           echo "publishing $(du -h quantpulse_demo.db | cut -f1), newest scoring date $(
             sqlite3 quantpulse_demo.db 'select max(date) from composite_scores'
           )"
+          # One-deep rollback, uploaded first so it is in place before anything
+          # is overwritten. The tag stays rolling on purpose -- one current
+          # database, not a numbered series of forty -- but keeping literally
+          # no previous copy is what turned one bad upload into a recovery that
+          # depended on a file happening to still be on a laptop.
+          gh release upload demo-data "$DEMO_DB_PREVIOUS" --clobber
           gh release upload demo-data quantpulse_demo.db --clobber
 
   # Republish the public demo against the data this run just committed.

@@ -276,3 +276,64 @@ Nine for nine, the pattern that worked:
    quietly dropped.
 
 Commit and push each scoped unit of work automatically; no confirmation needed.
+
+---
+
+## 7. Point 19 — the refresh published an empty database over the real one
+
+Found 2026-09-16 in a second audit, fixed the same day. **This is the failure
+mode point 18 created**, and it is worth reading before touching either
+workflow again.
+
+Point 18 moved `quantpulse_demo.db` out of git and onto the rolling
+`demo-data` release. `ci.yml` and `pages.yml` got a fetch step. The refresh
+job — the one that *republishes* the asset — did not. So on 2026-09-15
+`alembic upgrade head` created an empty database, the run filled it with about
+four weeks of data fetched from scratch, and `gh release upload --clobber`
+wrote that over three years of history.
+
+| | published after the run | what it replaced |
+|---|---|---|
+| `price_history` | 9,577 | 417,993 |
+| `forecasts` | 0 | 33,320 |
+| `composite_scores` | 1,509 | 39,234 |
+| `backtest_results` | 0 | 7 |
+
+**Four things let it through, and each is now closed:**
+
+1. **No fetch step.** Added, after `uv sync` (the fetch imports `quantpulse`)
+   and before `alembic upgrade head` (which is what silently creates the empty
+   file).
+2. **`pragma integrity_check` was the only guard on the upload.** A small
+   database is still a well-formed one. `scripts/demo_db_guard.py` now takes a
+   row census at fetch time and refuses the upload if any table came out with
+   fewer rows than it went in with — the pipeline's own append-only invariant
+   (Section 6.8), which is a sharper test than any threshold on file size. A
+   missing baseline is refused too, because that means the fetch never ran.
+3. **The ordering test named two workflows literally**, so the only workflow
+   that can destroy the asset was the one workflow nothing checked. It now
+   reads the directory and applies to anything that runs pytest, the static
+   build, the refresh script, or `gh release upload`.
+4. **The tag kept no history.** The publish step now uploads the pre-run copy
+   as `quantpulse_demo.previous.db` before clobbering, so one bad upload is
+   recoverable from the release alone. Recovery this time depended on a copy
+   that happened to be on a laptop.
+
+**Recovery was a merge, not a restore.** Monday's run had ingested real data
+the laptop copy lacked — news through 09-15, sentiment through 09-14 (the local
+copy stopped at 08-10), prices, insider and options through 09-14. The
+ingested tables were merged in with `INSERT OR IGNORE` and the **derived**
+tables were left alone, because that run computed them against four weeks of
+history: composite scores, patterns, forecasts and the backtest all came from
+the good copy. `insider_transactions` and `index_membership_history` have
+surrogate integer primary keys, so `SELECT *` would have collided on `id` and
+dropped real rows — the first was merged by explicit column list, the second
+skipped entirely (no unique key to dedupe on, and the local copy was already
+the superset).
+
+**A trap worth keeping.** The new test failed on correct YAML at first:
+`text.index("alembic upgrade head")` matched the *comment* in the fetch step
+that explains this bug, several hundred bytes before the step that runs it.
+Match commands in their `run:` form. The same trap is already recorded one
+paragraph up in that test for `build_static_site.py` — it caught a second
+victim within the hour.
