@@ -80,10 +80,26 @@ class TestDemoDatabaseIsFetched:
 
     def test_every_workflow_that_reads_the_database_fetches_it_first(self) -> None:
         """Ordering, not mere presence: fetching after the step that reads the
-        file is the same outage with more YAML."""
-        for name in ("ci.yml", "pages.yml"):
-            text = (REPO / ".github" / "workflows" / name).read_text()
-            if "quantpulse_demo.db" not in text and "pytest" not in text:
+        file is the same outage with more YAML.
+
+        **The workflow list is read off the directory, not typed here.** It used
+        to say `("ci.yml", "pages.yml")` -- and `refresh_data.yml`, the one
+        workflow that *republishes* the database, was therefore the only one
+        nothing checked. It had no fetch step at all, so on 2026-09-15 it
+        migrated an empty file into existence, filled it with four weeks of
+        data, and clobbered three years of history with it. A literal list is a
+        guard that stops covering the thing you add next.
+        """
+        for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+            name = path.name
+            text = path.read_text()
+            reads_or_writes_the_database = (
+                "pytest" in text
+                or "build_static_site.py" in text
+                or "refresh_data.py" in text
+                or "gh release upload" in text
+            )
+            if not reads_or_writes_the_database:
                 continue
             assert "fetch_demo_db.sh" in text, f"{name} never fetches the demo database"
             # Matched as the command a step actually runs, not as a bare
@@ -104,6 +120,39 @@ class TestDemoDatabaseIsFetched:
                     assert fetch < text.index(reader), (
                         f"{name} runs `{reader}` before fetching the database"
                     )
+            # The refresh job is the one that can *destroy* the asset, and it
+            # has two orderings of its own. `alembic upgrade head` is what
+            # quietly creates an empty database when the real one is absent, so
+            # it must come after the fetch -- and so must the refresh script,
+            # which would otherwise fill that empty file in and make it look
+            # like a successful run.
+            #
+            # Matched in their `run:` form, for the reason written above the
+            # fetch anchor: the step that fixed this bug also *explains* it in a
+            # comment, so `text.index("alembic upgrade head")` found the prose
+            # at byte 4379 and compared the fetch against a sentence about
+            # migrating rather than against the migration. This assertion failed
+            # on correct YAML until it matched the command.
+            migrate = "run: uv run alembic upgrade head"
+            if migrate in text:
+                assert fetch < text.index(migrate), (
+                    f"{name} migrates before fetching the database, which creates an empty one"
+                )
+            refresh = "uv run python scripts/refresh_data.py"
+            if refresh in text:
+                assert fetch < text.index(refresh), (
+                    f"{name} runs the refresh before fetching the database"
+                )
+            # And nothing may clobber the published asset without the census
+            # guard having compared what is about to be uploaded against what
+            # was fetched.
+            if "gh release upload" in text:
+                assert "demo_db_guard.py check" in text, (
+                    f"{name} uploads over the released database with no census guard in front of it"
+                )
+                assert text.index("demo_db_guard.py check") < text.index("gh release upload"), (
+                    f"{name} runs the census guard after the upload it is supposed to prevent"
+                )
 
     def test_every_workflow_is_parseable_yaml(self) -> None:
         """A syntax error here is only ever found by pushing it.
