@@ -331,6 +331,28 @@ dropped real rows — the first was merged by explicit column list, the second
 skipped entirely (no unique key to dedupe on, and the local copy was already
 the superset).
 
+**It happened again the next night, before the fix landed.** The 2026-09-16
+00:02 UTC scheduled run rebuilt from empty a second time and published a
+**1.5 MB** database over the 11.7 MB one — smaller again, because a weekday run
+carries only the daily branch. The site did not rebuild on it: the publish
+job's fetch refused the download with `downloaded only 1507328 bytes … that is
+not the database`. **`demo_data.MIN_BYTES` is the consumer-side half of this
+guard and it worked**; what was missing was anything on the producer side, which
+is what `demo_db_guard.py` now supplies.
+
+**The first fix did not run at all, and this is the trap to remember.** The
+job-level `env:` it added used `${{ runner.temp }}`. The `runner` context exists
+only inside a step, and GitHub answers a job-level `env` that reads one by
+refusing to parse **the whole file**: the run is created, fails in zero seconds
+with "this run likely failed because of a workflow file issue", and is listed
+under `.github/workflows/refresh_data.yml` — the path — because an unparseable
+workflow has no name to show. `yaml.safe_load` reads that file happily, so
+`test_every_workflow_is_parseable_yaml` was green throughout and the only
+feedback was a red run after a push. `test_no_job_level_env_uses_a_step_only_context`
+now rejects `runner.`, `steps.`, `job.` and `env.` in any job-level `env` value;
+mutation-checked by putting the expression back, which fails it with the job and
+key named while the YAML-parse test still passes.
+
 **A trap worth keeping.** The new test failed on correct YAML at first:
 `text.index("alembic upgrade head")` matched the *comment* in the fetch step
 that explains this bug, several hundred bytes before the step that runs it.
