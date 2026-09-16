@@ -154,6 +154,34 @@ class TestDemoDatabaseIsFetched:
                     f"{name} runs the census guard after the upload it is supposed to prevent"
                 )
 
+    def test_ci_reads_the_pinned_database_and_the_demo_reads_the_rolling_one(self) -> None:
+        """The two assets exist to keep data failures out of code pull requests.
+
+        CI used to fetch `demo-data`, which the refresh replaces five nights a
+        week. When one of those nights published a gutted database, three
+        unrelated frontend pull requests went red on a Streamlit test about
+        effective weights. Both halves of the split are asserted here, because
+        pinning CI while quietly pinning the demo too would freeze the shop
+        window, and pinning neither is where this started.
+        """
+        workflows = REPO / ".github" / "workflows"
+        ci = (workflows / "ci.yml").read_text()
+        assert "fetch_demo_db.sh --ci-fixture" in ci, (
+            "the test job must read the pinned database, or a bad refresh fails "
+            "pull requests that never touched it"
+        )
+        # A pinned snapshot is a schema snapshot: a migration in the pull
+        # request under test has to be applied to it before anything reads it.
+        assert ci.index("run: uv run alembic upgrade head") < ci.index("run: uv run pytest"), (
+            "ci.yml runs the tests before migrating the pinned database to head"
+        )
+        for name in ("pages.yml", "refresh_data.yml"):
+            text = (workflows / name).read_text()
+            assert "--ci-fixture" not in text, (
+                f"{name} serves or refreshes the live demo and must read the rolling "
+                "asset, not the pinned test copy"
+            )
+
     def test_no_job_level_env_uses_a_step_only_context(self) -> None:
         """Valid YAML is not the same as a valid workflow.
 

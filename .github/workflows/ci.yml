@@ -29,14 +29,39 @@ jobs:
         run: uv run mypy src scripts app
 
       # `tests/integration/test_ui_pages_real_data.py` renders every Streamlit
-      # page against the real database and skips itself when the file is
-      # absent. Now that the database is a release asset rather than a
-      # committed file, not fetching it here would turn ten passing tests into
-      # ten silent skips -- a green CI that stopped checking the pages.
-      - name: Fetch the demo database
-        run: ./scripts/fetch_demo_db.sh
+      # page against a real database and skips itself when the file is absent.
+      # Now that the database is a release asset rather than a committed file,
+      # not fetching it here would turn ten passing tests into ten silent skips
+      # -- a green CI that stopped checking the pages.
+      #
+      # **The pinned copy, not the rolling one.** This step used to fetch
+      # `demo-data`, which the refresh replaces five nights a week, so the test
+      # job's input changed underneath it nightly. On 2026-09-15 the refresh
+      # published a gutted database and three unrelated frontend pull requests
+      # went red on a Streamlit test about effective weights -- a file none of
+      # them had touched, with nothing on screen to say so. `ci-fixture` is
+      # pinned and verified against `demo_data.CI_FIXTURE_SHA256`, so a bad
+      # night can no longer fail a pull request, and if the fixture itself is
+      # ever replaced without its digest being updated, *this* step fails and
+      # says exactly that.
+      #
+      # The current data is still gated, where a failure means what it says: the
+      # publish workflow runs the static-site suite against the rolling asset
+      # before the demo updates, and that is what kept the gutted database off
+      # the site.
+      - name: Fetch the pinned test database
+        run: ./scripts/fetch_demo_db.sh --ci-fixture
         env:
           GH_TOKEN: ${{ github.token }}
+
+      # A pinned snapshot is a schema snapshot too. A migration landing in this
+      # very pull request would otherwise be exercised against a database that
+      # predates it -- which the rolling asset never showed, because the refresh
+      # migrates it every night.
+      - name: Migrate it to head
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
       - name: Test
         run: uv run pytest

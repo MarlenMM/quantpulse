@@ -19,10 +19,26 @@ is not importable there, so a helper living in `scripts/` would have been
 reachable by three of the four callers and silently unavailable to the one that
 cannot fall back to a shell step. `app.lib` already appends `src/` to the path
 for exactly this reason, so here it is importable everywhere.
+
+**There are two sources, and the difference is deliberate.** `demo-data` is
+rolling: the refresh replaces it five nights a week, and it is what the public
+demo, the Pages build and `./run.sh` read, because those want the current data.
+`ci-fixture` is pinned and verified by digest, and it is what the test job
+reads. CI used to read the rolling one, so when the refresh published a gutted
+database on 2026-09-15 three unrelated frontend pull requests went red on
+`test_settings_reports_effective_weights_against_the_real_ranking` -- a
+Streamlit test failing because of a file nobody in those pull requests had
+touched, with nothing on screen to say so. A test job whose inputs change
+underneath it is not testing the diff.
+
+Current data is still exercised, where a failure means what it says: the publish
+workflow's static-site gate runs against the rolling asset before the demo
+updates, and it is what stopped the gutted database reaching the site.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import requests
@@ -32,6 +48,15 @@ RELEASE_URL = (
 )
 DEFAULT_TARGET = Path("quantpulse_demo.db")
 
+#: The pinned copy the test job reads. Rolling it forward is a deliberate act:
+#: upload a newer database to the `ci-fixture` release and put its digest below
+#: in the same commit, so the change to what CI tests against is reviewable and
+#: lands with a reason attached.
+CI_FIXTURE_URL = (
+    "https://github.com/MarlenMM/quantpulse/releases/download/ci-fixture/quantpulse_ci.db"
+)
+CI_FIXTURE_SHA256 = "58480632d3cf613b28fa626bd3799a31c4f2e26c95c324fc91dd7fd031f0fb28"
+
 #: Anything smaller is an error page, not a database. Checked because a silent
 #: HTML download surfaces much later as a corrupt-database error from SQLite,
 #: pointing at everything except the download.
@@ -40,35 +65,54 @@ MIN_BYTES = 10 * 1024 * 1024
 _SQLITE_MAGIC = b"SQLite format 3"
 
 
-def fetch(target: Path = DEFAULT_TARGET, *, timeout: float = 120.0) -> bool:
+def fetch(
+    target: Path = DEFAULT_TARGET,
+    *,
+    url: str = RELEASE_URL,
+    expected_sha256: str | None = None,
+    timeout: float = 120.0,
+) -> bool:
     """Download the database to `target` if absent. True if it downloaded.
 
     Written to a temporary file beside the target and moved into place only
-    after both checks pass. A half-written file at the real path would be
+    after every check passes. A half-written file at the real path would be
     picked up as "already here" by the next run and never repaired -- the
     failure mode that makes a download idempotent-looking and permanently
     broken.
+
+    `expected_sha256` pins the content. Digest, not size: the database that
+    caused this to be written was 11.7 MB of perfectly well-formed SQLite, and
+    passed both checks below.
     """
     if target.exists():
         return False
 
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".partial")
+    digest = hashlib.sha256()
     try:
-        with requests.get(RELEASE_URL, stream=True, timeout=timeout) as response:
+        with requests.get(url, stream=True, timeout=timeout) as response:
             response.raise_for_status()
             with partial.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    digest.update(chunk)
                     handle.write(chunk)
 
         size = partial.stat().st_size
         if size < MIN_BYTES:
             raise RuntimeError(
-                f"downloaded only {size} bytes from {RELEASE_URL} -- that is not the database"
+                f"downloaded only {size} bytes from {url} -- that is not the database"
             )
         with partial.open("rb") as handle:
             if handle.read(len(_SQLITE_MAGIC)) != _SQLITE_MAGIC:
-                raise RuntimeError(f"file from {RELEASE_URL} is not a SQLite database")
+                raise RuntimeError(f"file from {url} is not a SQLite database")
+        if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+            raise RuntimeError(
+                f"the database at {url} is not the pinned one: expected sha256 "
+                f"{expected_sha256}, got {digest.hexdigest()}. This says nothing about the "
+                "code being tested -- either the pinned fixture was replaced without its "
+                "digest being updated, or the download was corrupted."
+            )
 
         partial.replace(target)
         return True
