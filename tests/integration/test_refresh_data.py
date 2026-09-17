@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -772,6 +773,171 @@ def test_refresh_tier2_news_writes_themed_events(session: Session) -> None:
     events = session.scalars(select(NewsEvent).where(NewsEvent.tier == 2)).all()
     assert rows >= 1
     assert any(e.matched_theme is not None and e.event_type == "regulatory/legal" for e in events)
+    # Recorded as the source that answered. When GDELT works, that is GDELT.
+    assert {e.source for e in events} == {"gdelt"}
+
+
+class TestTier2SourceFallback:
+    """Tier-2 news when GDELT refuses -- which, measured, is every weekly run.
+
+    GDELT throttled the shared GitHub runner on every weekly run from 2026-09-08
+    and answered a single unpaced request with HTTP 429 on 2026-09-17. With no
+    fallback, no Tier-2 article landed after 2026-08-18, `read_tier2_news`'s
+    21-day window emptied, and `industry_macro` fell to 0 of 503 names.
+    """
+
+    @staticmethod
+    def _google_frame() -> pd.DataFrame:
+        """What `news_client.fetch_google_news_query` returns, HTML summary included."""
+        return pd.DataFrame(
+            [
+                {
+                    "title": "Freight rates climb for a third week",
+                    "link": "https://news.example/freight",
+                    "summary": '<a href="https://news.example/freight">Freight rates</a>'
+                    '&nbsp;<font color="#6f6f6f">Example Wire</font>',
+                    "published_at": datetime(2026, 9, 15, 12, 0),
+                    "source": "google_news",
+                    "symbol": "",
+                    "tier": 1,
+                }
+            ]
+        )
+
+    @staticmethod
+    def _models() -> tuple[Any, Any, list[pd.DataFrame]]:
+        from quantpulse.news_intelligence.event_classifier import EventClassification, EventType
+        from quantpulse.news_intelligence.sentiment import SentimentScore
+
+        scored: list[pd.DataFrame] = []
+
+        def classify(frame: pd.DataFrame) -> pd.Series:
+            label = EventClassification(EventType.OTHER, 0.5, {}, 1.0)
+            return pd.Series([label] * len(frame), index=frame.index)
+
+        def score(frame: pd.DataFrame) -> pd.Series:
+            scored.append(frame)
+            reading = SentimentScore(polarity=0.2, positive=0.5, negative=0.1, neutral=0.4)
+            return pd.Series([reading] * len(frame), index=frame.index)
+
+        return classify, score, scored
+
+    def _run(self, session: Session, *, gdelt: Any) -> tuple[int, Any, Any, list[pd.DataFrame]]:
+        classify, score, scored = self._models()
+        with (
+            patch("refresh_data.gdelt_client.fetch_articles", **gdelt) as gdelt_fetch,
+            patch(
+                "refresh_data.news_client.fetch_google_news_query",
+                return_value=self._google_frame(),
+            ) as google_fetch,
+            patch("refresh_data.event_classifier.classify_articles", side_effect=classify),
+            patch("refresh_data.sentiment.score_articles", side_effect=score),
+        ):
+            rows = refresh_data.refresh_tier2_news(session, date(2026, 9, 16))
+        session.flush()
+        return rows, gdelt_fetch, google_fetch, scored
+
+    def test_once_gdelt_refuses_it_is_not_asked_again_this_run(self, session: Session) -> None:
+        """Each refusal cost about a minute of 429 backoff on the runner, per basket
+        -- asking again seventeen times is the budget going nowhere."""
+        from quantpulse.storage.models import NewsEvent
+
+        rows, gdelt_fetch, google_fetch, _ = self._run(
+            session, gdelt={"side_effect": RuntimeError("429 Client Error: Too Many Requests")}
+        )
+
+        assert gdelt_fetch.call_count == 1
+        baskets = len(google_fetch.call_args_list)
+        assert baskets >= 2, "the fallback must serve every remaining basket, not only the first"
+        assert rows == 1  # the same fixture article, deduped on its URL across baskets
+        events = session.scalars(select(NewsEvent).where(NewsEvent.tier == 2)).all()
+        assert {e.source for e in events} == {"google_news"}
+
+    def test_an_empty_gdelt_week_asks_the_fallback_without_giving_up_on_gdelt(
+        self, session: Session
+    ) -> None:
+        """A whole sector with nothing for a week is not a plausible answer -- but it
+        is not a refusal either, so the next basket still tries GDELT first."""
+        empty = pd.DataFrame(columns=["title", "url", "published_at"])
+        _, gdelt_fetch, google_fetch, _ = self._run(session, gdelt={"return_value": empty})
+
+        assert gdelt_fetch.call_count == google_fetch.call_count
+        assert gdelt_fetch.call_count >= 2
+
+    def test_both_sources_are_asked_for_the_week_not_the_day(self, session: Session) -> None:
+        """Tier-2 runs weekly and fetched one day. A Monday where every request
+        succeeded still captured one day in seven of a 21-day window."""
+        _, gdelt_fetch, google_fetch, _ = self._run(
+            session, gdelt={"side_effect": RuntimeError("429")}
+        )
+
+        assert gdelt_fetch.call_args.kwargs["timespan"] == "7d"
+        assert all(call.kwargs["days"] == 7 for call in google_fetch.call_args_list)
+
+    def test_google_headlines_are_scored_without_their_html_summaries(
+        self, session: Session
+    ) -> None:
+        """GDELT supplies titles; Google News supplies titles plus markup. Scoring
+        both on the same text is what keeps one basket's average meaningful."""
+        _, _, _, scored = self._run(session, gdelt={"side_effect": RuntimeError("429")})
+
+        assert scored, "no articles reached the sentiment model"
+        for frame in scored:
+            assert "summary" not in frame.columns
+            assert frame["title"].tolist() == ["Freight rates climb for a third week"]
+
+    def test_only_the_newest_eight_are_classified_and_every_article_is_scored(
+        self, session: Session
+    ) -> None:
+        """The cap is 8 because it is the smallest one that provably suffices: an
+        article among the 8 newest overall is necessarily among its own basket's 8
+        newest. So the eight classified must be the *newest* eight, not any eight --
+        and sentiment, which feeds every tilt, must still see all of them."""
+        from quantpulse.news_intelligence.event_classifier import EventClassification, EventType
+        from quantpulse.news_intelligence.sentiment import SentimentScore
+
+        twenty = pd.DataFrame(
+            [
+                {
+                    "title": f"Story {day}",
+                    "link": f"https://news.example/{day}",
+                    "summary": "",
+                    "published_at": datetime(2026, 9, 1) + timedelta(hours=day),
+                    "source": "google_news",
+                    "symbol": "",
+                    "tier": 1,
+                }
+                # Deliberately out of order, so "the first eight" and "the newest
+                # eight" are different sets and the test can tell them apart.
+                for day in [3, 17, 0, 11, 19, 5, 8, 14, 1, 18, 9, 16, 2, 12, 7, 15, 4, 10, 13, 6]
+            ]
+        )
+        classified: list[pd.DataFrame] = []
+        scored: list[pd.DataFrame] = []
+
+        def classify(frame: pd.DataFrame) -> pd.Series:
+            classified.append(frame)
+            label = EventClassification(EventType.OTHER, 0.5, {}, 1.0)
+            return pd.Series([label] * len(frame), index=frame.index)
+
+        def score(frame: pd.DataFrame) -> pd.Series:
+            scored.append(frame)
+            reading = SentimentScore(polarity=0.1, positive=0.4, negative=0.1, neutral=0.5)
+            return pd.Series([reading] * len(frame), index=frame.index)
+
+        with (
+            patch("refresh_data.gdelt_client.fetch_articles", side_effect=RuntimeError("429")),
+            patch("refresh_data.news_client.fetch_google_news_query", return_value=twenty),
+            patch("refresh_data.event_classifier.classify_articles", side_effect=classify),
+            patch("refresh_data.sentiment.score_articles", side_effect=score),
+        ):
+            refresh_data.refresh_tier2_news(session, date(2026, 9, 16))
+
+        assert refresh_data._MAX_CLASSIFIED_TIER2_PER_BASKET == 8
+        first = classified[0]
+        assert len(first) == 8
+        assert sorted(first["title"]) == sorted(f"Story {day}" for day in range(12, 20))
+        assert len(scored[0]) == 20
 
 
 def test_reit_ffo_is_computed_and_stored_in_snapshot(session: Session) -> None:

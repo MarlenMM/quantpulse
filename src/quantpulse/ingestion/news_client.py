@@ -123,6 +123,41 @@ def fetch_google_news(symbol: str, company_name: str | None = None) -> pd.DataFr
     return cached_dataframe(key, _fetch, _cache_dir("google_news"), ttl=timedelta(hours=1))
 
 
+def fetch_google_news_query(query: str, *, days: int = 7) -> pd.DataFrame:
+    """Google News RSS search for an arbitrary `query` over the trailing `days`.
+
+    The Tier-2 fallback. `fetch_google_news` searches for one company; this takes
+    the query as given -- an industry basket's keywords -- and bounds it with
+    Google's own `when:Nd` operator, so the window is set by the search rather
+    than trimmed from whatever came back.
+
+    **Why this exists.** GDELT, the Tier-2 source Section 7.3 names, answered a
+    single unpaced request with HTTP 429 when measured on 2026-09-17, and it
+    throttled the shared GitHub runner on every weekly run from 2026-09-08 --
+    which is how `industry_macro` fell to 0 of 503 names. The same seventeen
+    basket queries against this endpoint returned **50-100 articles each,
+    spanning the full week**, and it is the endpoint Tier-1 already calls from
+    that runner without a recorded failure.
+    """
+    windowed = f"{query} when:{days}d"
+
+    def _fetch() -> pd.DataFrame:
+        raw = _fetch_feed(
+            _GOOGLE_NEWS_URL,
+            {"q": windowed, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            source="google_news",
+            rate_limiter=_google_rate_limiter,
+        )
+        return _entries_to_frame(raw, source="google_news", symbol="")
+
+    # A slug rather than `hash()`, which Python randomizes per process: the key
+    # has to name the same file in the run that writes it and the one that reads.
+    slug = "".join(c if c.isalnum() else "_" for c in windowed.lower())[:150]
+    return cached_dataframe(
+        f"google_query_{slug}", _fetch, _cache_dir("google_news"), ttl=timedelta(hours=1)
+    )
+
+
 def fetch_seeking_alpha_news(symbol: str) -> pd.DataFrame:
     """Seeking Alpha's per-ticker combined RSS feed."""
 

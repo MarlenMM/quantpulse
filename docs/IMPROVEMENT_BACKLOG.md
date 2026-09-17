@@ -390,6 +390,77 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 23 — industry/macro had no data source that answered
+
+Fixed 2026-09-17. **Backlog point 3 had stayed open through four separate
+causes**, and the fourth was that GDELT could not be reached reliably at all:
+on every weekly run from 2026-09-08 it throttled the shared GitHub runner, no
+Tier-2 article landed after 2026-08-18, `read_tier2_news`'s 21-day window
+emptied, and `industry_macro` fell to 0 of 503 names.
+
+**Measured before choosing anything.** GDELT answered a single, unpaced request
+from a developer machine with HTTP 429 — so this was not the pipeline being
+impolite, or only a shared-IP problem. The same seventeen basket queries sent to
+Google News RSS — the keyless endpoint Tier-1 already calls from the runner,
+with no recorded failure — returned **50–100 articles each, spanning the full
+week**. Relevance is mostly on-topic ("Retail sales rise a better-than-expected
+1.2%", "Canada's Steel Tariff Doubles to 50%") with some government and
+press-release noise, comparable to GDELT's own keyword matching.
+
+Four changes:
+
+1. **Fall back, and stay fallen back.** On the first GDELT refusal the run stops
+   asking GDELT and serves every remaining basket from
+   `news_client.fetch_google_news_query`. Each refusal had been costing about a
+   minute of 429 backoff *per basket*. An empty GDELT week also asks the
+   fallback — a whole sector with no coverage for seven days is not a plausible
+   answer — but does not make the switch sticky.
+2. **Fetch the week, not the day.** Tier-2 runs weekly and requested
+   `timespan="1d"` for its whole life, so even a perfect Monday captured one day
+   in seven of a 21-day window. Now `_TIER2_WINDOW_DAYS = 7` for both sources,
+   bounded by Google's own `when:7d` operator rather than trimmed afterwards.
+   Overlap with last week costs nothing: `upsert_news_events` is append-only on
+   `article_id`.
+3. **Record the source that answered.** `source` was hardcoded `"gdelt"`. A
+   sentiment reading from a different corpus is a different claim, and a run log
+   line now says how many baskets came from each.
+4. **Classify only what can be seen.** `_MAX_CLASSIFIED_TIER2_PER_BASKET` 40 →
+   8, and 8 is provably sufficient rather than chosen: the most any surface
+   displays is 8, and an article among the 8 newest *overall* is necessarily
+   among its own basket's 8 newest. At the runner's measured 3.1 s per article,
+   40 × 17 baskets was ~35 minutes of a 50-minute budget.
+
+**Google News is scored on titles only**, because its RSS summaries are HTML
+markup and GDELT supplies titles alone; mixing the two inside one basket's
+average would compare markup against headlines.
+
+**Real-data before/after**, on a copy of the published database with live
+network and the real FinBERT and BART models:
+
+| | before | after |
+|---|---|---|
+| names with an industry tilt | **0 / 503** | **503 / 503** |
+| Tier-2 articles in the 21-day window | 0 | 1,555 |
+| baskets with articles | 0 | all 17 |
+| articles classified | — | 136 (8 × 17) |
+| step runtime | killed at its 1800 s budget | 73 s |
+
+**A second GDELT failure shape turned up in that run** that no mock had
+modelled: not a 429 but an empty body, raised as `JSONDecodeError: Expecting
+value: line 1 column 1`. The fallback treats any exception as a refusal, so it
+held — but it is the reason the fix catches exceptions broadly rather than
+checking for status 429.
+
+**Not fixed here:** the Market Regime Index's macro-news-tone input is also a
+GDELT query (`fetch_tone_timeline`) and fails the same way. Google News has no
+tone timeline to fall back to, and `describe_regime_coverage` already says when
+that input is missing.
+
+Mutation-checked eight ways — refusal never recorded, empty week not falling
+back, a one-day window, summaries scored, source hardcoded, cap back to 40,
+oldest-first before the cap, `when:Nd` dropped — each caught by the test written
+for it.
+
 ### Point 22 — the composite scored without a whole category for five weeks
 
 Fixed 2026-09-16. Between **2026-08-10 and 2026-09-14** every one of 503 names
