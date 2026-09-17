@@ -390,6 +390,74 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 24 — every weekly run said "partial" for a step doing the right thing
+
+Fixed 2026-09-17. The 2026-09-08 run's closing line read *"step(s) that wrote
+nothing: institutional_ownership"*, and so would roughly eleven Mondays in
+twelve. SEC publishes one 13F window a quarter, so most weeks the newest window
+is one already ingested: the step re-downloaded the ~100 MB file, correctly
+inserted nothing, and `_STEPS_EXPECTED_TO_WRITE` — added to catch the months
+this step silently stored nothing — marked the run degraded. **Two good fixes
+composed into a false alarm**, and a status that says "partial" every week is
+one nobody reads.
+
+**Ask before downloading.** `edgar_13f_client.quarter_end_for_window` maps a
+window to the quarter it reports on, and that mapping comes from **Rule 13f-1,
+not a guess**: filings are due within 45 days of quarter end, and the windows
+are offset one month from calendar quarters, so each quarter is due inside the
+window that opens the month it ends. A test checks that premise — quarter end
+plus 45 days lands inside the assigned window — for all twelve months. If
+`persistence.has_institutional_quarter` says the quarter is stored, the step
+returns 0 without downloading. The quarter actually stored is still read from
+the file's dominant `PERIODOFREPORT`; if the file ever disagrees with the rule,
+the file wins and the log says so.
+
+**Leaving the guard without reopening the silence.** The three ways this step
+used to fail quietly now **raise** and fail the step by name: no published
+window, a failed download (previously caught and turned into 0), and a window
+matching no holdings. So `institutional_ownership` left
+`_STEPS_EXPECTED_TO_WRITE`, which now holds `benchmark_prices` alone.
+
+**Measured against live SEC on 2026-09-17**, on a copy of the published
+database: the newest published window is still March–May (June–August had not
+appeared 17 days after it closed), the rule maps it to 2026-03-31, which is
+stored — and **two consecutive calls returned 0 rows in 1.5 s and 0.6 s with no
+download**. Before, each weekly run spent the ~100 MB download to reach the same
+answer and then reported it as a degradation.
+
+**One consequence, stated rather than hidden:** a constituent added mid-quarter
+gets its 13F reading when the next window publishes, not the next Monday.
+Section 24 already treats this as a slow quarterly overlay, and re-downloading
+the same file never reliably picked such names up — issuer-name matching
+decides that.
+
+**Four test classes were reaching SEC live** — `TestPaperTrading`,
+`TestWeeklyBranchCadence`, `TestDividendRefresh` and `TestTier2NewsDeadline`, all
+through `TestAlerting._driven_run`, which ran the weekly branch without stubbing
+13F. Their failures had been swallowed as "wrote nothing"; once the step failed by
+name, the one test asserting an exact failed-steps string broke, which is how
+they surfaced. The shared harness now stubs 13F as already current. Proven with
+a diagnostic plugin that records and raises on SEC's HEAD probe and bulk
+download: 38 tests clean with the stub, 12 errors without it. The refresh test
+module went from 90 s to 40 s.
+
+**Two traps worth keeping from this one:**
+
+- **A fallback triggered by an *empty* primary result reaches every test that
+  mocks the primary as empty.** Point 23's Google News fallback did exactly
+  that: a dozen existing tests fetched live headlines and ran the real models,
+  taking CI's test step past 18 minutes. The new behaviour's own tests all
+  patched the fallback, so none of them — and none of the eight mutations run
+  against them — could see it. The cost showed up only as *other* tests'
+  runtime. When CI suddenly takes three times as long, believe it.
+- **A step that swallows exceptions hides live network calls in tests.** The SEC
+  probes above ran for weeks unnoticed because `step()` catches `Exception`. A
+  guard that only raises proves nothing there; it has to record the call and
+  assert at teardown.
+
+Mutation-checked eight ways, including removing the harness stub to show the
+SEC guard is not vacuous.
+
 ### Point 23 — industry/macro had no data source that answered
 
 Fixed 2026-09-17. **Backlog point 3 had stayed open through four separate

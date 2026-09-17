@@ -112,6 +112,27 @@ def quarter_window_for(as_of: date) -> tuple[date, date]:
     return date(start[0], start[1], 1), _month_end(end[0], end[1])
 
 
+def quarter_end_for_window(window: tuple[date, date]) -> date:
+    """The calendar quarter a bulk-file window's filings report on.
+
+    **Rule 13f-1 decides this, not a guess.** Form 13F is due within 45 days of a
+    calendar quarter's end, and the windows are offset one month from calendar
+    quarters: a quarter ending 31 March is due by 15 May, inside Mar-May; 31
+    December by 14 February, inside Dec-Feb; and likewise June and September. So
+    the quarter a window reports on is the one ending in the window's *first*
+    month. Checked against the one quarter this project has ingested: the
+    2026-03-01 to 2026-05-31 window stored `quarter_end_date` 2026-03-31.
+
+    The period actually stored is still read from the file -- its dominant
+    `PERIODOFREPORT` -- and that stays the source of truth. This exists so a
+    caller can ask "is this quarter already stored?" *before* a ~100MB download,
+    and a caller should treat any disagreement between the two as the file being
+    right.
+    """
+    start, _ = window
+    return _month_end(start.year, start.month)
+
+
 def _prior_quarter_window(window: tuple[date, date]) -> tuple[date, date]:
     """The bulk-file window immediately preceding `window` in the fixed quarterly cycle."""
     start, _ = window

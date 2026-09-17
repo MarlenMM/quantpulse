@@ -188,6 +188,21 @@ def upsert_institutional_ownership(session: Session, records: Sequence[dict[str,
     return _append_only(session, InstitutionalOwnership, records)
 
 
+def has_institutional_quarter(session: Session, quarter_end: date) -> bool:
+    """Whether any 13F ownership row is stored for the quarter ending `quarter_end`.
+
+    Existence rather than completeness, because a quarter is written by a single
+    `upsert_institutional_ownership` call inside one step's session: it lands
+    whole or, on any failure, not at all.
+    """
+    stmt = (
+        select(InstitutionalOwnership.symbol)
+        .where(InstitutionalOwnership.quarter_end_date == quarter_end)
+        .limit(1)
+    )
+    return session.execute(stmt).first() is not None
+
+
 def upsert_options_signals(session: Session, records: Sequence[dict[str, Any]]) -> int:
     """Append daily options-positioning snapshots (append-only per (symbol, date))."""
     return _append_only(session, OptionsSignal, records)
