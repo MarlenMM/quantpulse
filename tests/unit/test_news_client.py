@@ -97,6 +97,63 @@ def test_fetch_google_news_falls_back_to_symbol_without_company_name(tmp_path: P
     assert kwargs["params"]["q"] == "AAPL stock"
 
 
+class TestFetchGoogleNewsQuery:
+    """The Tier-2 fallback: an arbitrary basket query, bounded to a trailing window."""
+
+    def test_the_window_is_googles_own_operator_on_the_query_as_given(self, tmp_path: Path) -> None:
+        """Bounded by the search, not trimmed afterwards: a feed capped at 100 items
+        trimmed to a week keeps whatever 100 Google chose, which may not be the week."""
+        with (
+            patch(
+                "quantpulse.ingestion.news_client.get_settings",
+                return_value=_fake_settings(tmp_path),
+            ),
+            patch(
+                "quantpulse.ingestion.news_client.get_text", return_value=_SAMPLE_FEED
+            ) as mock_get_text,
+        ):
+            df = news_client.fetch_google_news_query(
+                '"freight rates" OR "machinery orders"', days=7
+            )
+
+        assert mock_get_text.call_args.kwargs["params"]["q"] == (
+            '"freight rates" OR "machinery orders" when:7d'
+        )
+        assert len(df) == 2
+        assert set(df["source"]) == {"google_news"}
+
+    def test_a_repeated_query_is_served_from_the_cache(self, tmp_path: Path) -> None:
+        with (
+            patch(
+                "quantpulse.ingestion.news_client.get_settings",
+                return_value=_fake_settings(tmp_path),
+            ),
+            patch(
+                "quantpulse.ingestion.news_client.get_text", return_value=_SAMPLE_FEED
+            ) as mock_get_text,
+        ):
+            news_client.fetch_google_news_query('"power grid"', days=7)
+            news_client.fetch_google_news_query('"power grid"', days=7)
+
+        assert mock_get_text.call_count == 1
+
+    def test_a_different_window_is_a_different_cache_entry(self, tmp_path: Path) -> None:
+        """The window is part of the question; a 1-day answer is not a 7-day one."""
+        with (
+            patch(
+                "quantpulse.ingestion.news_client.get_settings",
+                return_value=_fake_settings(tmp_path),
+            ),
+            patch(
+                "quantpulse.ingestion.news_client.get_text", return_value=_SAMPLE_FEED
+            ) as mock_get_text,
+        ):
+            news_client.fetch_google_news_query('"power grid"', days=1)
+            news_client.fetch_google_news_query('"power grid"', days=7)
+
+        assert mock_get_text.call_count == 2
+
+
 def test_fetch_seeking_alpha_news_lowercases_symbol_in_url(tmp_path: Path) -> None:
     with (
         patch(

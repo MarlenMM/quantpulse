@@ -238,12 +238,22 @@ _MAX_SENTIMENT_ARTICLES = 7_000
 _MAX_CLASSIFIED_ARTICLES = 500
 
 # Tier-2 articles per basket that go through the BART event classifier. The rest
-# are still sentiment-scored -- see `refresh_tier2_news` for the measured
-# reasoning (192 ms/article to classify vs 21 ms to score, and `event_type` is
-# read only by the Dashboard's 8 most recent stories, while `sentiment_score`
-# feeds every stock's industry tilt). 40 leaves a wide margin over those 8 even
-# if several baskets publish at once.
-_MAX_CLASSIFIED_TIER2_PER_BASKET = 40
+# are still sentiment-scored -- see `refresh_tier2_news` for the reasoning:
+# `event_type` is read only by the most recent stories on the dashboard, while
+# `sentiment_score` feeds every stock's industry tilt.
+#
+# **8 is not a guess, it is the smallest cap that provably suffices.** The most
+# any surface displays is 8 (Streamlit Home, and the API's default; the SPA
+# shows 6). An article among the 8 newest *overall* has at most 7 newer articles
+# anywhere, so at most 7 newer in its own basket -- it is necessarily among its
+# basket's 8 newest. Every story a reader can see is therefore classified.
+#
+# The old value, 40, was justified as "a wide margin", and the margin was the
+# cost: classification measured 3.1s per article on a runner (see
+# `_MAX_CLASSIFIED_ARTICLES`), so 40 per basket across 17 baskets was ~35
+# minutes of a 50-minute step budget spent labelling articles nobody sees. At 8
+# it is about seven.
+_MAX_CLASSIFIED_TIER2_PER_BASKET = 8
 # Time held back from the classifier's deadline so the rows it *did* produce
 # still get written. A step that spends its whole budget classifying and is then
 # killed before persisting has done the expensive part for nothing.
@@ -1989,6 +1999,34 @@ def _tier2_baskets_by_staleness(
     return sorted(baskets, key=_key)
 
 
+#: Tier-2 fetches cover a week, because Tier-2 runs on the weekly branch.
+#:
+#: It fetched **one day** for its whole life, on a job that runs once a week: a
+#: Monday on which every request succeeded still captured one day in seven, and
+#: `read_tier2_news` looks back 21 days, so a single failed week emptied a third
+#: of the window and two emptied most of it. A window overlapping last week's
+#: costs nothing -- `upsert_news_events` is append-only on `article_id`, so a
+#: re-seen article is simply skipped.
+_TIER2_WINDOW_DAYS = 7
+
+
+def _google_tier2_articles(basket: "thematic_mapping.ThematicBasket") -> pd.DataFrame:
+    """One basket's week of Google News headlines, in the shape the GDELT path yields.
+
+    **Titles only.** Google News RSS summaries are HTML -- an anchor tag and the
+    publisher's name in a `<font>` tag -- while GDELT supplies titles alone.
+    Scoring one source's markup against the other's headlines would make their
+    sentiment incomparable inside a single basket, which is exactly where the two
+    get averaged together.
+    """
+    query = " OR ".join(f'"{keyword}"' for keyword in basket.keywords)
+    frame = news_client.fetch_google_news_query(query, days=_TIER2_WINDOW_DAYS)
+    columns = ["title", "url", "published_at"]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    return frame.rename(columns={"link": "url"})[columns]
+
+
 def refresh_tier2_news(session: Session, today: date, *, deadline: float | None = None) -> int:
     """Ingest Tier-2 industry/thematic news from GDELT into `news_events` (Section 7.3).
 
@@ -2042,6 +2080,10 @@ def refresh_tier2_news(session: Session, today: date, *, deadline: float | None 
     universe = _active_universe(session)
     baskets = _tier2_baskets_by_staleness(session, universe)
     reached = 0
+    # Once GDELT refuses, it is not asked again this run (see the docstring):
+    # each further refusal cost about a minute of 429 backoff, per basket.
+    gdelt_refused = False
+    baskets_by_source: dict[str, int] = {}
     for basket in baskets:
         if not basket.keywords:
             continue
@@ -2054,14 +2096,33 @@ def refresh_tier2_news(session: Session, today: date, *, deadline: float | None 
             )
             break
         reached += 1
-        query = "(" + " OR ".join(f'"{keyword}"' for keyword in basket.keywords) + ")"
-        try:
-            articles = gdelt_client.fetch_articles(query, timespan="1d")
-        except Exception:
-            logger.exception("GDELT Tier-2 fetch failed for basket %s", basket.name)
-            continue
+        articles = pd.DataFrame()
+        source = "gdelt"
+        if not gdelt_refused:
+            query = "(" + " OR ".join(f'"{keyword}"' for keyword in basket.keywords) + ")"
+            try:
+                articles = gdelt_client.fetch_articles(query, timespan=f"{_TIER2_WINDOW_DAYS}d")
+            except Exception:
+                gdelt_refused = True
+                logger.warning(
+                    "GDELT refused Tier-2 basket %s; every remaining basket this run comes "
+                    "from Google News instead",
+                    basket.name,
+                    exc_info=True,
+                )
+        if articles.empty:
+            # A whole sector with no coverage for a week is not a plausible
+            # answer, and an empty body is a shape a throttled GDELT response has
+            # taken before. Asking the fallback beats storing that as silence.
+            source = "google_news"
+            try:
+                articles = _google_tier2_articles(basket)
+            except Exception:
+                logger.exception("Google News Tier-2 fetch failed for basket %s", basket.name)
+                continue
         if articles.empty:
             continue
+        baskets_by_source[source] = baskets_by_source.get(source, 0) + 1
         # Newest-first before the head() below, so the cap spends the expensive
         # model on exactly the articles the Dashboard can display.
         articles = articles.sort_values(
@@ -2097,10 +2158,21 @@ def refresh_tier2_news(session: Session, today: date, *, deadline: float | None 
                     "matched_theme": basket.name,
                     "event_type": event_type,
                     "sentiment_score": sentiments.iloc[position].polarity,
-                    "source": "gdelt",
+                    # The source that actually answered, not the one Section 7.3
+                    # names. Provenance per stored value is Section 29's rule,
+                    # and a sentiment reading is not the same claim when it
+                    # comes from a different corpus.
+                    "source": source,
                     "source_url": row.url,
                 }
             )
+    if baskets_by_source:
+        # One line that says whether this run used the fallback at all. Without
+        # it the switch from GDELT is visible only by querying `news_events`.
+        logger.info(
+            "Tier-2 baskets by source: %s",
+            ", ".join(f"{name} {count}" for name, count in sorted(baskets_by_source.items())),
+        )
     return persistence.upsert_news_events(session, records)
 
 
