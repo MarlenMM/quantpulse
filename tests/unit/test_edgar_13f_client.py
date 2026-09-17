@@ -525,3 +525,40 @@ class TestLatestPublishedWindow:
             ),
         ):
             assert edgar_13f_client.latest_published_window(date(2026, 9, 5)) is None
+
+
+# --- quarter_end_for_window ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("as_of", "expected_quarter_end"),
+    [
+        (date(2026, 1, 15), date(2025, 12, 31)),
+        (date(2026, 4, 15), date(2026, 3, 31)),
+        (date(2026, 7, 15), date(2026, 6, 30)),
+        (date(2026, 10, 15), date(2026, 9, 30)),
+    ],
+)
+def test_quarter_end_for_window_is_the_quarter_ending_in_its_first_month(
+    as_of: date, expected_quarter_end: date
+) -> None:
+    window = edgar_13f_client.quarter_window_for(as_of)
+    assert edgar_13f_client.quarter_end_for_window(window) == expected_quarter_end
+
+
+def test_every_quarter_is_due_inside_the_window_the_rule_assigns_it() -> None:
+    """The rule's premise, checked across a whole year rather than asserted.
+
+    Rule 13f-1 gives filers 45 days after quarter end. If that deadline ever fell
+    outside the window this function names, the window's dominant period would be
+    a different quarter and the "already stored?" check would ask about the wrong
+    one -- so the check is on the deadline, not only on the date arithmetic.
+    """
+    from datetime import timedelta
+
+    for month in range(1, 13):
+        window = edgar_13f_client.quarter_window_for(date(2026, month, 15))
+        quarter_end = edgar_13f_client.quarter_end_for_window(window)
+        deadline = quarter_end + timedelta(days=45)
+        assert window[0] <= quarter_end <= window[1], (window, quarter_end)
+        assert window[0] <= deadline <= window[1], (window, quarter_end, deadline)

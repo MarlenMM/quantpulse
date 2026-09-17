@@ -867,3 +867,24 @@ class TestDividendReads:
         )
         session.commit()
         assert list(persistence.read_dividends(session, ["AAPL"])["symbol"]) == ["AAPL"]
+
+
+def test_has_institutional_quarter_answers_for_that_quarter_only(session: Session) -> None:
+    """Asked before a ~100MB download, so it has to be exact about which quarter."""
+    from quantpulse.storage.models import InstitutionalOwnership
+
+    assert not persistence.has_institutional_quarter(session, date(2026, 3, 31))
+    # AAPL already exists: this module's `session` fixture inserts it.
+    session.add(
+        InstitutionalOwnership(
+            symbol="AAPL",
+            quarter_end_date=date(2026, 3, 31),
+            total_shares_held=1.0,
+            total_value=1.0,
+            num_filers=1,
+        )
+    )
+    session.flush()
+
+    assert persistence.has_institutional_quarter(session, date(2026, 3, 31))
+    assert not persistence.has_institutional_quarter(session, date(2026, 6, 30))

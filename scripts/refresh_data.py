@@ -378,7 +378,15 @@ _CRITICAL_STEPS = frozenset({"composite_scores", "market_regime"})
 # `tier2_news` finds no matching articles, `macro_indicators` has no FRED key,
 # and `backtest` explicitly declines to store a run that would describe nothing.
 # Only steps that pull from a source that always has *something* belong here.
-_STEPS_EXPECTED_TO_WRITE = frozenset({"institutional_ownership", "benchmark_prices"})
+#
+# **`institutional_ownership` left this set, and did not lose its protection.**
+# It turned out to have an honest empty run too, and a common one: SEC publishes
+# one 13F window a quarter, so most Mondays the newest window is already stored,
+# and listing the step here marked roughly eleven runs in twelve "partial" for
+# doing exactly the right thing. The failures this set was added to catch -- no
+# published window, a failed download, a window matching nothing -- now raise
+# inside `refresh_institutional_ownership`, and fail the step by name.
+_STEPS_EXPECTED_TO_WRITE = frozenset({"benchmark_prices"})
 
 _REIT_SECTOR = "Real Estate"
 
@@ -939,24 +947,63 @@ def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, to
     signals. `latest_published_window` asks SEC which window exists instead of
     computing one, which is the only form of this that cannot drift with the
     publication lag.
+
+    **Zero rows can now mean "already current", and says so.** SEC publishes one
+    window a quarter, so for roughly eleven weeks in twelve the newest window is
+    one this step has already ingested. It used to re-download the ~100MB file
+    every Monday and correctly insert nothing -- and `_STEPS_EXPECTED_TO_WRITE`,
+    written to catch the months when this step silently stored nothing at all,
+    then marked every one of those runs "partial". A status that says "partial"
+    every week is one nobody reads.
+
+    So the step asks first, via the Rule 13f-1 filing deadline
+    (`edgar_13f_client.quarter_end_for_window`), and returns 0 without
+    downloading when that quarter is stored. The silent failures that guard
+    existed for **raise instead of returning 0**: no published window, a failed
+    download, and a window matching no holdings each fail the step by name.
+
+    One consequence, stated rather than hidden: a constituent added to the index
+    mid-quarter gets its 13F reading when the next window publishes, not on the
+    next Monday. Section 24 already treats this as a slow quarterly overlay, and
+    re-downloading the same file never reliably picked such names up anyway --
+    issuer-name matching is what decides whether a holding is found.
     """
     window = edgar_13f_client.latest_published_window(today)
     if window is None:
-        logger.warning(
-            "13F: no published bulk window found within the last %d quarters of %s; "
-            "institutional ownership will not update this run",
-            edgar_13f_client._MAX_WINDOW_LOOKBACK,
-            today,
+        raise RuntimeError(
+            f"13F: no published bulk window found within the last "
+            f"{edgar_13f_client._MAX_WINDOW_LOOKBACK} quarters of {today}"
+        )
+    quarter = edgar_13f_client.quarter_end_for_window(window)
+    if persistence.has_institutional_quarter(session, quarter):
+        logger.info(
+            "13F: the %s to %s window reports the quarter ending %s, which is already "
+            "stored; nothing new until SEC publishes the next window",
+            window[0],
+            window[1],
+            quarter,
         )
         return 0
     logger.info("13F: using published window %s to %s", window[0], window[1])
-    try:
-        trend = edgar_13f_client.fetch_institutional_ownership_trend(window, universe)
-    except Exception:
-        logger.exception("Failed to fetch 13F institutional ownership for window %s", window)
-        return 0
+    trend = edgar_13f_client.fetch_institutional_ownership_trend(window, universe)
+    if trend.empty:
+        raise RuntimeError(
+            f"13F: the {window[0]} to {window[1]} window matched no holdings in the universe"
+        )
     records = _records_from_df(trend, _INSTITUTIONAL_COLUMNS)
-    return persistence.upsert_institutional_ownership(session, records)
+    written = persistence.upsert_institutional_ownership(session, records)
+    if not written:
+        # Non-empty records writing nothing means every row was already stored
+        # -- under the quarter the *file* reports, which the deadline rule did
+        # not predict. The file is the source of truth; say so and move on.
+        logger.warning(
+            "13F: the %s to %s window's holdings were already stored, but not under "
+            "the quarter ending %s that the filing-deadline rule predicted",
+            window[0],
+            window[1],
+            quarter,
+        )
+    return written
 
 
 def _macro_news_tone(today: date) -> float | None:
