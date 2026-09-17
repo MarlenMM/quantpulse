@@ -40,6 +40,27 @@ from quantpulse.storage.models import (
 from quantpulse.utils.market_calendar import is_trading_day
 
 
+@pytest.fixture(autouse=True)
+def _google_news_fallback_is_offline() -> Iterator[None]:
+    """Tier-2's Google News fallback returns nothing unless a test says otherwise.
+
+    Finding 23 made an *empty* GDELT week ask Google News, and many tests here
+    mock GDELT to an empty frame and then run the weekly branch. Unstubbed, each
+    of them fetched ~100 live headlines per basket and ran the real FinBERT and
+    BART models over them: one test went from about a second to 23.5, the local
+    suite from ~2 minutes to ~5.5, and CI's test step past 18 minutes --
+    network-dependent and nondeterministic, and invisible to the Tier-2 tests,
+    which all patch this call themselves.
+
+    A test that wants articles patches it again inside; the innermost patch wins.
+    """
+    empty = pd.DataFrame(
+        columns=["title", "link", "summary", "published_at", "source", "symbol", "tier"]
+    )
+    with patch("refresh_data.news_client.fetch_google_news_query", return_value=empty):
+        yield
+
+
 def _empty_df(columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
