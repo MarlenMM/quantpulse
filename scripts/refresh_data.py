@@ -2359,17 +2359,6 @@ def run(
     try:
         with get_session() as session:
             rows_updated += sync_universe(session)
-            # The searchable catalogue of everything else. Cheap (one file
-            # fetch, names only) and it must not be able to break the ranked
-            # universe, so it runs behind `step()` like any other optional
-            # source: a Nasdaq outage costs search coverage for a day, not the
-            # night's prices.
-            # Its OWN session, deliberately. `step()` swallows the exception but
-            # cannot undo what it did to the session: a failed flush leaves the
-            # shared one needing a rollback, so the *next* statement on it fails
-            # too and an isolated step takes down the whole run. That is exactly
-            # what a malformed listing row did the first time this ran.
-            rows_updated += step("catalogue", lambda: _in_session(sync_catalogue))
             # Record the index add/drop this sync just detected into the
             # point-in-time membership history, so it stays honest for the
             # survivorship-aware backtest between cold-start re-seeds (Section 6.9).
@@ -2379,6 +2368,33 @@ def run(
             ).all()
             active = {symbol: _last_price_date(session, symbol) for symbol, _ in active_tickers}
             universe_df = _active_universe(session)
+        # The searchable catalogue of everything else. Cheap (one file
+        # fetch, names only) and it must not be able to break the ranked
+        # universe, so it runs behind `step()` like any other optional
+        # source: a Nasdaq outage costs search coverage for a day, not the
+        # night's prices.
+        # Its OWN session, deliberately. `step()` swallows the exception but
+        # cannot undo what it did to the session: a failed flush leaves the
+        # shared one needing a rollback, so the *next* statement on it fails
+        # too and an isolated step takes down the whole run. That is exactly
+        # what a malformed listing row did the first time this ran.
+        #
+        # **And after the block above has committed -- never inside it.** It
+        # used to run between `sync_universe` and the end of that block. SQLite
+        # has one writer, and `sync_universe`'s flush writes whenever the index
+        # changed, then holds that lock until the shared session commits; the
+        # catalogue's own session then waited out the busy timeout and failed
+        # with "database is locked". So it failed on exactly the nights new
+        # tickers appear: the empty-database night, and 2026-09-21, the Monday
+        # S&P's quarterly rebalance took effect.
+        #
+        # The lock was also covering an ordering bug. A session of its own
+        # cannot see the shared session's uncommitted new constituents, so
+        # without the lock it would have inserted them as catalogue rows and the
+        # shared commit would then have collided on the primary key -- rolling
+        # back the universe sync itself. "A ranked symbol is never demoted"
+        # (`sync_catalogue`) only holds if the universe is committed first.
+        rows_updated += step("catalogue", lambda: _in_session(sync_catalogue))
         name_by_symbol = {symbol: name for symbol, name in active_tickers}
         sector_by_symbol = dict(zip(universe_df["symbol"], universe_df["sector"], strict=True))
 
