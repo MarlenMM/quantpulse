@@ -3317,3 +3317,163 @@ class TestTier2NewsDeadline:
 
         tier2.assert_called()
         assert tier2.call_args.kwargs.get("deadline") is not None, tier2.call_args
+
+
+class TestTheCatalogueWaitsForTheUniverse:
+    """Finding 25: the catalogue failed with "database is locked" exactly when it
+    mattered most -- on the nights new tickers appear.
+
+    `sync_universe` flushes through the run's shared session, and SQLAlchemy only
+    emits SQL for values that changed. On an ordinary night nothing changes and no
+    write lock is taken. On a night the index changes -- the empty-database night,
+    and 2026-09-21, the Monday S&P's quarterly rebalance took effect -- the flush
+    writes, SQLite holds that lock until the shared session commits, and the
+    catalogue, running *inside* that block in a session of its own, waited out the
+    busy timeout and failed.
+
+    The lock was also covering an ordering bug. The catalogue's own session cannot
+    see the shared session's uncommitted new constituents, so without the lock it
+    would insert them as catalogue rows and the shared commit would then collide
+    on the primary key, rolling back the universe sync with it.
+    """
+
+    @staticmethod
+    def _constituents(*symbols: str) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": symbol,
+                    "name": f"{symbol} Inc",
+                    "sector": "Industrials",
+                    "industry": "Machinery",
+                    "exchange": "NYSE",
+                    "asset_type": "equity",
+                    "is_active": True,
+                }
+                for symbol in symbols
+            ]
+        )
+
+    def test_no_step_opens_its_own_session_inside_an_open_shared_one(self) -> None:
+        """SQLite has one writer. An own-session write nested inside a shared
+        session that has written is a deadlock waiting for a night when both
+        write, so the shape itself is refused -- not only the one instance of it
+        that failed in production."""
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(refresh_data.run)))
+        nested: list[int] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            opens_shared = any(
+                isinstance(item.context_expr, ast.Call)
+                and getattr(item.context_expr.func, "id", None) == "get_session"
+                for item in node.items
+            )
+            if not opens_shared:
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call) and getattr(inner.func, "id", None) == "_in_session":
+                    nested.append(inner.lineno)
+        assert nested == [], (
+            f"`_in_session` is called inside an open `get_session()` block at run() "
+            f"lines {nested}; it will deadlock on any night both sessions write"
+        )
+
+    def test_a_rebalance_night_catalogues_without_locking_or_demoting(self, tmp_path: Path) -> None:
+        """The 2026-09-21 shape, end to end through `run()`.
+
+        A real SQLite *file* -- in-memory SQLite has no cross-connection locking --
+        with a short busy timeout, so a regression fails in a fraction of a
+        second rather than after the default five.
+        """
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'rebalance.db'}", connect_args={"timeout": 0.3}
+        )
+        Base.metadata.create_all(engine)
+        _stamp_migration_head(engine)
+        fake_get_session, factory = _fake_session_factory(engine)
+        with factory() as session:  # last week's index: AAA and BBB
+            for symbol in ("AAA", "BBB"):
+                session.add(
+                    Ticker(symbol=symbol, name=f"{symbol} Inc", asset_type="equity", is_active=True)
+                )
+            session.commit()
+
+        listings = pd.DataFrame(
+            [
+                # NEWCO joins the index tonight *and* is in the listing directory:
+                # the collision the ordering exists to prevent.
+                {
+                    "symbol": "NEWCO",
+                    "name": "NewCo Inc",
+                    "exchange": "NYSE",
+                    "asset_type": "equity",
+                },
+                {
+                    "symbol": "SOMEETF",
+                    "name": "Some ETF",
+                    "exchange": "Cboe BZX",
+                    "asset_type": "etf",
+                },
+            ]
+        )
+        messages: list[str] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                messages.append(record.getMessage())
+
+        handler = _Capture()
+        logging.getLogger("refresh_data").addHandler(handler)
+        try:
+            with (
+                patch("refresh_data.get_session", fake_get_session),
+                # A Tuesday, pinned: `run()` takes the weekly branch on a Monday,
+                # and a test that reads the real weekday is not a test.
+                patch("refresh_data.datetime", wraps=datetime) as clock,
+                patch("refresh_data.is_trading_day", return_value=True),
+                patch(
+                    "refresh_data.wikipedia_client.fetch_sp500_constituents",
+                    return_value=self._constituents("AAA", "NEWCO"),
+                ),
+                patch("refresh_data.listing_client.fetch_us_listings", return_value=listings),
+                patch(
+                    "refresh_data.fetch_ticker_data",
+                    side_effect=lambda symbol, *a, **k: refresh_data.TickerFetchResult(
+                        symbol=symbol, price_df=_price_df(symbol, rows=1)
+                    ),
+                ),
+                patch("refresh_data.refresh_benchmark_prices", return_value=1),
+                patch("refresh_data.refresh_institutional_ownership", return_value=0),
+                patch(
+                    "refresh_data.yfinance_client.fetch_price_history",
+                    side_effect=lambda symbol, period="5y": _price_df(symbol, rows=3),
+                ),
+                patch(
+                    "refresh_data.gdelt_client.fetch_tone_timeline",
+                    return_value=_empty_df(["date", "tone", "query"]),
+                ),
+            ):
+                clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday
+                refresh_data.run(job_name="test_rebalance")
+        finally:
+            logging.getLogger("refresh_data").removeHandler(handler)
+
+        assert not any("step catalogue failed" in m for m in messages), [
+            m for m in messages if "catalogue" in m.lower()
+        ]
+        with factory() as session:
+            rows = {
+                symbol: (coverage, is_active)
+                for symbol, coverage, is_active in session.execute(
+                    select(Ticker.symbol, Ticker.coverage, Ticker.is_active)
+                )
+            }
+        assert rows["SOMEETF"] == (Ticker.CATALOGUE, False)
+        # "A ranked symbol is never demoted" -- on the one night it could be.
+        assert rows["NEWCO"] == ("ranked", True)
+        assert rows["BBB"][1] is False

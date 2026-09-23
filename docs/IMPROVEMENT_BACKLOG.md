@@ -390,6 +390,61 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 25 — the catalogue failed exactly on the nights new tickers appeared
+
+Fixed 2026-09-23. It first showed on the empty-database night (2026-09-15) and
+looked like an artefact of that night. **It recurred on 2026-09-21 on a normal,
+populated database** — the Monday S&P's quarterly rebalance took effect — with
+the same `sqlite3.OperationalError: database is locked`, this time while
+inserting new ETF listings.
+
+**The mechanism.** `sync_universe` rewrites every constituent's name, sector and
+active flag each night and flushes through the run's shared session. SQLAlchemy
+only emits SQL for values that changed, so on an ordinary night nothing is
+written and no lock is taken. On a night the index changes, the flush writes,
+and SQLite holds that write lock until the shared session commits at the end of
+its block. The catalogue ran *inside* that block, in a session of its own, and
+every night has something new to catalogue (8–15 listings) — so it waited out
+the 5-second busy timeout and failed. It failed precisely when new tickers
+appear, which is when the catalogue matters most. Reproduced on the real
+functions against a SQLite file in 0.34 s before anything was changed.
+
+**The lock was covering an ordering bug.** A session of its own cannot see the
+shared session's uncommitted new constituents, so without the lock the
+catalogue would have inserted them as catalogue rows, and the shared commit
+would then have collided on the primary key and rolled back the universe sync
+itself. `sync_catalogue`'s own promise — *a ranked symbol is never demoted* —
+only holds if the universe is committed first.
+
+**The fix is ordering, not waiting.** The catalogue now runs just after the
+shared block commits. Nothing left in that block depended on it: the queries
+after it filter on `is_active`, and catalogue rows are inactive. The audit's
+first suggestion, a longer busy timeout, was wrong — against this bug it would
+only have made the failure arrive later.
+
+Two tests. A **structural** one parses `run()` and refuses any `_in_session`
+call inside an open `get_session()` block: SQLite has one writer, so that shape
+is a deadlock waiting for a night when both sessions write, and refusing the
+shape covers the next instance rather than only this one. A **behavioural** one
+drives `run()` through a rebalance night on a real SQLite file with a 0.3 s busy
+timeout, with a new constituent that is also in the listing directory: the
+catalogue must not fail, the ETF must land as catalogue, and the new constituent
+must stay ranked. Moving the step back inside the block fails both.
+
+**What the same 2026-09-21 run confirmed about earlier points**, since it was
+the first weekly run to carry them:
+
+- **24:** *"13F: the 2026-03-01 to 2026-05-31 window reports the quarter ending
+  2026-03-31, which is already stored"* — no download, no false "partial".
+- **23:** *"GDELT refused Tier-2 basket oil_gas; every remaining basket this run
+  comes from Google News"*, then all 17 baskets scored, and the next night
+  closed `finished success` with industry/macro populated — the first clean
+  night in weeks.
+- **22:** tier-1 classification measured **5.0 s per article** on that runner
+  (2,485 s for 500), worse than the 3.1 s the cap was sized from. At the cap of
+  500 the step took ~50 of its 90 minutes; at the old 1,500 classification alone
+  would have needed about two hours.
+
 ### Point 24 — every weekly run said "partial" for a step doing the right thing
 
 Fixed 2026-09-17. The 2026-09-08 run's closing line read *"step(s) that wrote
