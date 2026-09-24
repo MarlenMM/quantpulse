@@ -271,6 +271,9 @@ jobs:
     uses: ./.github/workflows/pages.yml
     with:
       ref: main
+      # This run's own `notify` job below reports a failed publish, so the
+      # called workflow's copy stays quiet -- one failure, one message.
+      failure_notice: caller
 
   # Keep the schedule above from being switched off: GitHub disables a public
   # repository's scheduled workflows after 60 days without repository activity,
@@ -288,3 +291,64 @@ jobs:
     uses: ./.github/workflows/keepalive.yml
     with:
       refresh_result: ${{ needs.refresh.result }}
+
+  # Finding 27: nothing told anyone when this broke. On 2026-09-15 the run went
+  # red and published an empty database; on 2026-09-24 the refresh succeeded,
+  # the publish gate failed, and the demo froze on the previous day. Both were
+  # findable only by opening the Actions tab.
+  #
+  # `failure()` over every job whose failure matters -- `publish` included,
+  # since that is the one that failed on 09-24 -- but not `staleness`, which
+  # posts its own notice. With no webhook configured the script logs one line
+  # and exits 0. The URL reaches it through `env` only, never a `run:` line.
+  notify:
+    needs: [refresh, publish, keepalive]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Say which job failed, and where
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}
+        run: |
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > "$RUNNER_TEMP/jobs.json"
+          uv run python scripts/pipeline_alert.py failure \
+            --workflow "$GITHUB_WORKFLOW" --run-url "$RUN_URL" --jobs-json "$RUNNER_TEMP/jobs.json"
+
+  # The half a failure notice cannot cover: a site that stops moving while
+  # every run is green, or while no run happens. Reads the *published*
+  # health.json and fails when its newest prices are more than two trading
+  # sessions behind (`pipeline.STALE_AFTER_SESSIONS`, chosen against the run
+  # history -- see its comment). No `needs`: it must run on exactly the nights
+  # the refresh does not, and it runs first, a day after the last publish, so
+  # Pages' cache cannot show it a stale copy of a fresh deploy.
+  #
+  # The limit, stated: it rides on this schedule. If the schedule itself stops,
+  # so does this -- `keepalive` exists to stop that happening.
+  staleness:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Check the public demo is still moving
+        env:
+          ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/pipeline_alert.py staleness --site-url https://marlenmm.github.io/quantpulse/

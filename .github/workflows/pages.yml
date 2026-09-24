@@ -36,6 +36,15 @@ on:
           every step green.)
         type: string
         required: false
+      failure_notice:
+        description: >-
+          "caller" when the calling workflow reports this run's failure itself
+          (the nightly does), so one failure produces one message. A string
+          rather than a boolean on purpose: GitHub's `==` is loose, and an
+          absent boolean input compares equal to false.
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -161,3 +170,33 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # Finding 27: a failed publish on a push says so. When the nightly calls this
+  # workflow it passes `failure_notice: caller` and reports the failure itself,
+  # so this stays quiet then -- one failure, one message. With no webhook
+  # configured the script logs one line and exits 0; the URL reaches it through
+  # `env` only.
+  notify:
+    needs: [build, deploy]
+    if: failure() && inputs.failure_notice != 'caller'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Say which job failed, and where
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ALERT_DISCORD_WEBHOOK_URL: ${{ secrets.ALERT_DISCORD_WEBHOOK_URL }}
+        run: |
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > "$RUNNER_TEMP/jobs.json"
+          uv run python scripts/pipeline_alert.py failure \
+            --workflow "$GITHUB_WORKFLOW" --run-url "$RUN_URL" --jobs-json "$RUNNER_TEMP/jobs.json"
