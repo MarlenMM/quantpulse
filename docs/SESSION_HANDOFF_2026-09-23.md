@@ -364,7 +364,14 @@ mentioning "repo-committed file", `[skip ci]`, "none left to keep alive"). GitHu
 docs do not define "repository activity"; do not assume a bot push or an API call
 counts without evidence.
 
-### 27 · Nothing tells you the pipeline broke (S2)
+### 27 · Nothing tells you the pipeline broke (S2) — FIXED 2026-09-25
+
+**Status:** fixed in `bcb8450`. `notify` jobs (`if: failure()`) in `refresh_data.yml`
+and `pages.yml` post the failed job + step and the run URL through
+`alerting/pipeline.py` → `discord.send`; a `staleness` job reads the published
+`health.json` and fails when prices are more than `STALE_AFTER_SESSIONS = 2` NYSE
+sessions behind (chosen by replaying the run history). Unset webhook → one log line,
+exit 0. CI green; Pages evaluated `notify` and skipped it. Backlog §7 has the detail.
 
 The 2026-09-15 run went red at 02:57 UTC, published an empty database, and left
 the site frozen. It was findable only by opening the Actions tab. The alerting

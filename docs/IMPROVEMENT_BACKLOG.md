@@ -130,6 +130,14 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   dependency for months while `react-plotly.js` resolved its peer `plotly.js`
   instead. Removing it left the largest built chunk byte-identical — that
   comparison is how to tell, not reading imports.
+- **`[skip ci]` anywhere in a commit message skips every push-triggered
+  workflow** — including when the message is only *describing* a comment that
+  mentions it. On 2026-09-25 two consecutive pushes (`9f79591`, `c0f00dc`)
+  created no CI or Pages run, with GitHub reporting every component
+  operational, because their messages quoted the stale `[skip ci]` comment they
+  were removing. The next push, without the string, ran normally. `ci.yml` has
+  no `workflow_dispatch`, so the only recovery is another push. Grep the message
+  before pushing; "a push produced zero runs" has a cause worth checking first.
 - **`gh run list` first.** A workflow that was cancelled or never created writes
   nothing the app can see, and that has been the single biggest bug twice.
 
@@ -389,6 +397,60 @@ never exposed, because the refresh migrates it nightly.
 publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
+
+### Point 27 — nothing told anyone when the pipeline broke
+
+Fixed 2026-09-25. On 2026-09-15 the nightly went red and published an empty
+database; on 2026-09-24 the refresh succeeded, the publish gate failed (point
+42) and the demo froze on the previous day. Both were findable only by opening
+the Actions tab. Point 10's alerting is about the *data*; nothing had the job
+itself as its subject.
+
+**Failure notices.** `src/quantpulse/alerting/pipeline.py` +
+`scripts/pipeline_alert.py failure`: read this run's jobs with
+`gh run view --json jobs`, name each failed job and its first failed step, and
+post that with the run URL through the existing `discord.send`. On the real
+09-24 run it reads *"publish / build — step 'Check the built site actually
+serves its data'"*. `refresh_data.yml` has a `notify` job (`needs: [refresh,
+publish, keepalive]`, `if: failure()`); `pages.yml` has one for push runs, and
+stays quiet when the nightly called it (new string input `failure_notice:
+caller`) — one failure, one message. A string rather than a boolean because
+GitHub's `==` is loose and an absent boolean compares equal to `false`.
+
+**The unset path is the normal one.** `ALERT_DISCORD_WEBHOOK_URL` is unset (as
+in every fork): one log line, exit 0 — run locally against the real 09-24 jobs
+JSON it logs exactly that. The URL reaches the script through `env` only; a test
+refuses it in any `run:` line. A configured webhook that *refuses* exits 1 with
+`discord.send`'s already-redacted error, because a revoked webhook would
+otherwise make every later notice vanish silently.
+
+**Staleness — the half a failure notice cannot see.** A job in the nightly with
+no `needs` (so it runs on exactly the nights the refresh fails), first, a day
+after the last publish (so Pages' cache cannot show it a stale copy of a fresh
+deploy). It reads the *published* `health.json` and counts completed NYSE
+sessions newer than its price date — the market calendar, and today only after
+the 16:00 ET close. A healthy site reads **1** at that moment: tonight's.
+
+`STALE_AFTER_SESSIONS = 2`, **from the record**. Replaying every scheduled run
+from 2026-07-27 to 2026-09-24, the site was one missed night behind five times —
+two isolated (08-03, 09-24) and three the first night of a real outage, the
+longest thirteen sessions and unnoticed for two weeks. Alerting past two fires
+on the second night of all three outages and on neither isolated miss (those
+already get the failure notice). It is `STALE_AFTER_DAYS`' rule — "roughly twice
+the cadence" — counted in sessions, so Labor Day and Thanksgiving weeks raise
+nothing (both tested: weekday counting would have alarmed on each). A stale site
+fails the job whether or not the webhook is set: the missing secret is not an
+error, the frozen site is, and a red run is something GitHub can email about
+(depending on notification settings).
+
+**Verified:** CI green on `bcb8450`; the next Pages run evaluated `notify` and
+skipped it on success; run locally, the live site (2026-09-23 prices) was within
+bounds. **Mutation-checked sixteen ways**, each failing its own test.
+
+**Limits, stated:** the staleness check rides on the nightly schedule — if that
+stops, so does it (point 26 is what stops that). The notice jobs need
+`uv sync`; a run that failed *because* PyPI was down may not be able to report
+it, and then only the red run remains.
 
 ### Point 26 — the schedule would have switched itself off after 60 idle days
 
