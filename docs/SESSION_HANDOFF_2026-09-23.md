@@ -12,6 +12,17 @@ open finding in full, and the prompt for the next session.
 - **Previous (2026-09-03) audit page, points 1–18:** <https://claude.ai/code/artifact/daf2285a-ae37-4964-a239-976ad0a84116>
 - **Deeper per-fix write-ups** are in `docs/IMPROVEMENT_BACKLOG.md` §7 (points 19–25), and each commit message carries the full reasoning.
 
+**Continued 2026-09-25** (HEAD `e4303d1`, **1,943 passed / 1 skipped**, CI green on
+`bcb8450`): **26, 27, 41 fixed; 42 found and fixed; 28's README fixed** (the keys are
+still the user's). Per-finding status is marked in §3; detail in backlog §7. Findings
+page version 8. **Not yet observed:** the first scheduled run carrying the new jobs
+(2026-09-25 ~00:00 UTC). It should show `keepalive` logging "nothing to do",
+`staleness` passing (site at 2026-09-24 data after that night's publish, or 09-23
+before it), `notify` skipped, and `publish / notify` skipped. Check it with
+`gh run list --workflow refresh_data.yml -L 1` first thing. Next work: 29–40
+(33, 34, 35 need the user's call). One new environment trap: never put the
+skip-ci marker in a commit message, even quoted (backlog §2).
+
 ---
 
 ## 1. Environment facts a new session must know first
