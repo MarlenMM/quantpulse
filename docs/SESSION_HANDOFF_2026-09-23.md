@@ -328,7 +328,14 @@ Text as audited on 2026-09-16, with **dated updates** where facts have changed.
 Severity: **S1** data lost or published wrong · **S2** visible to anyone who
 opens the demo · **S3** built, and idle or unreachable · **S4** hygiene.
 
-### 26 · The schedule will switch itself off, and point 18 is why (S2)
+### 26 · The schedule will switch itself off, and point 18 is why (S2) — FIXED 2026-09-25
+
+**Status:** fixed in `9f79591` (with 41). `keepalive.yml`, called by the refresh
+every night, commits `docs/refresh_status.md` when `main` has been idle 30 days;
+it has no schedule of its own because the rule disables every scheduled workflow
+at once. Proven by a forced dispatch (run `36034421003` → bot commit `172e223`,
+no CI/Pages run triggered). Unproven: GitHub does not document that a bot
+commit resets the clock; every report says it does. Full write-up in backlog §7.
 
 GitHub's documentation: *"In a public repository, scheduled workflows are
 automatically disabled when no repository activity has occurred in 60 days."*
@@ -580,7 +587,12 @@ read the console before merging.
 Merge order matters (they all touch `package.json`/lockfile): rebase with
 `gh pr comment N --body "@dependabot rebase"` after each merge.
 
-### 41 · The refresh workflow's comments describe a repository that no longer exists (S4)
+### 41 · The refresh workflow's comments describe a repository that no longer exists (S4) — FIXED 2026-09-25
+
+**Status:** closed by finding 26's fix (`9f79591`, plus `pages.yml` in the follow-up
+docs commit): the blocks now describe the release asset, the restored cron and the
+60-day rule, and `test_no_workflow_still_describes_a_committed_database` refuses
+the stale phrases in every workflow file.
 
 They explain why the database is committed, what `[skip ci]` is for on a
 data-only commit, and that there is no schedule left to keep alive. All three
@@ -594,6 +606,16 @@ the restored cron, and the 60-day rule. **Update 2026-09-23:** still present at
 rewrite this block.)
 
 ---
+
+### 42 · The publish gate held the demo hostage to the market (S2) — FIXED 2026-09-25
+
+Found while starting on 26. Scheduled run `35937083808` (2026-09-24): refresh
+green, `publish / build` red on one static test — it asserted the literal text
+"Risk On", and the 2026-09-23 regime came out *neutral* (55.7). The demo stayed
+on 2026-09-22 data and would have until the market turned risk-on. Fixed in
+`f6f25a7`: the gate asserts the label the generated `regime__limit-90.json`
+holds. Reproduced on the published database first; mutation-checked two ways;
+live `health.json` moved to 2026-09-23 on the next publish.
 
 ## 4. Additional open items (not numbered in the audit)
 

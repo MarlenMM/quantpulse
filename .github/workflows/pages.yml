@@ -7,7 +7,8 @@
 #
 # Pages serves files, so the React SPA -- which is a static bundle already --
 # needs its API turned into files too. `scripts/build_static_site.py` does that
-# by running the real FastAPI app over the committed demo database and writing
+# by running the real FastAPI app over the demo database (the `demo-data`
+# release asset, fetched below) and writing
 # every response it can produce, so the published numbers are the API's own
 # output rather than a second implementation.
 #
@@ -19,19 +20,20 @@ name: Publish demo site
 on:
   push:
     branches: [main]
-  # Called by the nightly data refresh once it has committed fresh data.
-  # The nightly's own commit carries `[skip ci]`, so the `push` trigger above
-  # never fires for it -- without this call the published site would keep
-  # serving whatever data was current when a human last pushed code.
+  # Called by the nightly data refresh once it has uploaded fresh data. That
+  # upload is a release asset, not a push, so the `push` trigger above never
+  # fires for it -- without this call the published site would keep serving
+  # whatever data was current when a human last pushed code.
   workflow_call:
     inputs:
       ref:
         description: >-
-          Git ref to publish. The nightly must pass `main`, because it commits
-          the refreshed database *during* its own run and `github.sha` is
-          frozen at the commit that started it -- checking that out would
-          publish the database from before the refresh, every single night,
-          with every step green.
+          Git ref to build. The nightly passes `main`: `github.sha` is
+          frozen at the commit that was current when its run was scheduled,
+          and the code to build is whatever `main` holds now. (When the
+          nightly still committed the database mid-run, checking out
+          `github.sha` published the previous night's data every time, with
+          every step green.)
         type: string
         required: false
   workflow_dispatch:

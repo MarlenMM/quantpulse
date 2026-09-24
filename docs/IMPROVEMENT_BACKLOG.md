@@ -390,6 +390,87 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 26 — the schedule would have switched itself off after 60 idle days
+
+Fixed 2026-09-25, with **point 41** (the comments that hid it). GitHub disables
+a public repository's scheduled workflows after 60 days without repository
+activity. Until point 18 the refresh committed the database every weeknight, so
+this could not happen; since the database became a release asset only a person
+commits. Measured: the repository was 66 days old, its longest gap between
+commits 18.7 days — the exposure is the quiet period after active work stops,
+which is exactly when nobody would notice the demo freezing. The workflow's own
+comment said the caveat *"no longer applies … there is none left to keep
+alive"*, written while the cron was removed and left behind when it came back.
+
+**What counts as "activity" is not documented**, and it decided the mechanism.
+GitHub's page says only "no repository activity"; community reports disagree
+about releases and about the workflow-enable API (one maintainer in GitHub's
+own discussion forum was waiting two months to find out). A commit on the
+default branch is the one thing every account agrees counts, and its effect is
+checkable: the last commit's date *is* the clock.
+
+- `scripts/keep_schedule_alive.py` (standard library only) writes
+  `docs/refresh_status.md` — the last refresh's result and run URL, and when the
+  demo database was last published — **only when `main` has been idle for 30
+  days**. At most one commit a month; none in any month with another commit, so
+  point 18's reason for leaving git is not undone. Thresholds at or past 60 are
+  refused.
+- `.github/workflows/keepalive.yml` has **no schedule of its own**: the rule
+  disables every scheduled workflow in a repository at once, so a separate timer
+  would stop at the same moment as the refresh. The refresh calls it as a job
+  (`needs: refresh`, `if: always()` — a run of failed nights is when nobody may
+  be committing). `workflow_dispatch` with `max_idle_days: 0` forces a
+  heartbeat.
+- The heartbeat is pushed with `GITHUB_TOKEN`, which by design starts no other
+  workflow — no CI run, no Pages rebuild.
+
+**Verified end to end** rather than in a month: run `36034421003` (forced)
+committed `172e223` as `github-actions[bot]`, and no CI or Pages run followed
+it. **What remains unproven** is GitHub's side: that a bot commit resets the
+60-day clock is what every report says, not what GitHub documents. The limit is
+stated in `keepalive.yml`: if the schedule has already been disabled, nothing in
+the repository can run to fix it — `gh workflow enable refresh_data.yml`.
+
+**Point 41** is closed by the same commit: the publish step's comment now
+describes the release asset and what moving it cost; the publish job and
+`pages.yml` no longer explain a `[skip ci]` commit that stopped existing; and a
+test refuses those phrases in *every* workflow file (it caught `pages.yml` on
+its first mutation — a literal file list would not have).
+
+Mutation-checked eleven ways, each failing its own test by name.
+
+**Trap, seen again:** the push of `9f79591` created no workflow runs at all,
+with GitHub reporting every component operational — the quirk recorded in
+memory. `ci.yml` has no `workflow_dispatch`, so the only recovery is another
+push.
+
+### Point 42 — the publish gate held the demo hostage to the market
+
+Found and fixed 2026-09-25, while starting on 26. The 2026-09-24 scheduled run
+(`35937083808`) went red: the refresh succeeded, then `publish / build` failed
+one static-site test of 26 and the demo stayed on 2026-09-22 data. The test
+asserted the Dashboard shows the literal text **"Risk On"** — a claim about the
+market. On 2026-09-23 the regime scored 55.7 (76.1 the day before) and came out
+*neutral*, so the gate would have held the site until the market happened to
+turn risk-on again. Nobody was told (that is point 27).
+
+The gate now reads the newest label from the generated `regime__limit-90.json`
+and asserts its humanized form through the client's own `humanize()` — still a
+value that can only have come from the database. Reproduced first on the
+published 2026-09-23 database (same failure), 26/26 after, and mutation-checked
+two ways (the Dashboard rendering the oldest row; an empty regime file). Live
+`health.json` moved from 2026-09-22 to 2026-09-23 on the next publish.
+
+**Trap:** a browser gate that asserts a *data value* by literal is a test of
+the data, and data moves. Assert that the page shows what the generated file
+says, not what it said the day the test was written.
+
+**An observation, not investigated:** the regime's 76.1 → 55.7 drop coincides
+with the macro-tone input (GDELT, handoff §4 item A) returning after two days
+absent, at −0.57, its most negative reading that week — so part of the move may
+be renormalization over four inputs instead of three rather than the market.
+Not attributed; worth a look alongside item A.
+
 ### Point 25 — the catalogue failed exactly on the nights new tickers appeared
 
 Fixed 2026-09-23. It first showed on the empty-database night (2026-09-15) and
