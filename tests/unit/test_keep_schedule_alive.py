@@ -184,10 +184,20 @@ class TestTheWiring:
 class TestTheCommentsTellTheTruth:
     """Finding 41: the comment claiming the 60-day rule no longer applied is what hid 26."""
 
-    def test_the_refresh_no_longer_describes_a_committed_database(self) -> None:
-        text = (WORKFLOWS / "refresh_data.yml").read_text()
-        for stale in ("none left to keep alive", "[skip ci]", "repo-committed file"):
-            assert stale not in text, f"refresh_data.yml still says {stale!r}"
+    def test_no_workflow_still_describes_a_committed_database(self) -> None:
+        # Every file, not a named one: pages.yml carried the same `[skip ci]`
+        # explanation, and a literal list stops covering whatever is added next.
+        stale_phrases = (
+            "none left to keep alive",
+            "[skip ci]",
+            "repo-committed file",
+            "committed demo database",
+            "has committed fresh data",
+        )
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            text = workflow.read_text()
+            for stale in stale_phrases:
+                assert stale not in text, f"{workflow.name} still says {stale!r}"
 
     def test_the_refresh_states_the_rule_it_is_exposed_to(self) -> None:
         text = (WORKFLOWS / "refresh_data.yml").read_text()
