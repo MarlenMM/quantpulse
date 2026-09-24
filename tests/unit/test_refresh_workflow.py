@@ -3,7 +3,7 @@
 Two facts about the schedule are load-bearing and neither is visible from the
 Python side, where every other rule in this project is checked:
 
-* **It has to exist.** Without it nothing updates the repo-committed demo
+* **It has to exist.** Without it nothing updates the published demo
   database, and both public deployments age in place. That is not theoretical:
   the schedule was removed on 2026-08-27 and by 2026-09-06 the demo's own
   freshness strip read "24 days ago" for sentiment, on the third screenful of
@@ -50,7 +50,7 @@ def _cron_entries(workflow: dict) -> list[str]:
 
 def test_the_refresh_is_scheduled(workflow: dict) -> None:
     assert _cron_entries(workflow), (
-        "the data refresh has no `schedule:`, so nothing updates the committed demo "
+        "the data refresh has no `schedule:`, so nothing updates the published demo "
         "database and both public deployments age in place -- which is exactly what "
         "happened between 2026-08-27 and 2026-09-06"
     )

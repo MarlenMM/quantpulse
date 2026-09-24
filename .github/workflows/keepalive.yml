@@ -1,0 +1,92 @@
+name: Keep the schedule alive
+
+# GitHub: "In a public repository, scheduled workflows are automatically
+# disabled when no repository activity has occurred in 60 days." The refresh
+# used to commit the demo database every weeknight, so this never came up; since
+# point 18 moved the database to a release asset, nothing but a person commits.
+#
+# GitHub does not define "repository activity". Reports disagree about releases
+# and API calls (including the workflow-enable endpoint); a commit on the default
+# branch is the one thing every account agrees counts, and its effect is
+# checkable -- the last commit's date *is* the clock. So when `main` has been idle
+# for 30 days this commits `docs/refresh_status.md`, and otherwise does nothing.
+#
+# **No `schedule:` here, on purpose.** The rule switches off every scheduled
+# workflow in the repository at once, so a timer of its own would stop at the
+# same moment as the refresh it exists to protect. It rides on the refresh's
+# schedule instead (`refresh_data.yml` calls it every night).
+#
+# `workflow_dispatch` with `max_idle_days: 0` forces a heartbeat, which is how
+# the commit path is proven end to end without waiting a month.
+#
+# The limit this cannot get round: if the refresh schedule has *already* been
+# disabled, nothing here runs. Re-enable it with
+# `gh workflow enable refresh_data.yml -R MarlenMM/quantpulse`.
+on:
+  workflow_call:
+    inputs:
+      max_idle_days:
+        type: number
+        default: 30
+      refresh_result:
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      max_idle_days:
+        description: >-
+          Commit a heartbeat if `main` has been idle this many days. 0 forces one.
+        type: number
+        default: 30
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # `main`, whatever triggered this: the commit has to land on the default
+      # branch to count, and a refresh run's `github.sha` is already behind it.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Decide, and write the status file if main is idle
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_IDLE_DAYS: ${{ inputs.max_idle_days }}
+          REFRESH_RESULT: ${{ inputs.refresh_result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          asset=$(gh release view demo-data --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | select(.name == "quantpulse_demo.db") | "\(.updatedAt) \(.size)"' || true)
+          python3 scripts/keep_schedule_alive.py \
+            --last-commit-epoch "$(git log -1 --format=%ct)" \
+            --max-idle-days "${MAX_IDLE_DAYS:-30}" \
+            --status-file docs/refresh_status.md \
+            --github-output "$GITHUB_OUTPUT" \
+            --published-at "${asset%% *}" \
+            --published-bytes "$(echo "${asset##* }" | grep -xE '[0-9]+' || echo 0)" \
+            --refresh-result "$REFRESH_RESULT" \
+            --run-url "$RUN_URL"
+
+      # Pushed with GITHUB_TOKEN, which by design starts no other workflow -- so
+      # the heartbeat triggers neither CI nor a Pages rebuild. A person pushing
+      # at the same moment is retried over rather than lost.
+      - name: Commit the heartbeat
+        if: steps.decide.outputs.commit == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/refresh_status.md
+          git commit -m "Record the refresh status so the nightly schedule stays enabled"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "heartbeat committed: $(git log -1 --format='%h %cI')"
+              exit 0
+            fi
+            git pull --rebase origin main
+          done
+          echo "::error::could not push the heartbeat commit after 3 attempts"
+          exit 1
