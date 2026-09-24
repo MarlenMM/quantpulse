@@ -67,8 +67,8 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    # Needed to push the refreshed database back below -- the default
-    # GITHUB_TOKEN is read-only unless a job explicitly asks for more.
+    # Needed to upload the refreshed database to the `demo-data` release below
+    # -- the default GITHUB_TOKEN is read-only unless a job asks for more.
     permissions:
       contents: write
     env:
@@ -172,30 +172,12 @@ jobs:
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
 
-      # ADR 4.4: "commit/store the results" so the live app never needs
-      # rate-limited API keys of its own. `quantpulse_demo.db` (not
-      # `quantpulse.db` -- see .gitignore) is a repo-committed file separate
-      # from anyone's local dev database, precisely so the two can never
-      # collide. Safe to commit now that Phase 10's ADR 4.5 split exists: the
-      # deployed app runs PORTFOLIO_BACKEND=session, so no visitor's portfolio
-      # data ever lands in this shared file -- only the same screener/market
-      # data every visitor already sees. `[skip ci]` skips re-running the
-      # test workflow on a data-only commit; the bot identity is GitHub's
-      # standard one for Actions-authored commits.
-      #
-      # ADR 4.4's caveat about GitHub auto-disabling a workflow after 60 days of
-      # repo inactivity no longer applies -- that only ever affected `schedule:`
-      # triggers, and there is none left to keep alive. The flip side is that
-      # the demo database, and therefore both public deployments, are only as
-      # fresh as the last time somebody dispatched this.
-      #
-      # `if: always()` because the refresh step exits non-zero on a hard
-      # failure (so the job actually goes red instead of silently reporting
-      # success for days). Whatever data did land before the failure is still
-      # worth committing -- the point of the exit code is visibility, not
-      # discarding a partly-successful run's work.
-      # ADR 4.4's "commit/store the results" -- as a release asset rather than
-      # a commit.
+      # ADR 4.4's "commit/store the results" so the live app never needs
+      # rate-limited API keys of its own -- as a release asset, not a commit.
+      # `quantpulse_demo.db` (not `quantpulse.db` -- see .gitignore) is separate
+      # from anyone's local dev database, so the two can never collide, and it
+      # is safe to publish because the deployed app runs
+      # PORTFOLIO_BACKEND=session: no visitor's portfolio ever lands in it.
       #
       # It was committed for 40 revisions, and those 40 blobs were **309 MB of a
       # 317 MB repository**: 97.5%, against 8 MB for every source file, test and
@@ -205,17 +187,28 @@ jobs:
       # every night's copy is very nearly a whole new 66 MB object.
       #
       # A release asset costs nothing against repository size, has a 2 GB
-      # per-file ceiling, and is what `./run.sh` and both workflows now fetch.
-      # The reader's promise is unchanged and paid for differently: one download
-      # on first run, rather than every version of the file ever made arriving
-      # at `git clone`.
+      # per-file ceiling, and is what `./run.sh` and the Pages build fetch. The
+      # reader's promise is unchanged and paid for differently: one download on
+      # first run, rather than every version of the file ever made arriving at
+      # `git clone`.
+      #
+      # **What moving it cost: the nightly commit was also what kept the
+      # schedule on.** GitHub disables a public repository's scheduled workflows
+      # after 60 days without repository activity. While this job committed the
+      # database every weeknight that could not happen; now nothing but a person
+      # commits, so the `keepalive` job at the bottom of this file commits a
+      # small status file whenever `main` has been idle for 30 days. See
+      # `keepalive.yml` for why a commit, and why it has no timer of its own.
       #
       # `--clobber` because the tag is deliberately rolling: there is one
       # current database, not a numbered series of them, and keeping 40 of these
       # is the thing being fixed.
       #
-      # `if: always()` for the same reason the commit step had it -- whatever
-      # landed before a failure is still worth publishing.
+      # `if: always()` because the refresh step exits non-zero on a hard failure
+      # (so the job goes red instead of silently reporting success for days).
+      # Whatever data landed before the failure is still worth publishing -- the
+      # exit code is for visibility, not for discarding a partial run's work --
+      # and the census check below is what refuses a run that lost data.
       - name: Publish the refreshed database
         if: always()
         env:
@@ -251,22 +244,23 @@ jobs:
           gh release upload demo-data "$DEMO_DB_PREVIOUS" --clobber
           gh release upload demo-data quantpulse_demo.db --clobber
 
-  # Republish the public demo against the data this run just committed.
+  # Republish the public demo against the database this run just uploaded.
   #
-  # It has to be an explicit call rather than a `push` trigger on the Pages
-  # workflow: the commit above carries `[skip ci]`, which suppresses every
-  # workflow that push would otherwise start. Without this the site would go on
+  # It has to be an explicit call: uploading a release asset is not a push, so
+  # nothing else would start the Pages workflow, and the site would go on
   # serving whatever data was current the last time a human pushed code, while
   # looking perfectly healthy.
   #
-  # `always()` for the same reason the commit step uses it -- a partial refresh
+  # `always()` for the same reason the publish step uses it -- a partial refresh
   # still produced data worth publishing, and the job's exit code is there for
   # visibility rather than to discard the run's work.
   #
-  # `ref: main` is load-bearing. `github.sha` is fixed at whatever `main` pointed
-  # at when this run started, and the refresh job commits the new database
-  # *after* that -- so the default checkout would publish the previous run's
-  # data every time, with every step green and nothing to notice.
+  # `ref: main` so the site is built from the newest code on `main`, not from
+  # `github.sha` -- the commit `main` pointed at when this run was *scheduled*.
+  # It mattered more when this job committed the database mid-run (the default
+  # checkout then published the previous night's data every time, with every
+  # step green); it still keeps the build current with any push, including a
+  # keepalive heartbeat, made while the refresh was running.
   publish:
     needs: refresh
     if: always()
@@ -277,3 +271,20 @@ jobs:
     uses: ./.github/workflows/pages.yml
     with:
       ref: main
+
+  # Keep the schedule above from being switched off: GitHub disables a public
+  # repository's scheduled workflows after 60 days without repository activity,
+  # and since the database became a release asset this workflow commits
+  # nothing. `keepalive.yml` commits a status file when `main` has been idle for
+  # 30 days, and does nothing otherwise.
+  #
+  # `always()`: a run of failed nights is exactly when nobody may be committing,
+  # and the heartbeat must not depend on the data being good.
+  keepalive:
+    needs: refresh
+    if: always()
+    permissions:
+      contents: write
+    uses: ./.github/workflows/keepalive.yml
+    with:
+      refresh_result: ${{ needs.refresh.result }}
