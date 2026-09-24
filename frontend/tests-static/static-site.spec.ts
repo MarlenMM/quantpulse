@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
+
+import { humanize } from "../src/lib/format";
 
 /**
  * The published static site actually serves its data.
@@ -38,7 +43,18 @@ test("the dashboard renders live figures from the pre-rendered data", async ({ p
   // The regime section renders "hasn't been computed yet" until its own fetch
   // resolves, so assert on the value rather than the heading -- the heading is
   // there either way.
-  await expect(page.getByText("Risk On")).toBeVisible();
+  //
+  // The value is read from the generated file, never written here. This line
+  // once said "Risk On", which is a claim about the market, not the site: on
+  // 2026-09-23 the regime scored 55.7, came out "neutral", and this gate held
+  // the whole demo at the previous day's data -- and would have kept holding it
+  // until the market happened to turn risk-on again.
+  const regime = JSON.parse(
+    readFileSync(join(process.cwd(), "dist", "data", "regime__limit-90.json"), "utf8"),
+  ) as { regime_label: string }[];
+  const label = regime.at(-1)?.regime_label;
+  expect(label, "the pre-rendered regime file has no rows").toBeTruthy();
+  await expect(page.getByText(humanize(label), { exact: true })).toBeVisible();
 
   expect(errors).toEqual([]);
 });
