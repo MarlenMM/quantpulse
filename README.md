@@ -369,7 +369,13 @@ gh release upload demo-data quantpulse_demo.db --clobber
 ```
 
 The schedule then keeps it current, publishing an updated `quantpulse_demo.db`
-to the `demo-data` release and republishing the Pages site against it. The
+to the `demo-data` release and republishing the Pages site against it. One
+thing keeps the schedule itself alive: GitHub switches off a public repository's
+scheduled workflows after 60 days without activity, and since the database is a
+release asset the refresh commits nothing. So the nightly calls
+`.github/workflows/keepalive.yml`, which commits a short `docs/refresh_status.md`
+only when `main` has had no commit for 30 days. If the schedule is ever disabled
+anyway, `gh workflow enable refresh_data.yml` turns it back on. The
 refresh job fetches that asset before it migrates or writes anything: skipping
 that step is how it once rebuilt an empty database from scratch and clobbered
 three years of history with four weeks of it, so the upload is now gated by
@@ -381,21 +387,24 @@ Actions). **Without them the job still runs, but some datasets stay
 permanently empty**, and the app shows them as "never run" rather than
 pretending otherwise. Worth knowing which cost what:
 
-   | Secret | What stays empty without it |
-   |---|---|
-   | `FINNHUB_API_KEY` | Short interest (Section 24's two readings) |
-   | `FRED_API_KEY` | Fed funds, CPI, unemployment, GDP, and the 10Y/2Y series — so the yield-curve spread drops out of the Market Regime Index |
-   | `SEC_EDGAR_USER_AGENT` | Insider (Form 4) and 13F institutional ownership. This one is **not an API key** — SEC only asks for a contact string like `"Your Name your@email.com"`, so it costs nothing but a repo secret |
-   | `ALERT_DISCORD_WEBHOOK_URL` | The nightly alert (below). Unset, the refresh logs one line and sends nothing |
-   | `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` | The forward test (below). Unset, nothing is traded and the Track Record page says so |
+   | Secret | What it unlocks — and what stays empty without it | Where to get it |
+   |---|---|---|
+   | `FINNHUB_API_KEY` | Short interest (Section 24's two readings: % of float short, days to cover). **Caveat:** the field names read from Finnhub's `/stock/metric` response are an unverified guess (`ingestion/short_interest_client.py` says so) — no key has ever been available to check a real response, so the first run with a key may store rows with empty values. Unset, the weekly run logs one warning per ticker (503 — finding 37) | Free key at [finnhub.io/register](https://finnhub.io/register) |
+   | `FRED_API_KEY` | Fed funds, CPI, unemployment, GDP, and the 10Y/2Y Treasury series — so the yield-curve spread, one of the Market Regime Index's four inputs. Unset, the weekly run logs six "FRED_API_KEY not set" warnings and the regime is scored without that input (and says so) | Free with a FRED account: [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html) |
+   | `SEC_EDGAR_USER_AGENT` | Insider (Form 4) and 13F institutional ownership. This one is **not an API key** — SEC only asks for a contact string like `"Your Name your@email.com"`, so it costs nothing but a repo secret | Any contact string you choose ([SEC's fair-access policy](https://www.sec.gov/os/accessing-edgar-data)) |
+   | `ALERT_DISCORD_WEBHOOK_URL` | Every alert the project sends: the nightly data digest (below), a notice when a refresh or Pages run **fails** (which job and step, with the run's link), and a notice when the public demo's prices fall more than two trading sessions behind. Unset, each logs one line and sends nothing; a stale demo still turns the nightly run red, which GitHub can email you about if your notification settings allow | A channel's *Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL* in Discord |
+   | `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` | The forward test (below): the Monday run paper-trades the published rating and every run records the account's value in `paper_trading_snapshots`. Unset, the refresh logs one line, nothing is traded, and the Track Record page says so. **The one with a clock on it** — the record can only accrue from the day the keys are added | [alpaca.markets](https://alpaca.markets) → switch to **Paper Trading** → generate an API key; both halves |
 
    Everything else — prices, options, news, fundamentals, analyst consensus,
    the index constituent list — comes from sources that need no credential at
    all, which is why the composite score still computes without any of the
    above (at a lower `data_confidence`, which every page displays).
 
-   As of 2026-09-06 only `SEC_EDGAR_USER_AGENT` is set, so short interest and
-   the FRED macro series are empty in the published demo. Nothing scores them as
+   As of 2026-09-25 (`gh secret list`) only `SEC_EDGAR_USER_AGENT` is set, so
+   short interest, the FRED macro series and the forward test are empty in the
+   published demo (`paper_trading_snapshots` 0 rows, `short_interest` 0 rows, the
+   regime's 10Y−2Y input null on every one of its 32 days), and no alert of any
+   kind is sent. Nothing scores them as
    zero, and — since this was the point of the audit item — nothing hides them
    either: the Market Regime Index states that three of its four inputs are live
    and that the score is renormalized over those, and a stock with no
@@ -425,6 +434,16 @@ To set it up: in Discord, *Edit Channel → Integrations → Webhooks → New We
 → Copy Webhook URL*, then paste it into a repo secret (or `.env` locally).
 Treat the URL as a password — anyone holding it can post into that channel; it
 is never written to a log, and revoking it is one click in the same menu.
+
+**The same webhook also carries notices about the pipeline itself.** A refresh
+or Pages run that fails posts which job and step failed, with the run's link
+(`scripts/pipeline_alert.py failure`, from an `if: failure()` job in each
+workflow — one message per failure, not one per workflow). And before each
+nightly refresh, a separate job reads the *published* `health.json`: if its
+newest prices are more than two trading sessions behind — counted on the NYSE
+calendar, so a Monday holiday is not an outage — it posts that and fails the
+job. Two was chosen from the run history: it fires on the second night of every
+real outage the demo has had, and on no isolated missed night.
 
 Discord rather than Gmail SMTP because of the size of the secret: a webhook is
 one opaque URL, where SMTP needs a host, a port, a from-address, a to-address

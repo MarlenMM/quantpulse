@@ -398,6 +398,39 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 28 — five finished features wait on secrets only the owner can add
+
+Re-verified 2026-09-25. **Nothing to activate:** `gh secret list` still shows
+only `SEC_EDGAR_USER_AGENT`, as on 2026-09-23, so there was no new run in which
+a feature could have switched on. What each unset path does, from the latest
+logs (weekday run `35937083808`, weekly run `35671993244`) and the published
+database:
+
+| secret | unset path, as logged | in the published database |
+|---|---|---|
+| `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` | one line: *"Paper trading is not configured (no Alpaca credentials); skipping"* | `paper_trading_snapshots` **0** rows |
+| `ALERT_DISCORD_WEBHOOK_URL` | one line: *"Alerting is not configured (no webhook URL); sending nothing"* (and, since point 27, one line per failure/staleness notice) | — |
+| `FRED_API_KEY` | six warnings, *"Skipping macro series fetch_… : FRED_API_KEY not set"* (weekly) | `market_regime.yield_curve_spread` null on all **32** days |
+| `FINNHUB_API_KEY` | **503** warnings, one per ticker (point 37, still open) | `short_interest` **0** rows |
+
+**The README table was incomplete, and is fixed.** It named every secret
+exactly, but gave no source for `FINNHUB_API_KEY` or `FRED_API_KEY`, said the
+webhook unlocked only the data digest (it now carries point 27's notices too),
+and dated its status line 2026-09-06. It now has a *Where to get it* column, the
+unset behaviour of each, the Alpaca key's clock, and today's verified state.
+`tests/unit/test_readme_secrets.py` fails if any secret a workflow reads has no
+row, or a row lacks what it unlocks or where to get it (the pre-fix README fails
+it; two mutations checked).
+
+**A caveat the table now states, found while checking it:** the Finnhub
+short-interest field names are an *unverified guess* —
+`ingestion/short_interest_client.py` says so in its own docstring, since no key
+was ever available to inspect a real `/stock/metric` response, and Finnhub's
+published specification does not enumerate that map. So adding
+`FINNHUB_API_KEY` may produce `short_interest` rows with empty values. The first
+weekly run after the key is added is the check; if the values are null, the
+field names need correcting against one real response.
+
 ### Point 27 — nothing told anyone when the pipeline broke
 
 Fixed 2026-09-25. On 2026-09-15 the nightly went red and published an empty

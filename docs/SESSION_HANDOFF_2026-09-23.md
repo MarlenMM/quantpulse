@@ -393,6 +393,13 @@ holidays cluster on Mondays — see backlog §2 traps).
 
 ### 28 · Five finished features are idle, waiting on secrets only the user can add (S3)
 
+**Status 2026-09-25: README fixed; the features still wait on the user.**
+`gh secret list` → still only `SEC_EDGAR_USER_AGENT`, so nothing could activate.
+The README's secrets table gained a *Where to get it* column, the webhook's new
+notices, each unset path and today's state; `tests/unit/test_readme_secrets.py`
+guards it. Caveat now stated there: Finnhub's short-interest field names are
+unverified (`short_interest_client.py`), so that key may need a follow-up fix.
+
 Evidence (as audited):
 - `ALPACA_API_KEY_ID` + `ALPACA_API_SECRET_KEY` → the forward test ·
   `paper_trading_snapshots` **0 rows**
