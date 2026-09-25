@@ -135,8 +135,19 @@ jobs:
       # description, so 503 shared links do not all preview identically), and
       # still writes 404.html for paths nothing enumerated, which genuinely are
       # not found.
+      #
+      # It also writes each page's link-preview card (Open Graph + Twitter tags,
+      # a canonical URL, one preview image) and `sitemap.xml` -- finding 32.
+      # Those need the site's absolute address, which `configure-pages` reports,
+      # so it runs first and hands its `base_url` over; a fork's cards then point
+      # at the fork's site rather than this one.
+      - uses: actions/configure-pages@v6
+        id: pages
+
       - name: Give every route a real page
-        run: uv run python scripts/emit_route_pages.py --dist frontend/dist
+        run: >-
+          uv run python scripts/emit_route_pages.py --dist frontend/dist
+          --site-url "${{ steps.pages.outputs.base_url }}"
 
       # The generator and the client agree about filenames only by convention:
       # they are in different languages and neither imports the other. If they
@@ -153,9 +164,6 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
-
-      - uses: actions/configure-pages@v6
-        id: pages
 
       - uses: actions/upload-pages-artifact@v5
         with:

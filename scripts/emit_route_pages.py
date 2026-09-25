@@ -61,23 +61,64 @@ FIXED_TITLES: dict[str, str] = {
     "glossary": "Glossary — QuantPulse",
 }
 
+#: Where the published site lives. The Pages workflow passes the real one
+#: (`actions/configure-pages`' `base_url`), so a fork advertises its own; this
+#: default is for local runs.
+DEFAULT_SITE_URL = "https://marlenmm.github.io/quantpulse/"
+
+#: The one preview image every page's card uses (finding 32), in
+#: `frontend/public/` so Vite copies it to the site root. PNG because link
+#: unfurlers do not render SVG; 1200x630 because that is the size they crop to.
+OG_IMAGE = "og-image.png"
+_OG_IMAGE_ALT = "The QuantPulse mark — three candles stepping up — and the name"
+
 _TITLE_RE = re.compile(r"<title>.*?</title>", re.DOTALL)
+#: Tags this script writes, so a second run replaces rather than repeats them:
+#: the root `index.html` is both the shell every page is read from and a page.
+_OWN_TAGS_RE = re.compile(
+    r'[ \t]*<(?:meta (?:property="og:[^"]*"|name="twitter:[^"]*")|link rel="canonical")[^>]*/>\n?'
+)
 _DESCRIPTION_RE = re.compile(r'(<meta\s+name="description"\s+content=")(.*?)(")', re.DOTALL)
 
 
-def _with_metadata(shell: str, *, title: str, description: str) -> str:
-    """`shell` with its title and description replaced, both HTML-escaped."""
-    page = _TITLE_RE.sub(lambda _: f"<title>{html.escape(title)}</title>", shell, count=1)
-    return _DESCRIPTION_RE.sub(
+def _description(shell: str) -> str:
+    match = _DESCRIPTION_RE.search(shell)
+    return html.unescape(match.group(2)) if match else ""
+
+
+def _page(shell: str, *, site_url: str, path: str | None, title: str, description: str) -> str:
+    """`shell` with its title, description and link-preview tags set.
+
+    `path` is the page's location under the site ("stocks/NVDA/"), or `None`
+    for `404.html`, which gets the card but claims no URL of its own.
+    """
+    page = _OWN_TAGS_RE.sub("", shell)
+    page = _TITLE_RE.sub(lambda _: f"<title>{html.escape(title)}</title>", page, count=1)
+    page = _DESCRIPTION_RE.sub(
         lambda match: f"{match.group(1)}{html.escape(description)}{match.group(3)}",
         page,
         count=1,
     )
-
-
-def _with_title(shell: str, title: str) -> str:
-    """`shell` with only its title replaced, HTML-escaped."""
-    return _TITLE_RE.sub(lambda _: f"<title>{html.escape(title)}</title>", shell, count=1)
+    tags = {
+        "og:type": "website",
+        "og:site_name": "QuantPulse",
+        "og:title": title,
+        "og:description": description,
+        "og:image": site_url + OG_IMAGE,
+        "og:image:width": "1200",
+        "og:image:height": "630",
+        "og:image:alt": _OG_IMAGE_ALT,
+    }
+    if path is not None:
+        tags["og:url"] = site_url + path
+    lines = [
+        f'<meta property="{key}" content="{html.escape(value)}" />' for key, value in tags.items()
+    ]
+    lines.append('<meta name="twitter:card" content="summary_large_image" />')
+    if path is not None:
+        lines.append(f'<link rel="canonical" href="{html.escape(site_url + path)}" />')
+    block = "".join(f"    {line}\n" for line in lines)
+    return re.sub(r"[ \t]*</head>", lambda _: f"{block}  </head>", page, count=1)
 
 
 def _stock_metadata(payload: dict) -> tuple[str, str]:
@@ -101,41 +142,78 @@ def _stock_metadata(payload: dict) -> tuple[str, str]:
     return title, ". ".join(parts) + ""
 
 
-def emit(dist: Path, *, quiet: bool = False) -> list[Path]:
-    """Write `404.html` and one `index.html` per route. Returns the files written."""
+def _sitemap(site_url: str, paths: list[str], lastmod: str | None) -> str:
+    entries = []
+    for path in paths:
+        stamp = f"<lastmod>{lastmod}</lastmod>" if lastmod else ""
+        entries.append(f"  <url><loc>{html.escape(site_url + path)}</loc>{stamp}</url>")
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(entries)
+        + "\n</urlset>\n"
+    )
+
+
+def emit(dist: Path, *, quiet: bool = False, site_url: str = DEFAULT_SITE_URL) -> list[Path]:
+    """Write every route's page, `404.html` and `sitemap.xml`. Returns the files written.
+
+    **No `robots.txt`** (finding 32 proposed one): crawlers read it only at the
+    host root, and on a project site that is `<owner>.github.io/robots.txt` --
+    another repository's URL. A file here would be read by nothing. Without one,
+    crawlers allow everything already; the sitemap can be submitted directly.
+    """
+    if not site_url.startswith(("https://", "http://")):
+        raise ValueError(f"site_url must be absolute (link previews need it), got {site_url!r}")
+    site_url = site_url if site_url.endswith("/") else f"{site_url}/"
     shell_path = dist / "index.html"
     if not shell_path.exists():
         raise FileNotFoundError(
             f"no built client at {shell_path} -- run `npm run build` before this script"
         )
     shell = shell_path.read_text()
+    site_description = _description(shell)
     written: list[Path] = []
+    paths: list[str] = []
+
+    def write(target: Path, path: str | None, title: str, description: str) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        page = _page(shell, site_url=site_url, path=path, title=title, description=description)
+        target.write_text(page)
+        written.append(target)
+        if path is not None:
+            paths.append(path)
 
     # The fallback for paths nothing enumerated. Those genuinely are not found,
     # so 404 is the correct answer for them and only for them.
-    fallback = dist / "404.html"
-    fallback.write_text(shell)
-    written.append(fallback)
-
+    write(dist / "404.html", None, FIXED_TITLES["dashboard"], site_description)
     for route in FIXED_ROUTES:
-        target = dist / route / "index.html"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_with_title(shell, FIXED_TITLES[route]))
-        written.append(target)
+        write(dist / route / "index.html", f"{route}/", FIXED_TITLES[route], site_description)
 
     data_dir = dist / "data"
     for payload_path in sorted(data_dir.glob("stocks__*.json")):
         payload = json.loads(payload_path.read_text())
         symbol = str(payload.get("symbol") or payload_path.stem.removeprefix("stocks__"))
         title, description = _stock_metadata(payload)
-        target = dist / "stocks" / symbol / "index.html"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_with_metadata(shell, title=title, description=description))
-        written.append(target)
+        write(dist / "stocks" / symbol / "index.html", f"stocks/{symbol}/", title, description)
+
+    # The root last: it is the shell every page above was read from.
+    write(shell_path, "", FIXED_TITLES["dashboard"], site_description)
+
+    health_path = data_dir / "health.json"
+    lastmod = None
+    if health_path.exists():
+        lastmod = (json.loads(health_path.read_text()).get("freshness") or {}).get("prices")
+    sitemap = dist / "sitemap.xml"
+    sitemap.write_text(_sitemap(site_url, ["", *sorted(p for p in paths if p)], lastmod))
+    written.append(sitemap)
 
     if not quiet:
         total = sum(path.stat().st_size for path in written)
-        print(f"wrote {len(written)} route pages, {total / 1_000_000:.1f} MB, under {dist}")
+        print(
+            f"wrote {len(paths)} pages, 404.html and sitemap.xml, "
+            f"{total / 1_000_000:.1f} MB, under {dist}"
+        )
     return written
 
 
@@ -143,8 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist", type=Path, default=DEFAULT_DIST)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--site-url",
+        default=DEFAULT_SITE_URL,
+        help="the published site's absolute URL; the Pages workflow passes its own",
+    )
     args = parser.parse_args(argv)
-    emit(args.dist, quiet=args.quiet)
+    emit(args.dist, quiet=args.quiet, site_url=args.site_url)
     return 0
 
 

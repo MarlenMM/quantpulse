@@ -488,7 +488,11 @@ A keyboard user tabs into controls a screen reader has just promised aren't ther
 the modebar off on charts that don't need it (the gauge, the radar) so the wrapper
 really is a single image.
 
-### 32 · 508 real pages, and no preview, no sitemap, no robots.txt (S2)
+### 32 · 508 real pages, and no preview, no sitemap, no robots.txt (S2) — FIXED 2026-09-25
+
+**Status:** OG/Twitter tags, canonical URLs, one 1200×630 preview image and
+`sitemap.xml` on every emitted page. `robots.txt` deliberately not written: on a
+project site only the host root's would be read, and that is another repository.
 
 Evidence: `/stocks/NVDA/` → 200 with correct `<title>` and description ·
 og:title / og:description / og:image / twitter:card → **none** · `/robots.txt`
