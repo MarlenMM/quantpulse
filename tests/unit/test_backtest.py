@@ -755,3 +755,67 @@ class TestExcessReturnKellyInputs:
         assert result.excess_win_rate is None
         assert result.excess_payoff_ratio is None
         assert result.win_rate is not None, "the absolute measures still work without one"
+
+
+class TestPairedEdgeCI:
+    """A model's hit rate minus the naive forecast's, over the same pairs, by window (finding 34).
+
+    The published hit rates pool twenty names over one shared calendar, so the
+    pairs inside a window are twenty readings of one market move: the honest
+    sample is the windows. Measured on the published data, GBR's 20-day edge was
+    +3.5 points with a 90% interval of -0.9 to +7.8 -- not distinguishable from
+    luck, though the table showed a bare "51.8%" beside each forecast.
+    """
+
+    @staticmethod
+    def _clusters(n_windows: int, per_window: int) -> np.ndarray:
+        return np.repeat(np.arange(n_windows), per_window)
+
+    def test_the_point_is_the_difference_of_the_two_rates_on_the_same_pairs(self) -> None:
+        rng = np.random.default_rng(1)
+        clusters = self._clusters(40, 10)
+        model = rng.integers(0, 2, clusters.size).astype(float)
+        naive = rng.integers(0, 2, clusters.size).astype(float)
+        ci = bt.paired_edge_ci(model, naive, clusters)
+        assert ci is not None
+        assert ci.point == pytest.approx(model.mean() - naive.mean())
+        assert ci.low <= ci.point <= ci.high
+        assert ci.n_observations == 40  # windows, not pairs
+
+    def test_identical_forecasts_have_no_edge_and_no_width(self) -> None:
+        clusters = self._clusters(35, 5)
+        hits = np.tile([1.0, 0.0, 1.0, 1.0, 0.0], 35)
+        ci = bt.paired_edge_ci(hits, hits, clusters)
+        assert (ci.point, ci.low, ci.high) == (0.0, 0.0, 0.0)
+        assert not ci.excludes_zero
+
+    def test_a_real_edge_across_many_windows_excludes_zero(self) -> None:
+        clusters = self._clusters(60, 10)
+        model = np.ones(clusters.size)
+        naive = np.tile([1.0, 0.0], clusters.size // 2)
+        assert bt.paired_edge_ci(model, naive, clusters).excludes_zero
+
+    def test_copies_inside_a_window_do_not_buy_precision(self) -> None:
+        """Twenty names in one window are one piece of evidence, not twenty.
+
+        Resampling pairs instead of windows would shrink the interval by about
+        sqrt(20) here -- exactly the false precision the window count exists to
+        prevent.
+        """
+        rng = np.random.default_rng(3)
+        windows = 34
+        model = rng.integers(0, 2, windows).astype(float)
+        naive = rng.integers(0, 2, windows).astype(float)
+        one = bt.paired_edge_ci(model, naive, np.arange(windows))
+        twenty = bt.paired_edge_ci(
+            np.repeat(model, 20), np.repeat(naive, 20), self._clusters(windows, 20)
+        )
+        assert twenty.high - twenty.low == pytest.approx(one.high - one.low)
+        assert twenty.point == pytest.approx(one.point)
+
+    def test_too_few_windows_give_no_interval(self) -> None:
+        assert bt.paired_edge_ci(np.ones(4), np.zeros(4), np.array([0, 0, 0, 0])) is None
+
+    def test_inputs_must_line_up(self) -> None:
+        with pytest.raises(ValueError, match="same length"):
+            bt.paired_edge_ci(np.ones(3), np.ones(2), np.arange(3))

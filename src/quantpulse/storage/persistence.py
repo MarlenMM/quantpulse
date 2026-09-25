@@ -981,6 +981,11 @@ def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
             Forecast.historical_hit_rate,
             Forecast.baseline_hit_rate,
             Forecast.hit_rate_windows,
+            Forecast.edge_vs_naive,
+            Forecast.edge_ci_low,
+            Forecast.edge_ci_high,
+            Forecast.own_history_percentile,
+            Forecast.outside_own_history,
             Forecast.generated_date,
         )
         .where(Forecast.symbol == symbol, Forecast.generated_date == latest)
@@ -999,6 +1004,11 @@ def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
             "historical_hit_rate",
             "baseline_hit_rate",
             "hit_rate_windows",
+            "edge_vs_naive",
+            "edge_ci_low",
+            "edge_ci_high",
+            "own_history_percentile",
+            "outside_own_history",
             "generated_date",
         ],
     )

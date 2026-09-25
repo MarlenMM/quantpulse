@@ -197,6 +197,21 @@ class ForecastRow(BaseModel):
     historical_hit_rate: float | None = None
     baseline_hit_rate: float | None = None
     hit_rate_windows: int | None = None
+    #: Finding 34: the model's hit rate minus the naive forecast's over the same
+    #: graded pairs, with its 90% interval bootstrapped by window. `None` for
+    #: the naive forecast itself and for rows stored before it was measured.
+    edge_vs_naive: float | None = None
+    edge_ci_low: float | None = None
+    edge_ci_high: float | None = None
+    #: Where the point forecast sits among the stock's own past moves of the
+    #: same length (share below it, 0-1), and whether it is beyond them all.
+    own_history_percentile: float | None = None
+    outside_own_history: bool | None = None
+    #: Both as one sentence each, composed server-side
+    #: (`forecasting.describe_edge` / `describe_history_position`) so the two
+    #: front ends print the same words.
+    edge_note: str | None = None
+    history_note: str | None = None
     #: Whether this row has a measured out-of-sample accuracy at all, from
     #: `forecasting.is_graded`. Sent rather than re-derived in the client: it
     #: decides how prominently a number is displayed, and a null check written

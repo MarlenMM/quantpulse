@@ -95,12 +95,13 @@ test.describe("Stock Detail charts", () => {
     // fixture predated `is_graded`, so every forecast read as ungraded, the
     // whole table moved behind the disclosure, and the h=5 target below was
     // present in the DOM but hidden. A fixture edited to satisfy the client
-    // stops being evidence about the server.
+    // stops being evidence about the server. Last recaptured 2026-09-26, for
+    // finding 34's edge and history fields, from the pre-rendered API output.
     await expect(page.getByText("AIZ — Assurant")).toBeVisible();
-    await expect(page.getByText("$289.16")).toBeVisible(); // arima h=5 target
-    await expect(page.getByText("1.78")).toBeVisible(); // Sharpe
-    await expect(page.getByText("2.84")).toBeVisible(); // Sortino
-    await expect(page.getByText("0.23")).toBeVisible(); // beta, vs ^GSPC
+    await expect(page.getByText("$272.54")).toBeVisible(); // arima h=5 target
+    await expect(page.getByText("1.07")).toBeVisible(); // Sharpe
+    await expect(page.getByText("1.54")).toBeVisible(); // Sortino
+    await expect(page.getByText("0.16")).toBeVisible(); // beta, vs ^GSPC
   });
 
   test("a graded horizon is visible and an ungraded one is not", async ({ page }) => {

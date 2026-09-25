@@ -63,6 +63,11 @@ import pandas as pd
 
 __all__ = [
     "Forecast",
+    "HistoryPosition",
+    "MIN_OWN_HISTORY_MOVES",
+    "own_history_position",
+    "describe_edge",
+    "describe_history_position",
     "DEFAULT_HORIZONS",
     "DEFAULT_CONFIDENCE",
     "baseline_forecast",
@@ -84,6 +89,96 @@ __all__ = [
 # forecasts "5-day, 20-day" and the longer 3-month/1-year emphasis shift).
 DEFAULT_HORIZONS: tuple[int, ...] = (5, 20, 63, 252)
 DEFAULT_CONFIDENCE = 0.90
+
+
+#: Past moves of the forecast's length needed before saying where a forecast
+#: sits among them. Sixty is about three months of daily windows at h=20: fewer
+#: and "outside everything this stock has done" is a claim about a short sample.
+MIN_OWN_HISTORY_MOVES = 60
+
+#: Float slack on the range check, so a forecast equal to the best past move
+#: (up to rounding) is not called beyond it.
+_RANGE_TOLERANCE = 1e-12
+
+
+@dataclass(frozen=True)
+class HistoryPosition:
+    """Where a forecast sits among the stock's own past moves of the same length.
+
+    `percentile` is the share of past `horizon_days` moves strictly below the
+    forecast (0-1); `outside` is True when the forecast is beyond the best or the
+    worst of them. Both are `None` with fewer than `MIN_OWN_HISTORY_MOVES` moves.
+    """
+
+    percentile: float | None
+    outside: bool | None
+    n_moves: int
+
+
+def own_history_position(
+    close: pd.Series, *, horizon_days: int, forecast_return: float
+) -> HistoryPosition:
+    """Place a point forecast among the stock's own past `horizon_days` moves (finding 34).
+
+    Relative to the stock, not the market: +46.8% in twenty days is extreme for
+    most names and was the 72nd percentile for SNDK, which rose 47x in nineteen
+    months. `close` should be the series the model was fitted on, so "outside"
+    means beyond everything the model saw this stock do. Overlapping windows,
+    since this describes the range, not an independent sample.
+    """
+    clean = pd.to_numeric(close, errors="coerce").sort_index().dropna()
+    clean = clean[clean > 0]
+    moves = (clean.shift(-horizon_days) / clean - 1.0).dropna().to_numpy(dtype=float)
+    if moves.size < MIN_OWN_HISTORY_MOVES or not np.isfinite(forecast_return):
+        return HistoryPosition(percentile=None, outside=None, n_moves=int(moves.size))
+    percentile = float((moves < forecast_return).mean())
+    outside = bool(
+        forecast_return > moves.max() + _RANGE_TOLERANCE
+        or forecast_return < moves.min() - _RANGE_TOLERANCE
+    )
+    return HistoryPosition(percentile=percentile, outside=outside, n_moves=int(moves.size))
+
+
+def _signed_points(value: float) -> str:
+    """A fraction as signed percentage points: 0.035 -> "+3.5", -0.009 -> "−0.9"."""
+    points = value * 100
+    return f"{'+' if points >= 0 else '−'}{abs(points):.1f}"
+
+
+def describe_edge(edge: float | None, low: float | None, high: float | None) -> str | None:
+    """The forecast table's verdict on a model's edge over naive, in one sentence.
+
+    Composed here so both front ends print identical words (the pattern of
+    `scoring.describe_composite_coverage`). The verdict follows the interval,
+    never the point: +3.5 points whose interval straddles zero is luck-sized.
+    """
+    if edge is None or low is None or high is None:
+        return None
+    head = (
+        f"{_signed_points(edge)} pts over naive "
+        f"(90% interval {_signed_points(low)} to {_signed_points(high)})"
+    )
+    if low > 0:
+        return f"{head} — better than naive beyond chance: the interval excludes zero."
+    if high < 0:
+        return f"{head} — worse than naive, beyond chance."
+    return f"{head} — not distinguishable from luck."
+
+
+def describe_history_position(
+    symbol: str, horizon_days: int, percentile: float | None, outside: bool | None
+) -> str | None:
+    """Where a forecast sits among the stock's own past moves, in one sentence."""
+    if percentile is None or outside is None:
+        return None
+    if outside:
+        return (
+            f"Beyond every {horizon_days}-day move {symbol} made in the history the "
+            "model saw — treat the size of this number with suspicion."
+        )
+    if percentile >= 0.5:
+        return f"Larger than {percentile:.0%} of {symbol}'s past {horizon_days}-day moves."
+    return f"Smaller than {1 - percentile:.0%} of {symbol}'s past {horizon_days}-day moves."
 
 
 def is_graded(historical_hit_rate: float | None) -> bool:

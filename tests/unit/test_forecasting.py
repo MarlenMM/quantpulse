@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from quantpulse.analysis import forecasting as fc
-from quantpulse.analysis.forecasting import Forecast
+from quantpulse.analysis.forecasting import Forecast, own_history_position
 
 
 def _prices(closes: list[float] | np.ndarray, start: str = "2021-01-01") -> pd.DataFrame:
@@ -701,3 +701,82 @@ class TestBandMustContainThePoint:
             assert forecast.lower_price <= forecast.point_price <= forecast.upper_price, (
                 f"{forecast.model_name} published a band excluding its own point"
             )
+
+
+class TestOwnHistoryPosition:
+    """Where a forecast sits among the stock's own past moves of that length (finding 34).
+
+    A +46.8% twenty-day forecast is extreme for most names and ordinary for one
+    that rose 47x in nineteen months (SNDK: 72nd percentile of its own twenty-day
+    moves). So the flag is relative to the stock, and it marks only a forecast
+    outside everything that stock did in the history the model was given.
+    """
+
+    @staticmethod
+    def _close(values: list[float]) -> pd.Series:
+        return pd.Series(values, index=pd.bdate_range("2024-01-01", periods=len(values)))
+
+    def test_the_percentile_is_the_share_of_past_moves_below_the_forecast(self) -> None:
+        # h=1 moves of a series that rises 1% every day: every move is +1%.
+        close = self._close([100 * 1.01**i for i in range(200)])
+        below = own_history_position(close, horizon_days=1, forecast_return=0.02)
+        assert below.percentile == pytest.approx(1.0)
+        assert below.outside
+        inside = own_history_position(close, horizon_days=1, forecast_return=0.01)
+        assert not inside.outside
+
+    def test_a_forecast_inside_the_range_is_not_flagged(self) -> None:
+        rng = np.random.default_rng(0)
+        close = self._close(list(100 * np.cumprod(1 + rng.normal(0, 0.02, 400))))
+        position = own_history_position(close, horizon_days=20, forecast_return=0.0)
+        assert 0.0 < position.percentile < 1.0
+        assert not position.outside
+
+    def test_below_the_worst_past_move_is_flagged_too(self) -> None:
+        rng = np.random.default_rng(1)
+        close = self._close(list(100 * np.cumprod(1 + rng.normal(0, 0.01, 400))))
+        position = own_history_position(close, horizon_days=5, forecast_return=-0.9)
+        assert position.percentile == 0.0
+        assert position.outside
+
+    def test_too_little_history_says_nothing(self) -> None:
+        close = self._close([100.0 + i for i in range(50)])
+        position = own_history_position(close, horizon_days=20, forecast_return=0.1)
+        assert position.percentile is None
+        assert position.outside is None
+
+
+class TestTheSentences:
+    """Composed once, printed verbatim by both front ends (finding 34)."""
+
+    def test_an_edge_that_straddles_zero_says_so(self) -> None:
+        text = fc.describe_edge(0.035, -0.009, 0.078)
+        assert text == (
+            "+3.5 pts over naive (90% interval −0.9 to +7.8) — not distinguishable from luck."
+        )
+
+    def test_an_edge_that_excludes_zero_says_that_instead(self) -> None:
+        better = fc.describe_edge(0.06, 0.02, 0.10)
+        assert better.endswith("— better than naive beyond chance: the interval excludes zero.")
+        worse = fc.describe_edge(-0.05, -0.09, -0.01)
+        assert worse.endswith("— worse than naive, beyond chance.")
+
+    def test_no_edge_no_sentence(self) -> None:
+        assert fc.describe_edge(None, None, None) is None
+
+    def test_the_history_sentence_names_the_stock_and_the_horizon(self) -> None:
+        assert fc.describe_history_position("SNDK", 20, 0.717, False) == (
+            "Larger than 72% of SNDK's past 20-day moves."
+        )
+        assert fc.describe_history_position("ACN", 20, 0.007, False) == (
+            "Smaller than 99% of ACN's past 20-day moves."
+        )
+
+    def test_outside_the_range_is_said_plainly(self) -> None:
+        assert fc.describe_history_position("XYZ", 20, 1.0, True) == (
+            "Beyond every 20-day move XYZ made in the history the model saw — "
+            "treat the size of this number with suspicion."
+        )
+
+    def test_no_history_no_sentence(self) -> None:
+        assert fc.describe_history_position("XYZ", 20, None, None) is None

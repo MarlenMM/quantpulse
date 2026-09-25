@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Chart } from "../components/Chart";
+import { IntervalWhisker } from "../components/IntervalWhisker";
 import {
   ErrorBox,
   LoadingChart,
@@ -56,6 +57,13 @@ function ForecastTable({ rows }: { rows: ForecastRow[] }) {
                 text="The same hit rate for the naive baseline — 'tomorrow looks like today'. A model only knows something the market does not if it beats this column, and mostly none of them do."
               />
             </th>
+            <th scope="col">
+              Edge vs naive
+              <Tip
+                label="the edge over naive"
+                text="The hit rate minus the naive column's, over exactly the same periods, with its 90% interval. The whisker's hairline is zero: an interval that crosses it has not shown any skill. The unit of evidence is the window, not the stock — twenty stocks in one month are one piece of evidence."
+              />
+            </th>
             <th scope="col" className="num">
               Windows
               <Tip
@@ -69,18 +77,61 @@ function ForecastTable({ rows }: { rows: ForecastRow[] }) {
           {rows.map((f) => (
             <tr key={`${f.model_name}-${f.horizon_days}`}>
               <td className="num">{f.horizon_days}</td>
-              <td className="num">{formatSignedPercent(f.point_return)}</td>
+              <td className="num">
+                {formatSignedPercent(f.point_return)}
+                {f.outside_own_history ? (
+                  <span className="beyond-history" title={f.history_note ?? undefined}>
+                    {" "}
+                    beyond its history
+                  </span>
+                ) : null}
+              </td>
               <td className="num">{formatPrice(f.point_price)}</td>
               <td className="num">{formatPrice(f.lower_price)}</td>
               <td className="num">{formatPrice(f.upper_price)}</td>
               <td className="num">{formatPercent(f.historical_hit_rate, 0)}</td>
               <td className="num">{formatPercent(f.baseline_hit_rate, 0)}</td>
+              <td className="edge-cell">
+                {f.edge_vs_naive !== null && f.edge_ci_low !== null && f.edge_ci_high !== null ? (
+                  <>
+                    <span className="num">{`${f.edge_vs_naive >= 0 ? "+" : "−"}${Math.abs(f.edge_vs_naive * 100).toFixed(1)} pts`}</span>
+                    <IntervalWhisker
+                      point={f.edge_vs_naive}
+                      low={f.edge_ci_low}
+                      high={f.edge_ci_high}
+                      label={`${f.model_name} ${f.horizon_days}-day edge over naive`}
+                    />
+                  </>
+                ) : (
+                  <span className="muted">{f.model_name === "baseline" ? "is naive" : "—"}</span>
+                )}
+              </td>
               <td className="num">{f.hit_rate_windows ?? "—"}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <ForecastNotes rows={rows} />
     </div>
+  );
+}
+
+/**
+ * Finding 34's two sentences per row, written by the server so both front ends
+ * print the same words: the edge's verdict, and where the forecast sits in the
+ * stock's own history. Listed under the table rather than squeezed into cells.
+ */
+function ForecastNotes({ rows }: { rows: ForecastRow[] }) {
+  const notes = rows.filter((f) => f.edge_note || f.history_note);
+  if (notes.length === 0) return null;
+  return (
+    <ul className="forecast-notes small">
+      {notes.map((f) => (
+        <li key={`${f.model_name}-${f.horizon_days}`}>
+          <strong>{f.horizon_days}-day:</strong> {[f.edge_note, f.history_note].filter(Boolean).join(" ")}
+        </li>
+      ))}
+    </ul>
   );
 }
 

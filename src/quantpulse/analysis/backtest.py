@@ -40,6 +40,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -70,6 +71,7 @@ __all__ = [
     "bootstrap_sharpe_ci",
     "bootstrap_cagr_ci",
     "bootstrap_hit_rate_ci",
+    "paired_edge_ci",
     "bootstrap_strategy_significance",
 ]
 
@@ -873,6 +875,70 @@ def bootstrap_cagr_ci(
         n_resamples=n_resamples,
         block_size=block_size,
         random_state=random_state,
+    )
+
+
+def paired_edge_ci(
+    model_hits: Sequence[float] | np.ndarray,
+    naive_hits: Sequence[float] | np.ndarray,
+    clusters: Sequence[Any] | np.ndarray,
+    *,
+    confidence_level: float = DEFAULT_CI_CONFIDENCE,
+    n_resamples: int = DEFAULT_N_RESAMPLES,
+    random_state: int | None = 0,
+) -> BootstrapCI | None:
+    """A model's directional edge over the naive forecast, with a cluster-bootstrap CI.
+
+    `model_hits` and `naive_hits` are 1/0 per graded pair -- the *same* pairs,
+    so the difference is a paired comparison -- and `clusters` labels each pair's
+    evaluation window. The point is the model's hit rate minus the naive one;
+    the interval resamples whole windows with replacement.
+
+    **Windows, not pairs, are the unit** (finding 34). The published rates pool
+    twenty names over one shared calendar, so the pairs inside a window are
+    twenty readings of one market move; resampling pairs would narrow the
+    interval by roughly sqrt(20) and call noise a skill. Measured on the demo's
+    own data, no model's edge at any graded horizon excluded zero -- GBR's
+    20-day edge was +3.5 points, 90% interval -0.9 to +7.8.
+
+    `None` below two windows, where there is nothing to resample.
+    `n_observations` is the window count; `block_size` is 1 window.
+    """
+    model = np.asarray(model_hits, dtype=float)
+    naive = np.asarray(naive_hits, dtype=float)
+    labels = np.asarray(clusters)
+    if not (model.size == naive.size == labels.size):
+        raise ValueError(
+            f"model_hits, naive_hits and clusters must be the same length: "
+            f"{model.size}, {naive.size}, {labels.size}"
+        )
+    if not 0.0 < confidence_level < 1.0:
+        raise ValueError(f"confidence_level must be in (0, 1), got {confidence_level}")
+    if n_resamples < 1:
+        raise ValueError(f"n_resamples must be >= 1, got {n_resamples}")
+    _, index = np.unique(labels, return_inverse=True)
+    n_clusters = int(index.max()) + 1 if index.size else 0
+    if n_clusters < 2:
+        return None
+
+    counts = np.bincount(index, minlength=n_clusters).astype(float)
+    diff_sums = np.bincount(index, weights=model - naive, minlength=n_clusters)
+    point = float(diff_sums.sum() / counts.sum())
+
+    rng = np.random.default_rng(random_state)
+    draws = rng.integers(0, n_clusters, size=(n_resamples, n_clusters))
+    resampled = diff_sums[draws].sum(axis=1) / counts[draws].sum(axis=1)
+    tail = (1.0 - confidence_level) / 2.0
+    low, high = np.quantile(resampled, [tail, 1.0 - tail])
+    return BootstrapCI(
+        point=point,
+        low=float(low),
+        high=float(high),
+        confidence_level=confidence_level,
+        n_observations=n_clusters,
+        n_resamples=n_resamples,
+        n_defined=n_resamples,
+        block_size=1,
     )
 
 

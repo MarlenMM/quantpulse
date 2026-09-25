@@ -531,3 +531,18 @@ class TestCharts:
         fig = charts.allocation_pie({"Tech": 1.0})
         assert fig.layout.paper_bgcolor == "rgba(0,0,0,0)"
         assert fig.layout.plot_bgcolor == "rgba(0,0,0,0)"
+
+
+class TestForecastEdgeCell:
+    """Finding 34: the Streamlit table's edge column."""
+
+    def test_the_edge_and_its_interval(self) -> None:
+        from lib.format import format_edge_cell
+
+        assert format_edge_cell(0.035, -0.009, 0.078) == "+3.5 pts [−0.9, +7.8]"
+
+    def test_no_measured_edge_is_a_dash_not_a_zero(self) -> None:
+        from lib.format import format_edge_cell
+
+        assert format_edge_cell(None, None, None) == "—"
+        assert format_edge_cell(float("nan"), 0.0, 0.1) == "—"

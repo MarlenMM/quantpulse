@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date
+from typing import Any
 
 __all__ = [
     "RATING_ORDER",
@@ -43,6 +44,7 @@ __all__ = [
     "STALE_AFTER_DAYS",
     "confidence_label",
     "humanize",
+    "format_edge_cell",
 ]
 
 RATING_ORDER = ("strong_buy", "buy", "hold", "sell", "strong_sell")
@@ -282,3 +284,21 @@ def confidence_label(data_confidence: float | None) -> str:
     if usable >= 50:
         return f"partial coverage ({usable:.0f}%)"
     return f"thin coverage ({usable:.0f}%)"
+
+
+def format_edge_cell(edge: Any, low: Any, high: Any) -> str:
+    """A forecast row's edge over naive with its 90% interval: "+3.5 pts [−0.9, +7.8]".
+
+    Finding 34. An em dash when there is no measured edge -- the naive forecast
+    itself, or a row stored before the edge was measured -- never a zero, which
+    would read as "measured, and exactly as good as naive".
+    """
+    values = [edge, low, high]
+    if any(v is None or (isinstance(v, float) and math.isnan(v)) for v in values):
+        return "—"
+
+    def pts(value: float) -> str:
+        points = float(value) * 100
+        return f"{'+' if points >= 0 else '−'}{abs(points):.1f}"
+
+    return f"{pts(edge)} pts [{pts(low)}, {pts(high)}]"
