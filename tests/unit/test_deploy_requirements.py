@@ -205,6 +205,54 @@ class TestDemoDatabaseIsFetched:
                         f"context ({value!r}). GitHub refuses to parse the whole file."
                     )
 
+    def test_a_called_workflow_never_asks_for_more_than_its_caller_grants(self) -> None:
+        """GitHub checks this when the *calling* run starts, for every job.
+
+        On 2026-09-25 the nightly never started (`startup_failure`, no job ran,
+        the demo stayed a day behind): finding 27 gave `pages.yml` a `notify`
+        job asking for `actions: read`, and the nightly's `publish` job, which
+        calls `pages.yml`, granted only contents/pages/id-token. GitHub refused
+        the whole run -- *"The nested job 'notify' is requesting 'actions:
+        read', but is only allowed 'actions: none'"* -- even though that job's
+        `if:` would have skipped it. On a push `pages.yml` is top-level and may
+        ask for anything, so CI and Pages stayed green throughout.
+
+        So: for every job that calls a local reusable workflow, every
+        permission any job in the callee requests (its own block, or the
+        callee's top-level one) must be granted at least as strongly by the
+        calling job.
+        """
+        yaml = pytest.importorskip("yaml")
+        rank = {"none": 0, "read": 1, "write": 2}
+        workflows = REPO / ".github" / "workflows"
+        checked = 0
+        for path in sorted(workflows.glob("*.yml")):
+            document = yaml.safe_load(path.read_text())
+            for caller_name, caller in document["jobs"].items():
+                uses = str(caller.get("uses", ""))
+                if not uses.startswith("./.github/workflows/"):
+                    continue
+                granted = caller.get("permissions")
+                assert isinstance(granted, dict), (
+                    f"{path.name}: job `{caller_name}` calls {uses} without an explicit "
+                    "`permissions:` block, so what the callee may request is not reviewable"
+                )
+                callee = yaml.safe_load((REPO / uses.removeprefix("./")).read_text())
+                for job_name, job in callee["jobs"].items():
+                    requested = job.get("permissions", callee.get("permissions")) or {}
+                    for scope, level in requested.items():
+                        allowed = granted.get(scope, "none")
+                        assert rank[level] <= rank[allowed], (
+                            f"{path.name}: job `{caller_name}` calls {uses}, whose job "
+                            f"`{job_name}` requests '{scope}: {level}' but is only allowed "
+                            f"'{scope}: {allowed}'. GitHub refuses the whole calling run "
+                            "at startup, even if that job would be skipped."
+                        )
+                    checked += 1
+        # Not vacuous: the nightly calls pages.yml (build, deploy, notify) and
+        # keepalive.yml (heartbeat).
+        assert checked >= 4
+
     def test_every_workflow_is_parseable_yaml(self) -> None:
         """A syntax error here is only ever found by pushing it.
 

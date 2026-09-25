@@ -264,10 +264,16 @@ jobs:
   publish:
     needs: refresh
     if: always()
+    # A called workflow may ask for no more than this block grants, and GitHub
+    # checks that for *every* job in it when this run starts -- including
+    # `pages.yml`'s `notify`, which never runs here (`failure_notice: caller`)
+    # but still asks for `actions: read`. Without that line the 2026-09-25
+    # nightly never started at all (`startup_failure`).
     permissions:
       contents: read
       pages: write
       id-token: write
+      actions: read
     uses: ./.github/workflows/pages.yml
     with:
       ref: main
