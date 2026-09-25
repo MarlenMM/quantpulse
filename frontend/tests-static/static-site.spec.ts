@@ -131,6 +131,53 @@ test("the regime dial's zones are the label's own cutoffs", async ({ page }) => 
   if (!onEdge) expect(containing?.band).toBe(latest.regime_label);
 });
 
+/**
+ * Finding 30: the tab title never changed as you moved through the app.
+ *
+ * Each route's emitted `index.html` carries its own `<title>` (a hard load gets
+ * it right), but client-side navigation -- how anyone actually browses -- left
+ * every tab on "QuantPulse — S&P 500 research". The SPA now sets the title
+ * itself, and this pins its strings to the emitter's: after navigating *inside
+ * the app* to each route, `document.title` must equal the `<title>` of that
+ * route's page in `dist/`. Python writes one, TypeScript the other, and this is
+ * the only place the two meet.
+ */
+function emittedTitle(route: string): string {
+  const html = readFileSync(join(process.cwd(), "dist", route, "index.html"), "utf8");
+  const match = html.match(/<title>([^<]*)<\/title>/);
+  expect(match, `dist/${route}/index.html has no <title> -- run emit_route_pages.py`).toBeTruthy();
+  return match![1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+}
+
+test("client-side navigation gives every page its own tab title", async ({ page }) => {
+  await page.goto("dashboard");
+  await expect(page.locator(".regime-gauge")).toBeVisible();
+  await expect(page).toHaveTitle(emittedTitle("dashboard"));
+
+  for (const [label, route] of [
+    ["Screener", "screener"],
+    ["Track Record", "track-record"],
+    ["Glossary", "glossary"],
+  ] as const) {
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: label }).click();
+    await expect(page).toHaveURL(new RegExp(`/${route}$`));
+    await expect(page).toHaveTitle(emittedTitle(route));
+  }
+
+  // Into a stock from the ranked table, the way a reader arrives at one.
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Screener" }).click();
+  const first = page.locator("tbody tr .ticker").first();
+  const symbol = (await first.innerText()).trim();
+  await first.click();
+  await expect(page.getByRole("heading", { level: 1, name: new RegExp(`^${symbol}`) })).toBeVisible();
+  await expect(page).toHaveTitle(emittedTitle(`stocks/${symbol}`));
+
+  // And back: history entries are only useful if they are distinguishable.
+  await page.goBack();
+  await expect(page).toHaveTitle(emittedTitle("screener"));
+});
+
 test("the screener loads a full ranked universe", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("screener");

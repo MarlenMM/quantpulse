@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from emit_route_pages import FIXED_ROUTES, emit
+from emit_route_pages import FIXED_ROUTES, FIXED_TITLES, emit
 
 REPO = Path(__file__).resolve().parents[2]
 APP_TSX = REPO / "frontend" / "src" / "App.tsx"
@@ -63,6 +63,24 @@ class TestEveryAppRouteGetsAPage:
         emit(dist, quiet=True)
         for route in FIXED_ROUTES:
             assert (dist / route / "index.html").is_file(), f"/{route} has no page"
+
+    def test_each_fixed_route_has_its_own_title(self, tmp_path: Path) -> None:
+        """Finding 30: four pages, one tab title.
+
+        Every fixed route used to be a verbatim copy of the shell, so the
+        Screener, Track Record and Glossary tabs all read "QuantPulse — S&P 500
+        research". The Dashboard -- the landing page -- keeps the site's title;
+        the others name themselves. The SPA sets the same strings on client-side
+        navigation, and the static suite checks the two agree in a browser.
+        """
+        dist = _dist(tmp_path)
+        emit(dist, quiet=True)
+        assert set(FIXED_TITLES) == set(FIXED_ROUTES)
+        assert len(set(FIXED_TITLES.values())) == len(FIXED_TITLES), "two routes share a title"
+        for route, title in FIXED_TITLES.items():
+            page = (dist / route / "index.html").read_text()
+            assert f"<title>{title.replace('&', '&amp;')}</title>" in page, route
+        assert FIXED_TITLES["dashboard"] == "QuantPulse — S&P 500 research"
 
     def test_a_stock_page_exists_for_every_stock_payload(self, tmp_path: Path) -> None:
         """The two sets are derived from one another, so they cannot drift."""
