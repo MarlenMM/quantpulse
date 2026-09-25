@@ -58,9 +58,12 @@ _TONE_MIN, _TONE_MAX = -10.0, 10.0
 # curve reads as maximally risk-off, a ~1.5pt-steep curve as maximally risk-on.
 _CURVE_MIN_SPREAD, _CURVE_MAX_SPREAD = -1.0, 1.5
 
-# Label cutoffs on the 0-100 composite.
-_RISK_ON_AT = 60.0
-_RISK_OFF_AT = 35.0
+# Label cutoffs on the 0-100 composite. Public, because both gauges draw their
+# zones from them (the API sends them with every point): each used to carry its
+# own literal 65, so a score from 60 to 65 was labelled "Risk On" beside a bar
+# ending in the neutral band.
+RISK_ON_AT = 60.0
+RISK_OFF_AT = 35.0
 
 _MA_WINDOW = 200
 
@@ -154,10 +157,10 @@ def yield_curve_score(spread: float | None) -> float | None:
     return _clip(100.0 * (spread - _CURVE_MIN_SPREAD) / span)
 
 
-def _label_for(score: float) -> str:
-    if score >= _RISK_ON_AT:
+def label_for(score: float) -> str:
+    if score >= RISK_ON_AT:
         return "risk_on"
-    if score <= _RISK_OFF_AT:
+    if score <= RISK_OFF_AT:
         return "risk_off"
     return "neutral"
 
@@ -198,7 +201,7 @@ def compute_market_regime(
             _REGIME_WEIGHTS[name] * score for name, score in sub_scores.items() if score is not None
         )
         regime_score = weighted_sum / available_weight
-        regime_label = _label_for(regime_score)
+        regime_label = label_for(regime_score)
 
     return MarketRegimeReading(
         date=as_of,

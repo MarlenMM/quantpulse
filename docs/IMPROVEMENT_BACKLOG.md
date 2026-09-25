@@ -398,6 +398,53 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 29 — the landing page downloaded Plotly to draw one dial
+
+Fixed 2026-09-25. **Measured on the built site** (raw bytes; Pages gzips):
+
+| page | before | after |
+|---|---|---|
+| Dashboard (landing) | 4.70 MB, of which Plotly 4,113 KB | **0.59 MB**, no chart library |
+| Stock Detail | 4.48 MB (Plotly 4,113 KB / 1,239 KB gz) | Plotly **1,149 KB / 391 KB gz** |
+| Screener, Track Record, Glossary | 0.30–0.57 MB | unchanged |
+
+Two changes. **The regime dial is hand-drawn SVG** (`components/RegimeGauge.tsx`),
+the same decision the interval whisker made: a semicircle, three bands, an arc
+and a number, coloured from the page's own custom properties, one `role="img"`
+wrapper with nothing focusable inside. **Stock Detail's Plotly is trimmed**:
+`lib/plotly.ts` registers only the three trace types the app draws (candlestick,
+scatter, scatterpolar) and `Chart.tsx` builds the component with
+`react-plotly.js/factory` instead of the default entry, which bundles every
+trace type Plotly has.
+
+**A second bug the gauge was hiding.** `market_regime` labels risk-on from
+**60**, but both gauges (React and Streamlit) drew the green band from a literal
+**65** — so a 64.7 on 2026-09-16 read "Risk On" with its arc ending in the
+neutral band (2 of the 32 published days). The cutoffs are now public
+(`market_regime.RISK_ON_AT` / `RISK_OFF_AT`, `label_for`), sent with every
+`/api/regime` point (`risk_on_at`, `risk_off_at`), and both gauges draw from them.
+
+**Two traps from the trim:**
+- **Plotly's *source* modules read Node's `global`**; the prebuilt bundle does
+  not. The first trimmed build threw `global is not defined` and mounted no
+  chart — invisible to `tsc` and the build, caught by the static suite's stock
+  page test. `lib/plotly-global.ts` defines it, imported first.
+- **An unregistered trace type fails silently.** Plotly resolves it to an empty
+  `scatter` and logs nothing: unregistering `scatterpolar` blanked the radar with
+  all 28 static tests green. The stock page test now asserts every figure's
+  resolved trace types equal the ones it asked for.
+
+**Tests and checks:** static suite 28/28 with two new tests (the Dashboard's
+JavaScript stays under 400 KB with no Plotly figure; the dial's bands are the
+API's cutoffs and the band holding the score is the one the label names), the
+trace-type assertion, `test_regime_cutoffs.py`, an API test and a Streamlit
+test. **Mutation-checked** eight ways: an eager `react-plotly.js` import (caught
+by size alone, 4,374,680 bytes), a stray `<Chart>`, the band hard-coded at 65
+in the SVG and in Streamlit, the labeller on a literal, an unregistered trace
+type, and — before the fix — the missing `global`. Screenshots checked in both
+themes and at 375px (the first cut clipped the "100" tick; the viewBox was
+widened).
+
 ### Point 43 — my fix for 27 stopped the nightly from starting at all
 
 Found and fixed 2026-09-25, the morning after 27 shipped. The scheduled run

@@ -414,6 +414,11 @@ class RegimePoint(BaseModel):
     #: blend it describes. Both front ends said "built from four inputs" while
     #: the yield-curve spread had been null since the project began.
     coverage_note: str = ""
+    #: The label's cutoffs, which the client's gauge draws its zones from.
+    #: Sent rather than duplicated in TypeScript: two literal copies had
+    #: already drifted (65 in both gauges against 60 in the labeller).
+    risk_on_at: float
+    risk_off_at: float
 
 
 class BacktestRun(BaseModel):

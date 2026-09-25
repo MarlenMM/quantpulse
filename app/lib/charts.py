@@ -22,6 +22,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from lib.format import RATING_DISPLAY, humanize
+from quantpulse.news_intelligence.market_regime import RISK_OFF_AT, RISK_ON_AT
 from quantpulse.utils.market_calendar import trading_days_between
 
 __all__ = [
@@ -352,10 +353,12 @@ def regime_gauge(regime_score: float | None, label: str | None = None) -> go.Fig
             gauge={
                 "axis": {"range": [0, 100]},
                 "bar": {"color": _ACCENT},
+                # The label's own cutoffs, not literals: this said 65 while the
+                # label switched at 60, so 60-65 read "Risk On" in the neutral band.
                 "steps": [
-                    {"range": [0, 35], "color": "rgba(207, 34, 46, 0.25)"},
-                    {"range": [35, 65], "color": "rgba(154, 103, 0, 0.20)"},
-                    {"range": [65, 100], "color": "rgba(45, 164, 78, 0.25)"},
+                    {"range": [0, RISK_OFF_AT], "color": "rgba(207, 34, 46, 0.25)"},
+                    {"range": [RISK_OFF_AT, RISK_ON_AT], "color": "rgba(154, 103, 0, 0.20)"},
+                    {"range": [RISK_ON_AT, 100], "color": "rgba(45, 164, 78, 0.25)"},
                 ],
             },
         )

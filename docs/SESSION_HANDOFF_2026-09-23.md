@@ -431,7 +431,12 @@ The 2026-09-21 log still says *"Paper trading is not configured (no Alpaca
 credentials); skipping"* and *"Alerting is not configured (no webhook URL);
 sending nothing"*.
 
-### 29 · The landing page downloads 1.25 MB of Plotly to draw one gauge (S2)
+### 29 · The landing page downloads 1.25 MB of Plotly to draw one gauge (S2) — FIXED 2026-09-25
+
+**Status:** the regime dial is SVG (landing page 4.70 MB → 0.59 MB) and Stock
+Detail's Plotly is trimmed to three trace types (1,239 → 391 KB gzipped). Also
+fixed on the way: both gauges drew risk-on from 65 while the label switches at
+60; the cutoffs now come from the API. Backlog §7 has the measurements.
 
 Evidence: Dashboard requests · `index-*.js` 81 KB gz · `dist-*.js` **1,250 KB**
 gz (4.1 MB raw). What it draws there: the Market Regime dial — a semicircle, an

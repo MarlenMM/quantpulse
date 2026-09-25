@@ -272,6 +272,13 @@ export interface RegimePoint {
    * began.
    */
   coverage_note: string;
+  /**
+   * The label's cutoffs, which the gauge draws its zones from. Sent by the API
+   * rather than written here: both gauges once carried a literal 65 while the
+   * label switched at 60, so 60-65 read "Risk On" in the neutral band.
+   */
+  risk_on_at: number;
+  risk_off_at: number;
 }
 
 export interface BacktestRun {

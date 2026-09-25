@@ -640,7 +640,12 @@ def regime(
     """
     frame = persistence.read_recent_market_regime(session, limit=limit)
     return [
-        RegimePoint(**row, coverage_note=market_regime.describe_regime_coverage(row))
+        RegimePoint(
+            **row,
+            coverage_note=market_regime.describe_regime_coverage(row),
+            risk_on_at=market_regime.RISK_ON_AT,
+            risk_off_at=market_regime.RISK_OFF_AT,
+        )
         for row in _rows(frame)
     ]
 

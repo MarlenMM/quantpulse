@@ -1,4 +1,4 @@
-import { Chart } from "../components/Chart";
+import { RegimeGauge } from "../components/RegimeGauge";
 import {
   EmptyState,
   ErrorBox,
@@ -20,7 +20,6 @@ import {
   humanize,
   isBehind,
 } from "../lib/format";
-import { useThemeTokens, withAlpha } from "../lib/theme";
 import { useApi } from "../lib/useApi";
 
 function freshnessTone(source: string, label: string): string {
@@ -66,7 +65,6 @@ export default function Dashboard() {
   const news = useApi(() => api.news(6), []);
   const changes = useApi(() => api.ratingChanges(8), []);
   const rotation = useApi(() => api.sectorRotation(), []);
-  const theme = useThemeTokens();
 
   if (health.loading) return <Loading what="the dashboard" />;
   if (health.error) return <ErrorBox error={health.error} />;
@@ -170,34 +168,12 @@ export default function Dashboard() {
           {regime.loading ? <LoadingMetrics what="the regime index" count={4} /> : null}
           {latestRegime && latestRegime.regime_score !== null ? (
             <>
-              <Chart
+              <RegimeGauge
                 ariaLabel={`Market regime score ${latestRegime.regime_score.toFixed(0)} of 100, ${humanize(latestRegime.regime_label)}`}
-                height={200}
-                data={[
-                  {
-                    type: "indicator",
-                    mode: "gauge+number",
-                    value: latestRegime.regime_score,
-                    title: { text: humanize(latestRegime.regime_label) },
-                    number: { font: { size: 30 } },
-                    gauge: {
-                      axis: { range: [0, 100], tickcolor: theme.grid },
-                      bar: { color: theme.accent, thickness: 0.7 },
-                      bgcolor: "rgba(0,0,0,0)",
-                      borderwidth: 0,
-                      // The three zones are the only decoration on this
-                      // figure, and they are not decoration: they are the
-                      // risk-off / neutral / risk-on bands the score is read
-                      // against, in the same red/amber/green the ratings use.
-                      steps: [
-                        { range: [0, 35], color: withAlpha(theme.down, 0.16) },
-                        { range: [35, 65], color: withAlpha(theme.muted, 0.12) },
-                        { range: [65, 100], color: withAlpha(theme.up, 0.16) },
-                      ],
-                    },
-                  } as never,
-                ]}
-                layout={{ margin: { l: 24, r: 24, t: 34, b: 0 } }}
+                score={latestRegime.regime_score}
+                label={humanize(latestRegime.regime_label)}
+                riskOffAt={latestRegime.risk_off_at}
+                riskOnAt={latestRegime.risk_on_at}
               />
               <div className="metrics">
                 <Metric label="VIX" value={formatScore(latestRegime.vix_level)} term="VIX" />

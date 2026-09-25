@@ -14,3 +14,19 @@
 // `TS2882: Cannot find module or type declarations for side-effect import`,
 // which is what blocked the TypeScript 7 upgrade. The gap was always here --
 // the newer compiler only stopped ignoring it.
+
+// plotly.js's partial-bundle entry points (`src/lib/plotly.ts`). `@types/plotly.js`
+// describes the full bundle only; the core is the same API with fewer traces.
+declare module "plotly.js/lib/core" {
+  import Plotly from "plotly.js";
+  const core: typeof Plotly & { register(modules: unknown[]): void };
+  export default core;
+}
+declare module "plotly.js/lib/candlestick" {
+  const trace: unknown;
+  export default trace;
+}
+declare module "plotly.js/lib/scatterpolar" {
+  const trace: unknown;
+  export default trace;
+}

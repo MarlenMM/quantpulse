@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from quantpulse.analysis import risk
 from quantpulse.api.main import app, db_session
+from quantpulse.news_intelligence import market_regime
 from quantpulse.storage import persistence
 from quantpulse.storage.models import (
     AnalystConsensus,
@@ -343,6 +344,15 @@ class TestMarketRoutes:
     def test_regime(self, client: TestClient) -> None:
         points = client.get("/api/regime").json()
         assert points[-1]["regime_label"] == "risk_on"
+
+    def test_regime_carries_the_cutoffs_its_label_was_drawn_from(self, client: TestClient) -> None:
+        # Both gauges used to draw the risk-on band from a literal 65 while the
+        # label switched at 60, so a 62 read "Risk On" beside a bar ending in
+        # the neutral zone. The client draws the bands from these, so there is
+        # one definition of where they are.
+        point = client.get("/api/regime").json()[-1]
+        assert point["risk_on_at"] == market_regime.RISK_ON_AT
+        assert point["risk_off_at"] == market_regime.RISK_OFF_AT
 
     def test_market_news_is_tier_2_and_3_only(self, client: TestClient) -> None:
         titles = [item["title"] for item in client.get("/api/news").json()]

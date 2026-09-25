@@ -480,6 +480,20 @@ class TestCharts:
         assert fig.data[0].value == pytest.approx(72.5)
         assert fig.data[0].title.text == "Risk On"
 
+    def test_regime_gauge_bands_sit_where_the_label_changes(self) -> None:
+        # The green band started at a literal 65 while `market_regime` labels
+        # risk-on from 60: on 2026-09-16 a 64.7 was titled "Risk On" with its
+        # bar ending in the neutral band. The bands are the label's cutoffs.
+        from quantpulse.news_intelligence import market_regime
+
+        steps = charts.regime_gauge(62.0, "risk_on").data[0].gauge.steps
+        edges = [tuple(step.range) for step in steps]
+        assert edges == [
+            (0, market_regime.RISK_OFF_AT),
+            (market_regime.RISK_OFF_AT, market_regime.RISK_ON_AT),
+            (market_regime.RISK_ON_AT, 100),
+        ]
+
     def test_correlation_heatmap_bounds_the_scale(self) -> None:
         matrix = pd.DataFrame([[1.0, 0.3], [0.3, 1.0]], index=["A", "B"], columns=["A", "B"])
         fig = charts.correlation_heatmap(matrix)
