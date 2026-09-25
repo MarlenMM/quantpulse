@@ -8,7 +8,7 @@
 
 A self-hosted, $0-cost stock research & portfolio-management engine. Statistics and ML do the ranking/forecasting; a free-tier LLM only narrates results that already exist.
 
-**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys, and it holds its shape on a phone. It is read-only (GitHub Pages serves files; the Portfolio Manager needs to write).
+**Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys, and it holds its shape on a phone. Its Portfolio page keeps your holdings in your own browser — nothing is sent anywhere; the full Portfolio Manager, with the optimisers, rebalancing and history, is the Streamlit app.
 
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 
@@ -46,7 +46,7 @@ The LLM layer is optional by design: with no API key set (or `LLM_ENABLED=false`
 | Forecasting approaches | **4** — random-walk baseline, ARIMA/SARIMA, gradient-boosted ML, and a Monte Carlo fan chart. The first three are graded out-of-sample against the naive baseline; Monte Carlo deliberately is not, because it simulates the same random walk the baseline evaluates in closed form (grading it would be grading the baseline against itself) |
 | Backtest confidence | Sharpe & CAGR reported with **moving-block bootstrap** confidence intervals, never a bare point estimate |
 | Portfolio optimization methods | **3** — mean-variance (MPT), Hierarchical Risk Parity, and Black-Litterman driven by the app's own composite scores, each with a concrete buy/sell trade list |
-| Front ends | **2** — a 7-page Streamlit app (full app, incl. Portfolio Manager and the LLM narration layer) and a 5-page React + TypeScript SPA over a 14-endpoint read-only FastAPI. The two share every number: both read the same `storage.persistence` functions, the React screener's client-side re-weighting was checked against Streamlit's across all 503 names, and the numbers a stock shows on both (beta, Sharpe, Sortino, forecast prices, Kelly size) are asserted equal by test. The SPA omits only the LLM narration and the Portfolio Manager, which need write access and an API key the read-only API deliberately does not have |
+| Front ends | **2** — a 7-page Streamlit app (full app, incl. Portfolio Manager and the LLM narration layer) and a 6-page React + TypeScript SPA over a 14-endpoint read-only FastAPI. The two share every number: both read the same `storage.persistence` functions, the React screener's client-side re-weighting was checked against Streamlit's across all 503 names, and the numbers a stock shows on both (beta, Sharpe, Sortino, forecast prices, Kelly size) are asserted equal by test. The SPA omits the LLM narration and the Portfolio Manager's optimisers, rebalancing and history; its Portfolio page (FIFO lots, P/L, per-holding suggestions, concentration, risk) runs in the browser and is pinned to the engine's own results by a golden-file test in both languages |
 | Glossary terms | **71**, across 8 categories — one definition shared by every tooltip and both front ends |
 | Required budget | **$0** — every data source, model, and hosting option used is free-tier or open-source |
 
@@ -143,7 +143,7 @@ two front ends possible without duplicating a line of analysis:
 |---|---|---|
 | Role | The full app, including the Portfolio Manager | Stretch goal (ADR 4.1) — showcases the UI-agnostic engine |
 | Hosting | Streamlit Community Cloud, free and always-on | Render/Fly.io + Vercel free tiers |
-| Portfolio management | Yes | No — the API is read-only by design (see below) |
+| Portfolio management | Yes | A browser-local subset — the API stays read-only (see below) |
 
 ```bash
 # React + FastAPI (two terminals)
@@ -154,8 +154,10 @@ cd frontend && npm install && npm run dev          # SPA on :5173, proxies /api
 **The API is deliberately read-only.** Portfolio state is per-user and ADR 4.5
 splits it between a browser session and a local SQLite file; neither maps onto
 a stateless REST API without the authentication the single-user MVP explicitly
-doesn't have (Section 18). Portfolio management therefore stays in Streamlit,
-where its storage backends already live.
+doesn't have (Section 18). The full Portfolio Manager therefore stays in
+Streamlit, where its storage backends already live. The SPA's Portfolio page
+writes nothing to any server: the transaction log lives in the browser's
+`localStorage`, and a test asserts the client only ever issues plain GETs.
 
 ### Populating it with real data
 
@@ -282,9 +284,11 @@ the generator and the client agree about filenames only by convention, they are
 in different languages, and a one-character disagreement would 404 every request
 while the type check, the build and the unit tests all stayed green.
 
-**What Pages cannot host:** the Portfolio Manager. It needs per-visitor write
-state, and the API is read-only by design (see `api/main.py`'s docstring). Run
-`./run.sh` for that, or deploy the Streamlit app below.
+**What Pages cannot host:** the full Portfolio Manager — the optimisers, the
+rebalancing trade list and the history panel need the engine's solvers or data
+the demo does not publish. The demo's Portfolio page is the browser-local part
+of it; for the rest run `./run.sh`, or deploy the Streamlit app below. A CSV
+exported from the demo imports into it unchanged.
 
 ### 2. Streamlit Community Cloud — the full app, one manual step
 
@@ -302,6 +306,9 @@ is the one step that cannot be scripted. The repo is already prepared for it:
    PORTFOLIO_BACKEND = "session"
    ```
 5. **Deploy**. First build takes a few minutes.
+6. Open the app. The first page view on a fresh (or woken) container downloads
+   the demo database, about 83 MB, behind a spinner; later views are instant.
+   Any page can be the first one — a shared link straight to the Screener works.
 
 `requirements.txt` is what that host installs, and it deliberately omits torch,
 transformers and spaCy — the refresh job's models, roughly 2.5 GB of wheels,
@@ -527,8 +534,13 @@ files on GitHub Pages, so there is nowhere on a server to put it. It is
 per-browser, not synced to another device, and cleared with site data — a list
 that silently failed to follow you would be worse than one you knew was local.
 
-The Portfolio Manager's absence from the SPA stays deliberate for the same
-reason, and a test asserts it does not appear.
+The SPA's Portfolio page is local in exactly the same way, and says so. Its
+figures come from `frontend/src/lib/portfolio.ts`, a port of the engine's FIFO,
+recommendation and risk rules; both implementations are pinned to one golden
+file (`frontend/tests/fixtures/portfolio-golden.json`), regenerated from the
+engine with `uv run python tests/unit/test_portfolio_golden.py --write`, so
+the two cannot drift apart silently. It measures risk over the ~13 months of
+prices the demo publishes, where the full app uses 420 days.
 
 ### Charting dependency, handled deliberately
 

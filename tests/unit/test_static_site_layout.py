@@ -152,9 +152,9 @@ class TestSpaParityWithStreamlit:
     """Point 14's three features, asserted as parity rather than as existence.
 
     The SPA is the front end most visitors ever see, and it was missing three
-    things Streamlit has had since Phase 9. The Portfolio Manager's absence is
-    deliberate (ADR 4.5, the API is read-only) and is deliberately not counted
-    here -- these three were simply unbuilt.
+    things Streamlit has had since Phase 9. The full Portfolio Manager stays in
+    Streamlit (ADR 4.5, the API is read-only); the SPA's browser-local portfolio
+    (finding 33) is pinned to the engine by its own golden-file tests.
 
     Checked by grepping the sources rather than by rendering, because what this
     guards against is a *deletion*: the Playwright suites cover the behaviour,
@@ -192,8 +192,27 @@ class TestSpaParityWithStreamlit:
         assert "this browser only" in screener, screener[:0] or "watchlist scope not stated"
         assert "not synced" in screener
 
-    def test_the_spa_does_not_grow_a_portfolio_manager(self) -> None:
-        """ADR 4.5 is a decision, not a gap. A write path here would need the
-        read-only API to stop being read-only."""
-        pages = sorted((FRONTEND / "src" / "pages").glob("*.tsx"))
-        assert not any("Portfolio" in page.stem for page in pages), pages
+    def test_the_spa_never_writes_to_the_api(self) -> None:
+        """ADR 4.5 is a decision, not a gap: the API stays read-only.
+
+        This used to assert that no SPA page was called Portfolio, which was a
+        proxy -- a portfolio page implied a write path. Finding 33 added one
+        (the owner's choice) that writes nothing to any server: its state lives
+        in this browser's localStorage. So the invariant is now asserted
+        directly: every request the client makes is a plain GET, and nothing
+        under `src/` issues any other method or request body.
+        """
+        client = self._spa("lib/api.ts")
+        assert client.count("fetch(") == 1, "the API client should have one request path"
+        assert "fetch(url)" in client, "that path must be a plain GET, no init object"
+        for path in sorted((FRONTEND / "src").rglob("*.ts*")):
+            source = path.read_text()
+            for marker in ("method:", "XMLHttpRequest", "sendBeacon", "navigator.sendBeacon"):
+                assert marker not in source, f"{path.name} contains {marker!r}"
+
+    def test_the_spa_portfolio_says_it_is_local_to_the_browser(self) -> None:
+        """Like the watchlist: the one thing it must not do is imply it syncs."""
+        page = " ".join(self._spa("pages/Portfolio.tsx").split())
+        assert "This browser only." in page
+        assert "not synced" in page
+        assert "localStorage" in self._spa("lib/portfolioStore.ts")

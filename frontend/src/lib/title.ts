@@ -20,6 +20,7 @@ export const SITE_TITLE = "QuantPulse — S&P 500 research";
 export const ROUTE_TITLES: Record<string, string> = {
   "/dashboard": SITE_TITLE,
   "/screener": "Screener — QuantPulse",
+  "/portfolio": "Portfolio — QuantPulse",
   "/track-record": "Track Record — QuantPulse",
   "/glossary": "Glossary — QuantPulse",
 };

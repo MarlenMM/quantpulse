@@ -47,7 +47,7 @@ DEFAULT_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 #: added there and not here still works (via `404.html`) but answers 404, which
 #: is the whole bug this script exists to fix -- so `test_route_pages.py` pins
 #: the two lists against each other rather than trusting this comment.
-FIXED_ROUTES: tuple[str, ...] = ("dashboard", "screener", "track-record", "glossary")
+FIXED_ROUTES: tuple[str, ...] = ("dashboard", "screener", "portfolio", "track-record", "glossary")
 
 #: Each fixed route's `<title>` (finding 30). The Dashboard is the landing page
 #: and keeps the site's own title; the others name themselves, so four tabs are
@@ -57,6 +57,7 @@ FIXED_ROUTES: tuple[str, ...] = ("dashboard", "screener", "track-record", "gloss
 FIXED_TITLES: dict[str, str] = {
     "dashboard": "QuantPulse — S&P 500 research",
     "screener": "Screener — QuantPulse",
+    "portfolio": "Portfolio — QuantPulse",
     "track-record": "Track Record — QuantPulse",
     "glossary": "Glossary — QuantPulse",
 }

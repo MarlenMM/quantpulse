@@ -398,6 +398,66 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 33 — half the product had no public link
+
+Done 2026-09-25; the owner chose **both** routes.
+
+**(a) Streamlit Community Cloud — the owner's sign-in.** Re-checked as that host
+runs it (clean checkout, `requirements.txt`-only venv, the README's secrets,
+driven in a browser). That check found point 44 (a deep link on a cold container
+left the app empty), now fixed and re-verified. The README's click list is
+correct and gains the first-visit download note. The one remaining step is the
+owner's OAuth sign-in at share.streamlit.io.
+
+**(b) A Portfolio page in the public demo** (`/portfolio`). A transaction log
+kept in the browser's `localStorage` (and saying so), and everything the engine
+derives from one that needs only published data: FIFO lots and realized gains,
+value and P/L, the per-holding Add/Hold/Trim/Sell with its reason, concentration
+(position and sector HHI, 15% warnings), sector gaps with the screener's top
+names, the "rebalance worth considering" reasons, and the risk of today's mix
+(volatility, 1-day 95% VaR and expected shortfall, max drawdown, correlations).
+Trades take that day's published close when the price is blank; oversells are
+refused; CSV export/import uses the full app's format; an example portfolio
+(the engine's own) loads in one click. Not included, and said on the page: the
+optimisers, the rebalancing trade list, the history panel, splits after purchase.
+
+**How two implementations are kept from drifting.** `frontend/src/lib/portfolio.ts`
+ports `transactions.py`, `recommendations.py`, `holdings.sector_weights` and
+`risk.portfolio_risk`. Both are pinned to `frontend/tests/fixtures/portfolio-golden.json`:
+`tests/unit/test_portfolio_golden.py` recomputes it with the engine, and
+`frontend/tests/portfolio.spec.ts` requires `analyse()` — exactly what the page
+renders — to match it to 1e-9. It holds two seeded scenarios (a year of trades
+spanning a long and a short lot, a dividend-adjusted series, a name with missing
+days, cash, every action, warnings, gaps; and a book too short for VaR or
+correlation), the one-year rule's edge dates, the engine's example portfolio and
+its CSV. A static-suite test then pins the page to `analyse()` on the real
+published files.
+
+Details the port had to get exactly right: numpy's linear quantile, sample (n−1)
+standard deviation, a return touching a missing day staying missing (pandas 3
+does not forward-fill — measured), Python's round-half-even in `{:.0%}` messages
+(`percent0`), holdings valued at `close` while returns use `adj_close`.
+
+**Mutation-checked twenty ways** across the port, the store and the page — FIFO→LIFO,
+half-up rounding, `>=` for the one-year rule (survived at first: no sale fell on
+an anniversary, so the golden file gained edge cases), nearest-rank quantile,
+population std, forward-filled gaps, returns on `close`, a sixth gap candidate,
+no concentration cap, a 20-day correlation floor, the headline total without
+cash, a blank price taking the wrong bar, an oversell accepted — each caught.
+Two were equivalent and said so: valuing at `adj_close` (equal to `close` on the
+latest bar) and the Feb-29 special case (string comparison already draws the
+engine's boundary), which was removed as dead code.
+
+**Found on the way:** the Symbol field's `<datalist>` sat inside its `<label>`,
+so its accessible name was "Symbol" followed by 503 company names; moved out.
+axe-core: 0 violations on the page, empty and filled, both themes.
+
+**A recorded decision, superseded by the owner:** `test_the_spa_does_not_grow_a_portfolio_manager`
+asserted no SPA page was called Portfolio — a proxy for ADR 4.5's read-only API.
+It is replaced by the invariant itself (`test_the_spa_never_writes_to_the_api`:
+the client only issues plain GETs, nothing under `src/` sets a method or beacons)
+plus a check that the page says it is local.
+
 ### Point 44 — the hosted Streamlit app would have stayed empty after a deep link
 
 Found 2026-09-25 while re-checking finding 33's "the repo is prepared for

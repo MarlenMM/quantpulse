@@ -507,7 +507,11 @@ stock's title and description), plus one static preview image (the mark and the
 name). Generate `sitemap.xml` from the same route list, and a three-line
 `robots.txt` pointing at it.
 
-### 33 · Half the product has no public link (S3) — needs the user's call
+### 33 · Half the product has no public link (S3) — DONE 2026-09-25 (user chose both)
+
+**Status:** (b) the demo has a browser-local Portfolio page pinned to the engine by a
+golden file (backlog §7); (a) Community Cloud re-verified in simulation (which found
+and fixed 44) — the OAuth sign-in at share.streamlit.io is still the user's to do.
 
 The pitch is two functions: a screener and a portfolio manager. Function 2 — FIFO
 lots, three optimisers, correlation clusters, VaR, the rebalancing trade list, the
