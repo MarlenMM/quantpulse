@@ -12,6 +12,13 @@ open finding in full, and the prompt for the next session.
 - **Previous (2026-09-03) audit page, points 1–18:** <https://claude.ai/code/artifact/daf2285a-ae37-4964-a239-976ad0a84116>
 - **Deeper per-fix write-ups** are in `docs/IMPROVEMENT_BACKLOG.md` §7 (points 19–25), and each commit message carries the full reasoning.
 
+**Deployed 2026-09-25:** the full Streamlit app is live at
+<https://quantpulse-demo.streamlit.app> (Community Cloud, account marlenmm; Python
+3.12, `app/Home.py`, secrets `DATABASE_URL`/`PORTFOLIO_BACKEND=session`). The first
+build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) now
+wins — verified after a reboot, together with point 44 on a cold deep link. The host
+swaps pyarrow 25.0.0 → 24.0.0 by itself.
+
 **Continued again 2026-09-25** (HEAD `62cb07b`, **1,977 passed / 1 skipped**; static 41,
 e2e 15; CI and Pages green): **29–33 done** (33: user chose both), plus **43** (27's
 notify job broke the nightly's startup — fixed `4b78f59`, verified on GitHub) and **44**

@@ -168,9 +168,9 @@ export default function Portfolio() {
       <p className="callout callout-note">
         <strong>This browser only.</strong> Nothing is sent anywhere — the site is static files
         and has no server to send it to. It is not synced to other devices, and clearing this
-        site&rsquo;s data clears it. Export a CSV to keep it; the same file imports into the full
-        app&rsquo;s Portfolio Manager, which adds the optimisers, the rebalancing trade list and
-        the history panel.
+        site&rsquo;s data clears it. Export a CSV to keep it; the same file imports into{" "}
+        <a href="https://quantpulse-demo.streamlit.app/Portfolio">the full app&rsquo;s Portfolio
+        Manager</a>, which adds the optimisers, the rebalancing trade list and the history panel.
       </p>
 
       <Controls state={state} setState={setState} />
