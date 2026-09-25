@@ -69,6 +69,7 @@ __all__ = [
     "describe_edge",
     "describe_history_position",
     "DEFAULT_HORIZONS",
+    "HORIZON_SCOPE_NOTE",
     "DEFAULT_CONFIDENCE",
     "baseline_forecast",
     "statistical_forecast",
@@ -85,9 +86,27 @@ __all__ = [
     "is_graded",
 ]
 
-# Horizons in *trading* days: ~1 week, 1 month, 1 quarter, 1 year (Section 7.6
-# forecasts "5-day, 20-day" and the longer 3-month/1-year emphasis shift).
-DEFAULT_HORIZONS: tuple[int, ...] = (5, 20, 63, 252)
+# Horizons in *trading* days: ~1 week and ~1 month (Section 7.6's "5-day,
+# 20-day"). The published horizons are exactly the ones the stored history can
+# grade (point 35). A hit rate needs `backtest.MIN_GRADED_WINDOWS` (30)
+# non-overlapping windows. The weekly run's ~3.5-year read window yields about
+# 164 at h=5 and 39 at h=20, but 13 at h=63 (9 once GBR's training floor is
+# counted) and none at h=252. More weeks never close that gap; it needs roughly
+# 7.5 more years at h=63 and 30 at h=252. So every quarter and year forecast
+# ever published sat in the ungraded drawer, carried the largest numbers on the
+# page, and cost about five minutes of each weekly run. They were dropped rather
+# than graded against the deeper local history, because that history covers only
+# today's survivors.
+DEFAULT_HORIZONS: tuple[int, ...] = (5, 20)
+
+#: Why there is no quarter or year forecast. Composed here and sent by the API so
+#: both front ends print the same sentence.
+HORIZON_SCOPE_NOTE = (
+    "Forecasts stop at 20 trading days. Quarter- and year-ahead forecasts are not "
+    "published because the stored history cannot grade them: a hit rate needs 30 "
+    "independent windows, and about three and a half years of prices hold roughly a "
+    "dozen quarter-long windows and no complete set of year-long ones."
+)
 DEFAULT_CONFIDENCE = 0.90
 
 

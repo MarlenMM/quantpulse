@@ -278,8 +278,8 @@ def render_ungraded_forecasts(rows: pd.DataFrame) -> None:
 
     They were previously in the same table as the graded ones, differing only by
     three dashes -- and they are precisely the rows carrying the largest numbers.
-    On the real universe every 63- and 252-day forecast is ungraded, the 252-day
-    ones average +16% and reach +231%, and a reader skimming the table saw
+    When this was written every 63- and 252-day forecast was ungraded, the 252-day
+    ones averaged +16% and reached +231%, and a reader skimming the table saw
     "+82.2%, target $379.77" set exactly like a figure standing on 154 measured
     windows. The page's own rule (Section 7.6: "a forecast without its own track
     record next to it invites more confidence than it's earned") was satisfied to
@@ -288,7 +288,9 @@ def render_ungraded_forecasts(rows: pd.DataFrame) -> None:
     They are disclosed rather than deleted: the forecast is real, it is the
     model's honest output, and hiding a one-year number a reader came looking for
     would be its own kind of dishonesty. What changes is that it no longer
-    borrows the credibility of the rows above it.
+    borrows the credibility of the rows above it. (The 63- and 252-day horizons
+    are no longer published at all -- point 35 -- so this now appears only when a
+    model is short of graded windows at 5 or 20 days.)
     """
     horizons = ", ".join(f"{int(h)}-day" for h in sorted(rows["horizon_days"]))
     with st.expander(f"Show {len(rows)} ungraded horizon(s) — {horizons}", expanded=False):
@@ -296,10 +298,8 @@ def render_ungraded_forecasts(rows: pd.DataFrame) -> None:
             "**These horizons have no measured accuracy at all.** Not a low hit rate — "
             "no hit rate: the model has never been graded over enough independent "
             f"periods at these horizons for a number to mean anything ("
-            f"{backtest.MIN_GRADED_WINDOWS} distinct windows are required). A one-year "
-            "horizon needs roughly independent *years* to test against, and three years "
-            "of stored history does not contain many. Treat what follows as the model "
-            "talking, not as a track record."
+            f"{backtest.MIN_GRADED_WINDOWS} distinct windows are required). Treat what "
+            "follows as the model talking, not as a track record."
         )
         st.dataframe(
             _forecast_frame(rows),
@@ -1066,6 +1066,7 @@ def main() -> None:
                 "**Windows** is how many separate historical periods those rates were "
                 "measured over."
             )
+        st.caption(forecasting.HORIZON_SCOPE_NOTE)
 
     render_monte_carlo(symbol, bars)
 

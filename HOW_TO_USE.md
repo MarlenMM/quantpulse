@@ -47,7 +47,7 @@ Settings, which are marked below. Your local copy has all seven.
 |---|---|---|
 | **Dashboard** | The market at a glance | See today's top-ranked names, whether the market is risk-on or risk-off, which sectors money moved into this month, and which ratings changed since yesterday |
 | **Screener** | The ranked list of all 503 companies | Sort and filter the whole S&P 500 by score, rating or sector; search by name; switch investor profile (below); compare up to four names side by side; download it as a spreadsheet |
-| **Stock Detail** | One company, in depth | Price chart, the category scores behind its rating, detected chart patterns, forecasts at four horizons each with its own track record, volatility/Sharpe/Sortino/beta, and a simulated range of future prices |
+| **Stock Detail** | One company, in depth | Price chart, the category scores behind its rating, detected chart patterns, forecasts a week and a month ahead, each with its own track record, volatility/Sharpe/Sortino/beta, and a simulated range of future prices |
 | **Backtest / Track Record** | Did the ranking actually work? | The historical result of following the **momentum** half of the ranking, with confidence intervals and a benchmark to compare against. The page names its own signal and says plainly why it is not yet the full Buy/Sell rating — five of the seven scoring categories have only weeks of stored history, and ranking a 2023 rebalance by 2026 fundamentals would be look-ahead bias |
 | **Portfolio Manager** *(local only)* | Your own holdings | Enter what you own, see risk, correlation, sector concentration, add/trim/hold/sell suggestions, and three target allocations with a concrete trade list |
 | **Settings** *(local only)* | What's switched on | Which data sources are configured and when each last ran |
@@ -92,9 +92,11 @@ names.
 **Forecasts come with their own report card.** Each horizon shows a hit rate,
 the naive baseline's hit rate next to it, and how many independent windows it
 was measured over. **When the app's model doesn't beat the naive baseline, it
-shows you that** — and mostly it doesn't. The 63-day and 252-day rows show "—"
-for hit rate because there wasn't enough history to grade them honestly.
-An ungraded forecast is a guess, and the app says so.
+shows you that** — and mostly it doesn't. There are no quarter- or year-ahead
+forecasts: the stored history holds too few independent quarters and years to
+grade them, and a forecast that can never be checked isn't published. If a model
+is ever short of graded windows at a published horizon, its rows sit behind a
+separate "ungraded" disclosure.
 
 **Backtest numbers carry confidence intervals.** Sharpe 1.40 with a 90% interval
 of [0.69, 2.35] is not the same claim as "Sharpe 1.40". If an interval crosses

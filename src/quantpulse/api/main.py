@@ -382,6 +382,7 @@ def stock_detail(
             _forecast_row(ticker, row)
             for row in _rows(persistence.read_symbol_forecasts(session, ticker))
         ],
+        horizon_note=forecasting.HORIZON_SCOPE_NOTE,
         patterns=[
             PatternRow(**row) for row in _rows(persistence.read_symbol_patterns(session, ticker))
         ],

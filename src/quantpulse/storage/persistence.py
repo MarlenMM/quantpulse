@@ -31,6 +31,7 @@ from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from quantpulse.analysis import forecasting
 from quantpulse.storage.models import (
     AnalystConsensus,
     BacktestResult,
@@ -961,10 +962,18 @@ def read_symbol_ohlcv(session: Session, symbol: str, *, lookback_days: int = 400
 
 
 def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
-    """The most recent generated forecast set for one symbol, all models and horizons."""
+    """The most recent generated forecast set for one symbol, all models, published horizons.
+
+    Only `forecasting.DEFAULT_HORIZONS` are read (point 35). The table is
+    append-only, so the 63- and 252-day rows written before those horizons were
+    dropped stay in it, and a symbol whose weekly forecast failed still has them
+    at its latest date. Filtering here removes them from both front ends and the
+    static site at once, without deleting history.
+    """
+    published = Forecast.horizon_days.in_(forecasting.DEFAULT_HORIZONS)
     latest = session.scalars(
         select(Forecast.generated_date)
-        .where(Forecast.symbol == symbol)
+        .where(Forecast.symbol == symbol, published)
         .order_by(Forecast.generated_date.desc())
         .limit(1)
     ).first()
@@ -988,7 +997,7 @@ def read_symbol_forecasts(session: Session, symbol: str) -> pd.DataFrame:
             Forecast.outside_own_history,
             Forecast.generated_date,
         )
-        .where(Forecast.symbol == symbol, Forecast.generated_date == latest)
+        .where(Forecast.symbol == symbol, Forecast.generated_date == latest, published)
         .order_by(Forecast.horizon_days, Forecast.model_name)
     )
     rows = session.execute(stmt).all()

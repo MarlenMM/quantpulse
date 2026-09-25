@@ -6,11 +6,17 @@ confidence than it's earned." The Stock Detail page satisfied that to the letter
 row sat in the same table, in the same weight, as rows standing on 154 measured
 out-of-sample windows.
 
-The rows that lose by this are exactly the ones carrying the largest numbers. On
-the real universe every 63- and 252-day forecast is ungraded (not *some* — all of
-them), the 252-day ones average **+16%** and reach **+231%**, and the biggest,
-least defensible figure on the page was the one with no accuracy measurement at
-all behind it.
+The rows that lose by this are exactly the ones carrying the largest numbers.
+When this was written every 63- and 252-day forecast was ungraded (not *some* —
+all of them), the 252-day ones averaged **+16%** and reached **+231%**, and the
+biggest, least defensible figure on the page was the one with no accuracy
+measurement at all behind it.
+
+Point 35 then dropped those two horizons: the stored history can never grade
+them. The disclosure stays for a published horizon a model is short of windows
+at, so the fixture below grades h=5 and leaves h=20 ungraded, and also stores
+leftover 63- and 252-day rows, as the append-only table really does, which must
+not appear anywhere on the page.
 
 So the graded horizons are the default view and the ungraded ones sit behind a
 disclosure that says what is missing. These tests pin that split at the point a
@@ -40,11 +46,13 @@ STOCK_DETAIL = str(APP_DIR / "pages" / "2_Stock_Detail.py")
 AS_OF = date(2026, 8, 26)
 SYMBOL = "AAA"
 
-# The shape the real database has: the short horizons carry a measured rate, the
-# long ones carry none at all -- and the long ones are where the big numbers are.
-GRADED_HORIZONS = (5, 20)
-UNGRADED_HORIZONS = (63, 252)
-UNGRADED_RETURNS = {63: 0.163, 252: 0.822}
+# One graded published horizon and one ungraded one; the ungraded one carries the
+# big number, as the ungraded rows always have.
+GRADED_HORIZONS = (5,)
+UNGRADED_HORIZONS = (20,)
+UNGRADED_RETURNS = {20: 0.822}
+# Written before point 35 and still in the table at the symbol's latest date.
+DROPPED_HORIZONS = (63, 252)
 
 
 def _seed(engine: Engine) -> None:
@@ -105,6 +113,22 @@ def _seed(engine: Engine) -> None:
                     point_price=379.77,
                     lower_price=180.53,
                     upper_price=798.91,
+                    historical_hit_rate=None,
+                    baseline_hit_rate=None,
+                    hit_rate_windows=None,
+                )
+            )
+        for horizon in DROPPED_HORIZONS:
+            session.add(
+                Forecast(
+                    symbol=SYMBOL,
+                    generated_date=AS_OF,
+                    horizon_days=horizon,
+                    model_name="baseline",
+                    point_return=2.31,
+                    point_price=699.0,
+                    lower_price=150.0,
+                    upper_price=1500.0,
                     historical_hit_rate=None,
                     baseline_hit_rate=None,
                     hit_rate_windows=None,
@@ -229,8 +253,31 @@ class TestUngradedForecastsAreNotShownAsEvidence:
         forecast_tables, _ = _render(engine)
         biggest_ungraded = max(UNGRADED_RETURNS.values())
         assert biggest_ungraded > 0.5, "fixture: the ungraded row must carry a large number"
-        assert 252 not in forecast_tables[0]
         assert not forecast_tables[0] & set(UNGRADED_HORIZONS)
+
+    def test_a_dropped_horizon_left_in_the_table_is_not_shown_at_all(self, engine: Engine) -> None:
+        """Point 35: 63 and 252 are no longer published, and old rows stay stored.
+
+        Not in the graded table and not in the disclosure either. The table is
+        append-only, so a symbol whose weekly forecast failed still has them at its
+        latest date, carrying the largest returns on the page.
+        """
+        forecast_tables, expanders = _render(engine)
+        shown = set().union(*forecast_tables)
+        assert not shown & set(DROPPED_HORIZONS), (
+            f"the page showed dropped horizons {shown & set(DROPPED_HORIZONS)}"
+        )
+        assert not any("63-day" in e or "252-day" in e for e in expanders)
+
+    def test_the_page_says_why_the_forecasts_stop_at_twenty_days(self, engine: Engine) -> None:
+        with _wired(engine):
+            at = AppTest.from_file(STOCK_DETAIL, default_timeout=180)
+            at.run()
+        assert not at.exception, f"Stock Detail raised: {at.exception}"
+        captions = [c.value for c in at.caption]
+        assert forecasting.HORIZON_SCOPE_NOTE in captions, (
+            "the reason there is no quarter or year forecast is not on the page"
+        )
 
 
 class TestTheSplitRuleIsShared:

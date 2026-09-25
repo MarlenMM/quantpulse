@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 from quantpulse import on_demand
+from quantpulse.analysis import forecasting
 
 
 def _prices(n: int = 400, start: float = 100.0, drift: float = 0.0006) -> pd.DataFrame:
@@ -183,8 +184,13 @@ def test_a_failing_fetch_degrades_to_a_note_rather_than_an_exception(no_network)
 
 
 def test_only_horizons_the_history_supports_are_offered(no_network) -> None:
-    """The 3x-history floor is why 252 days is not on the menu for a two-year fetch."""
-    assert 252 not in on_demand.HORIZONS
+    """The same horizons the weekly run publishes, and no longer ones.
+
+    Point 35: 63 and 252 days cannot be graded on the stored history, so neither
+    front end publishes them; an on-demand lookup offering 63 would bring back an
+    ungradable quarter-ahead number through a side door.
+    """
+    assert tuple(on_demand.HORIZONS) == forecasting.DEFAULT_HORIZONS
     result = on_demand.analyse("TEST")
     assert result is not None
     assert {f.horizon_days for f in result.forecasts} <= set(on_demand.HORIZONS)

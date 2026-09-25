@@ -188,6 +188,8 @@ export interface StockDetail {
   explanation: RatingExplanation | null;
   prices: PriceBar[];
   forecasts: ForecastRow[];
+  /** Why forecasts stop at 20 days (point 35); printed verbatim. */
+  horizon_note: string;
   patterns: PatternRow[];
   analyst_consensus: AnalystConsensus | null;
   news: NewsItem[];

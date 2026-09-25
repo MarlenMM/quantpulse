@@ -44,16 +44,14 @@ from quantpulse.ingestion import yfinance_client
 
 logger = logging.getLogger(__name__)
 
-# Two years: enough for the 63-day forecast horizon's 3x-history floor and a
-# 200-day moving average, without making the fetch slow enough to feel like a
-# page load. The 252-day horizon needs three years and is deliberately not
-# offered here -- see `MAX_HORIZON_DAYS`.
+# Two years: comfortably above the 20-day horizon's 3x-history floor, and enough
+# for a 200-day moving average, without a fetch slow enough to feel like a page
+# load.
 DEFAULT_PERIOD = "2y"
 
-# Horizons this path can support honestly. `forecasting.min_bars_for_horizon`
-# requires 3x the horizon in history, so a 252-day forecast from two years of
-# data is exactly the over-reach that guard exists to prevent.
-HORIZONS = (5, 20, 63)
+# The same horizons the weekly run publishes (point 35). The 63-day horizon
+# used to be offered here too, even though nothing could grade it.
+HORIZONS = forecasting.DEFAULT_HORIZONS
 
 # Fetches that are independent of each other, run together because three
 # sequential round trips is the difference between a snappy lookup and a slow

@@ -604,6 +604,41 @@ strings shown. Static suite 29/29, e2e 6/6, pytest 1,949.
 only `emit_route_pages.py` writes — and every `npm run build` wipes `dist/`. Run
 the emitter after each build (the Pages workflow always does).
 
+### Point 35 — two of the four horizons could never be graded
+
+Measured on the published database: 5- and 20-day forecasts are graded on every
+row (hit-rate windows up to 156 and 39); **all 15,504** stored 63- and 252-day
+rows are ungraded. A hit rate needs 30 non-overlapping windows; the weekly run's
+~3.5-year read window allows at most 164 / 39 / **13** / **0** at h = 5 / 20 / 63 /
+252, and the log reports 9 at h=63 once GBR's training floor is counted. That gap
+does not close with time on this history (≈7.5 more years at 63, ≈30 at 252), so
+every quarter and year forecast was destined for the ungraded drawer, carried the
+largest numbers on the page, and cost ~5 of the forecast step's ~20 minutes.
+
+**User's call: drop them, say why.** Grading them against the deeper local history
+(1972–2026) was rejected: that history covers only today's survivors.
+
+**Fix:** `forecasting.DEFAULT_HORIZONS = (5, 20)`, used by the weekly run and, now,
+by on-demand lookups (which had offered 63). The reader serves only published
+horizons, taking the latest date over them too, so the 63/252 rows kept by the
+append-only table (and still at the latest date of a symbol whose weekly run
+failed) leave both front ends and the static site with this push, not with the
+next weekly run, and nothing is deleted. `forecasting.HORIZON_SCOPE_NOTE` says why
+on both Stock Detail pages (server-composed, printed verbatim). The ungraded
+drawer stays for a published horizon a model is short of windows at. The read
+window was deliberately **not** shortened: it is also what the hit rates are graded
+over. README / HOW_TO_USE updated.
+
+**Tests:** every published horizon can reach 30 windows on the read window (the
+bound is checked against a real `walk_forward_accuracy` run), and 63/252 cannot;
+stored 63/252 rows are not served, and a newer date holding only them doesn't
+hide the published set; the note reaches the API and the Streamlit page; on-demand
+horizons equal the published ones; the Streamlit drawer test now grades h=5,
+leaves h=20 ungraded and seeds leftover 63/252 rows; e2e makes its ungraded row
+explicitly from the recaptured fixture; the static test reads the published
+payload instead of expecting a 252-day row. Mutations (re-add 63; drop either
+reader filter; drop the Streamlit note; on-demand back to 63) each fail a test.
+
 ### Point 46 — the hosted app served new pages on top of old modules
 
 Found 2026-09-26, the first code push after the Community Cloud deploy that

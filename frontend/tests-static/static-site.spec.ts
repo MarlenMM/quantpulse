@@ -300,31 +300,47 @@ test("a stock page deep link renders its charts", async ({ page }) => {
   for (const { asked, drawn } of types) expect(drawn).toEqual(asked);
 
   // The forecast table's default view must hold only horizons with a measured
-  // accuracy. Every 63- and 252-day forecast in the published data is ungraded,
-  // and those carry by far the largest returns (AIZ's one-year row is +29%
-  // against +2% at twenty days), so an ungraded row rendered in the same table
-  // as a graded one borrows evidence it does not have. Asserted in a real
-  // browser because it is a claim about what a reader sees, not about the data.
-  // Scoped to the *first* such table, which is the graded one: a closed
-  // `<details>` still holds its rows in the DOM, so a whole-page row query
-  // matches the ungraded ones too and this assertion would pass for the wrong
-  // reason. Matched on the horizon cell rather than on the text "252", which
-  // also appears in prices.
+  // accuracy: an ungraded row rendered in the same table as a graded one borrows
+  // evidence it does not have. Asserted in a real browser because it is a claim
+  // about what a reader sees, not about the data. Driven by the published
+  // payload rather than by a horizon: since point 35 only the 5- and 20-day
+  // horizons are published (the data cannot grade 63 or 252), and on the
+  // published data every row of them is graded, so the disclosure appears only
+  // when a model is short of windows -- and a test that expected a 252-day row
+  // in it would fail on correct data, the way point 42's regime test did.
+  // Scoped to the *first* table, which is the graded one: a closed `<details>`
+  // still holds its rows in the DOM, so a whole-page row query matches the
+  // ungraded ones too and would pass for the wrong reason.
+  const allForecasts = (
+    JSON.parse(
+      readFileSync(join(process.cwd(), "dist", "data", "stocks__AIZ.json"), "utf8"),
+    ) as { forecasts: { model_name: string; horizon_days: number; is_graded: boolean }[] }
+  ).forecasts;
+  expect(allForecasts.length).toBeGreaterThan(0);
+  expect(new Set(allForecasts.map((f) => f.horizon_days))).toEqual(new Set([5, 20]));
+  // The table shows one model at a time: compare against the selected one's rows.
+  const selectedModel = await page.getByLabel("Model").inputValue();
+  const forecasts = allForecasts.filter((f) => f.model_name === selectedModel);
+  expect(forecasts.length).toBeGreaterThan(0);
+  const ungradedHorizons = [
+    ...new Set(forecasts.filter((f) => !f.is_graded).map((f) => f.horizon_days)),
+  ];
   const defaultTable = page.locator("table:has(th:text-is('Horizon (days)'))").first();
-  await expect(defaultTable.locator("tbody tr").first()).toBeVisible();
-  await expect(
-    defaultTable.locator('tbody tr:has(td:nth-child(1):text-is("252"))'),
-  ).toHaveCount(0);
+  await expect(defaultTable.locator("tbody tr")).toHaveCount(
+    forecasts.filter((f) => f.is_graded).length,
+  );
 
   const disclosure = page.locator("details", { hasText: /ungraded horizon/i });
-  await expect(disclosure).toBeVisible();
-  const hiddenLongHorizon = disclosure.locator(
-    'tbody tr:has(td:nth-child(1):text-is("252"))',
-  );
-  await expect(hiddenLongHorizon).toHaveCount(1);
-  await expect(hiddenLongHorizon).not.toBeVisible();
-  await disclosure.locator("summary").click();
-  await expect(hiddenLongHorizon).toBeVisible();
+  if (ungradedHorizons.length === 0) {
+    await expect(disclosure).toHaveCount(0);
+  } else {
+    await expect(disclosure).toBeVisible();
+    const hidden = disclosure.locator("tbody tr");
+    await expect(hidden).toHaveCount(forecasts.length - forecasts.filter((f) => f.is_graded).length);
+    await expect(hidden.first()).not.toBeVisible();
+    await disclosure.locator("summary").click();
+    await expect(hidden.first()).toBeVisible();
+  }
 
   expect(errors).toEqual([]);
 });

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from quantpulse.analysis import risk
+from quantpulse.analysis import forecasting, risk
 from quantpulse.api.main import app, db_session
 from quantpulse.news_intelligence import market_regime
 from quantpulse.storage import persistence
@@ -723,7 +723,7 @@ class TestForecastGradingReachesTheClient:
                 Forecast(
                     symbol="AAPL",
                     generated_date=TODAY,
-                    horizon_days=252,
+                    horizon_days=20,
                     model_name="baseline",
                     point_return=0.822,
                     point_price=379.77,
@@ -738,17 +738,82 @@ class TestForecastGradingReachesTheClient:
 
         for c in _client(tmp_path, extra=_seed_ungraded):
             rows = c.get("/api/stocks/AAPL").json()["forecasts"]
-            long_horizon = [r for r in rows if r["horizon_days"] == 252]
-            assert long_horizon, "the fixture stored no 252-day forecast"
-            assert long_horizon[0]["is_graded"] is False, (
-                "a one-year forecast with no measured accuracy was sent to the client "
+            ungraded = [r for r in rows if r["historical_hit_rate"] is None]
+            assert ungraded, "the fixture stored no ungraded forecast"
+            assert ungraded[0]["is_graded"] is False, (
+                "a forecast with no measured accuracy was sent to the client "
                 "flagged as graded -- React would render it in the default table"
             )
             # The point of the split: it is also the biggest number in the set.
-            assert long_horizon[0]["point_return"] > max(
+            assert ungraded[0]["point_return"] > max(
                 r["point_return"] for r in rows if r["is_graded"]
             )
             break
+
+
+class TestDroppedHorizonsAreNotServed:
+    """Point 35: the 63- and 252-day horizons are no longer published.
+
+    The forecasts table is append-only, so rows written before the change stay,
+    and a symbol whose weekly forecast failed still has them at its latest date.
+    """
+
+    def test_a_stored_252_day_row_is_not_sent(self, tmp_path) -> None:
+        def _seed_dropped(session: Session) -> None:
+            for horizon in (63, 252):
+                session.add(
+                    Forecast(
+                        symbol="AAPL",
+                        generated_date=TODAY,
+                        horizon_days=horizon,
+                        model_name="gbr",
+                        point_return=2.31,
+                        point_price=699.0,
+                        lower_price=150.0,
+                        upper_price=1500.0,
+                    )
+                )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_dropped):
+            rows = c.get("/api/stocks/AAPL").json()["forecasts"]
+            assert rows, "the fixture's published forecast was dropped too"
+            assert {r["horizon_days"] for r in rows} <= set(forecasting.DEFAULT_HORIZONS)
+            break
+
+    def test_a_symbol_left_with_only_dropped_rows_reads_its_last_published_set(
+        self, tmp_path
+    ) -> None:
+        """The latest date is taken over published horizons, not over every row.
+
+        Otherwise a newer run that stored only a leftover long horizon would hide
+        the symbol's real forecasts behind an empty set.
+        """
+
+        def _seed_newer_dropped(session: Session) -> None:
+            session.add(
+                Forecast(
+                    symbol="AAPL",
+                    generated_date=TODAY + timedelta(days=7),
+                    horizon_days=252,
+                    model_name="gbr",
+                    point_return=2.31,
+                    point_price=699.0,
+                    lower_price=150.0,
+                    upper_price=1500.0,
+                )
+            )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_newer_dropped):
+            rows = c.get("/api/stocks/AAPL").json()["forecasts"]
+            assert [r["horizon_days"] for r in rows] == [5]
+            break
+
+    def test_the_page_says_why_there_is_no_longer_horizon(self, client: TestClient) -> None:
+        note = client.get("/api/stocks/AAPL").json()["horizon_note"]
+        assert note == forecasting.HORIZON_SCOPE_NOTE
+        assert "20 trading days" in note and "cannot grade" in note
 
 
 class TestRegimeCoverageReachesTheClient:
