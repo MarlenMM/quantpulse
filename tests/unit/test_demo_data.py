@@ -56,6 +56,16 @@ class TestFetch:
         get.assert_not_called()
         assert target.read_bytes() == b"mine"
 
+    def test_the_empty_file_sqlite_leaves_behind_is_downloaded_over(self, tmp_path: Path) -> None:
+        """Point 44: a page that connects before the download leaves a zero-byte
+        file, and "exists, so leave it alone" then kept the hosted app empty for
+        the life of its container. Zero bytes is nobody's data."""
+        target = tmp_path / "demo.db"
+        target.touch()
+        with patch("quantpulse.demo_data.requests.get", return_value=_response(_payload())):
+            assert demo_data.fetch(target) is True
+        assert target.read_bytes()[:15] == b"SQLite format 3"
+
     def test_a_short_response_is_refused(self, tmp_path: Path) -> None:
         """GitHub answers a bad release URL with an HTML error page. Saved as a
         database it surfaces much later as a corrupt-database error from SQLite,

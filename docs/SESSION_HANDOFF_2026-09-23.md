@@ -657,6 +657,14 @@ on 2026-09-22 data and would have until the market turned risk-on. Fixed in
 holds. Reproduced on the published database first; mutation-checked two ways;
 live `health.json` moved to 2026-09-23 on the next publish.
 
+### 44 · The hosted Streamlit app stayed empty after a deep link (S1 for that host) — FIXED 2026-09-25
+
+Reproduced as Community Cloud runs it (clean checkout, `requirements.txt` venv):
+a deep link on a cold container made SQLite create a 0-byte database that
+suppressed the download forever. Every read now ensures the database first, and
+a zero-byte file counts as missing in both `ensure_demo_database` and `fetch`.
+Re-verified on the simulated host. Backlog §7.
+
 ### 43 · The fix for 27 stopped the nightly from starting (S1) — FIXED 2026-09-25
 
 Run `36076360382` (2026-09-25 00:11 UTC): `startup_failure` — `pages.yml`'s new

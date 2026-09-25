@@ -398,6 +398,50 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 44 — the hosted Streamlit app would have stayed empty after a deep link
+
+Found 2026-09-25 while re-checking finding 33's "the repo is prepared for
+Community Cloud". **Reproduced as that host runs it**: a clean checkout (no
+database — it is a release asset), a venv built from `requirements.txt` alone
+(564 MB, Python 3.12), `streamlit run app/Home.py` with the README's two secrets,
+driven in a browser.
+
+- Home opened first: the 82.8 MB download completed and every page worked.
+- **A deep link opened first** (`/Screener`): only `Home.py` called
+  `ensure_demo_database()`, so the page connected first and SQLite created a
+  **0-byte** `quantpulse_demo.db`. From then on "the file exists" skipped the
+  download — Home included — and every page showed
+  `OperationalError: no such table` for the life of the container.
+
+Community Cloud sleeps idle apps, and a shared link is exactly how a cold
+container gets its first visitor.
+
+**Fix:** every read in the app goes through `lib.data.get_session`, which
+ensures the database first (the Portfolio page used the engine's own
+`get_session` and now does not); and a **zero-byte** file counts as missing —
+in `ensure_demo_database` *and* in `demo_data.fetch`. Only zero bytes: anything
+larger may be someone's small real database, and is never replaced.
+
+**The first version of this fix did not work, and the reason is a recorded
+trap** ("assert the caller, not just the helper"): the unit tests mocked
+`fetch`, which hid `fetch`'s own `if target.exists(): return False`. The
+simulated host stayed broken with every test green. A caller-level test now runs
+the real `fetch` (HTTP stubbed) through `ensure_demo_database`. Re-verified on
+the simulated host: deep link first → database downloaded, Screener, Portfolio
+and Stock Detail all render; a leftover 0-byte file → repaired on the next read.
+
+**Hermeticity:** every app read can now download, so the full suite ran under a
+plugin that fails any test reaching `fetch` via `ensure_demo_database` (proved
+non-vacuous on a probe test): none does. Mutation-checked four ways (the
+session skipping ensure, "exists" meaning present in either function, a page
+importing the engine's session) — each caught by name. The first mutation round
+hit the zsh word-splitting trap (`$T` holding two paths → "no tests ran"); the
+harness printed the real tail, so it was not mistaken for a pass.
+
+**Noticed, not changed:** the Streamlit Stock Detail page reads nothing from
+the URL (`?symbol=NVDA` opens the top-ranked name), so the full app cannot be
+deep-linked per stock.
+
 ### Point 32 — 508 real pages, and a shared link arrived as a bare URL
 
 Fixed 2026-09-25. Measured on the live site: `/stocks/NVDA/` answered 200 with

@@ -32,7 +32,7 @@ import streamlit as st
 from quantpulse.analysis import risk
 from quantpulse.config import get_settings
 from quantpulse.storage import persistence
-from quantpulse.storage.db import get_session
+from quantpulse.storage.db import get_session as _engine_session
 
 
 @st.cache_resource(show_spinner="Downloading the demo database (~66 MB, once)...")
@@ -60,7 +60,11 @@ def ensure_demo_database() -> bool:
     if not url.startswith(prefix):
         return False
     target = Path(url[len(prefix) :])
-    if target.exists():
+    # A zero-byte file counts as missing. It is what SQLite leaves when a page
+    # connects before the download: on a cold host a deep link used to create
+    # it, and every page then read an empty database for the container's life.
+    # Only zero bytes -- anything larger may be someone's real (small) database.
+    if target.exists() and target.stat().st_size > 0:
         return False
     try:
         from quantpulse.demo_data import fetch
@@ -69,6 +73,19 @@ def ensure_demo_database() -> bool:
     except Exception:
         logger.exception("Could not download the demo database")
         return False
+
+
+def get_session() -> Any:
+    """The app's only way to open a database session: ensure the database first.
+
+    Streamlit runs whichever page the visitor opened, and only Home used to call
+    `ensure_demo_database()`, so a deep link on a cold host connected first and
+    SQLite created an empty file in the download's place (point 44). Routing
+    every read through here makes the page order irrelevant. Cheap after the
+    first call: `ensure_demo_database` is a cached resource.
+    """
+    ensure_demo_database()
+    return _engine_session()
 
 
 logger = logging.getLogger(__name__)
