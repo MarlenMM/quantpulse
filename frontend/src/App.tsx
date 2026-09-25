@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Disclaimer } from "./components/Common";
 import { Mark } from "./components/Mark";
 import { Link, navigate, useMatch, usePath } from "./lib/router";
+import { NOT_FOUND_TITLE, ROUTE_TITLES, useDocumentTitle } from "./lib/title";
 import Dashboard from "./pages/Dashboard";
 import Screener from "./pages/Screener";
 import StockDetail from "./pages/StockDetail";
@@ -24,6 +25,11 @@ function Routes() {
   useEffect(() => {
     if (path === "/") navigate("/dashboard");
   }, [path]);
+
+  // Every route but a stock's, whose page sets its own once it knows the
+  // company's name (finding 30: client-side navigation never changed the tab).
+  const fixedTitle = ROUTE_TITLES[path === "/" ? "/dashboard" : path] ?? NOT_FOUND_TITLE;
+  useDocumentTitle(stockMatch ? null : fixedTitle);
 
   if (stockMatch) return <StockDetail symbol={stockMatch.symbol} />;
   switch (path) {

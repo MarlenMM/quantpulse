@@ -452,7 +452,10 @@ that plot real series. A trimmed Plotly bundle (candlestick, scatter,
 scatterpolar) would cut those two as well. *(Not re-measured since 2026-09-16.
 Note Dependabot PR #31 bumps plotly.js 4.1.0 → 4.1.1.)*
 
-### 30 · The browser tab never changes as you move through the app (S2)
+### 30 · The browser tab never changes as you move through the app (S2) — FIXED 2026-09-25
+
+**Status:** fixed; titles set on client-side navigation from `lib/title.ts`, fixed routes
+given their own titles by the emitter, and a browser test pins the two copies together.
 
 Evidence: open `/screener` → click Micron → URL `/stocks/MU` · h1 **MU — Micron
 Technology** · tab title still **"QuantPulse — S&P 500 research"** ·

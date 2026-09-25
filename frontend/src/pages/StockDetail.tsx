@@ -21,6 +21,7 @@ import {
   formatSignedPercent,
   humanize,
 } from "../lib/format";
+import { stockTitle, useDocumentTitle } from "../lib/title";
 import { useThemeTokens } from "../lib/theme";
 import { useApi } from "../lib/useApi";
 
@@ -182,6 +183,9 @@ export default function StockDetail({ symbol }: { symbol: string }) {
   const [model, setModel] = useState<string | null>(null);
   const theme = useThemeTokens();
   const { toggle: toggleWatched, isWatched } = useWatchlist();
+  // The symbol alone until the payload names the company, then "NVDA — Nvidia",
+  // the same string the stock's emitted page carries (finding 30).
+  useDocumentTitle(stockTitle(symbol, data?.summary.name));
 
   // The whole page comes from one request, so a bare "Loading AIZ…" left the
   // viewport empty until it landed — on the published demo, long enough to read

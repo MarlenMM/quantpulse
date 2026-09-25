@@ -26,8 +26,9 @@ Two details worth stating:
 * **Each stock page carries its own `<title>` and description.** Copying
   `index.html` unchanged would give every one of them "QuantPulse — S&P 500
   research", so 503 shared links would preview identically. Nothing in the app
-  sets `document.title`, so what is written here is what a crawler and an
-  unfurler read.
+  sets `document.title` on a hard load before the app has fetched anything, so
+  what is written here is what a crawler and an unfurler read. The app sets
+  the same strings on client-side navigation (`frontend/src/lib/title.ts`).
 
 Run after `npm run build`, against the built `dist/`.
 """
@@ -48,6 +49,18 @@ DEFAULT_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 #: the two lists against each other rather than trusting this comment.
 FIXED_ROUTES: tuple[str, ...] = ("dashboard", "screener", "track-record", "glossary")
 
+#: Each fixed route's `<title>` (finding 30). The Dashboard is the landing page
+#: and keeps the site's own title; the others name themselves, so four tabs are
+#: not four identical tabs. `frontend/src/lib/title.ts` sets the same strings on
+#: client-side navigation, and the static-site suite checks, in a browser, that
+#: the two agree -- this and that file are the only two copies.
+FIXED_TITLES: dict[str, str] = {
+    "dashboard": "QuantPulse — S&P 500 research",
+    "screener": "Screener — QuantPulse",
+    "track-record": "Track Record — QuantPulse",
+    "glossary": "Glossary — QuantPulse",
+}
+
 _TITLE_RE = re.compile(r"<title>.*?</title>", re.DOTALL)
 _DESCRIPTION_RE = re.compile(r'(<meta\s+name="description"\s+content=")(.*?)(")', re.DOTALL)
 
@@ -60,6 +73,11 @@ def _with_metadata(shell: str, *, title: str, description: str) -> str:
         page,
         count=1,
     )
+
+
+def _with_title(shell: str, title: str) -> str:
+    """`shell` with only its title replaced, HTML-escaped."""
+    return _TITLE_RE.sub(lambda _: f"<title>{html.escape(title)}</title>", shell, count=1)
 
 
 def _stock_metadata(payload: dict) -> tuple[str, str]:
@@ -102,7 +120,7 @@ def emit(dist: Path, *, quiet: bool = False) -> list[Path]:
     for route in FIXED_ROUTES:
         target = dist / route / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(shell)
+        target.write_text(_with_title(shell, FIXED_TITLES[route]))
         written.append(target)
 
     data_dir = dist / "data"

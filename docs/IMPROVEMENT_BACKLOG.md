@@ -398,6 +398,34 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 30 — the browser tab never changed as you moved through the app
+
+Fixed 2026-09-25. Reproduced in a browser before the change: clicking from the
+Dashboard to the Screener left the tab on "QuantPulse — S&P 500 research"; so did
+every stock. Every route's emitted `index.html` had its own `<title>` (a hard load
+was right) — but nothing set `document.title`, and the three other fixed routes
+were verbatim copies of the shell, so four pages shared one title even on a hard
+load.
+
+- `scripts/emit_route_pages.py` gains `FIXED_TITLES`: the Dashboard keeps the
+  site title; Screener, Track Record and Glossary name themselves.
+- `frontend/src/lib/title.ts` holds the same strings, `stockTitle()` (the
+  emitter's "NVDA — Nvidia") and a `useDocumentTitle` hook. The router sets the
+  fixed routes' and the not-found page's titles; Stock Detail sets its own once
+  the payload names the company.
+
+**How "they can't drift" is enforced**, since Python and TypeScript cannot share
+a constant: the static suite navigates *inside the app* — Dashboard, each nav
+link, a stock from the table, and Back — and asserts `document.title` equals the
+`<title>` in that route's emitted page. Mutation-checked four ways (a Screener
+title with a different separator, an en dash in the stock title, the stock page
+setting none, two Python routes sharing a title), each failing with the two
+strings shown. Static suite 29/29, e2e 6/6, pytest 1,949.
+
+**Trap for local runs:** the title test reads `dist/<route>/index.html`, which
+only `emit_route_pages.py` writes — and every `npm run build` wipes `dist/`. Run
+the emitter after each build (the Pages workflow always does).
+
 ### Point 29 — the landing page downloaded Plotly to draw one dial
 
 Fixed 2026-09-25. **Measured on the built site** (raw bytes; Pages gzips):
