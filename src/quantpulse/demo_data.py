@@ -72,7 +72,7 @@ def fetch(
     expected_sha256: str | None = None,
     timeout: float = 120.0,
 ) -> bool:
-    """Download the database to `target` if absent. True if it downloaded.
+    """Download the database to `target` if absent or empty. True if it downloaded.
 
     Written to a temporary file beside the target and moved into place only
     after every check passes. A half-written file at the real path would be
@@ -84,7 +84,10 @@ def fetch(
     caused this to be written was 11.7 MB of perfectly well-formed SQLite, and
     passed both checks below.
     """
-    if target.exists():
+    # Zero bytes counts as absent (point 44): it is what SQLite leaves when
+    # something connects before the download, and it holds nothing to protect.
+    # Anything larger is left alone -- it may be someone's real database.
+    if target.exists() and target.stat().st_size > 0:
         return False
 
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -49,7 +49,6 @@ from quantpulse.portfolio.rebalancing import (
     build_rebalance_plan,
 )
 from quantpulse.portfolio.transactions import Transaction, build_lot_book, holding_term, positions
-from quantpulse.storage.db import get_session
 
 st.set_page_config(page_title="QuantPulse — Portfolio", page_icon=PAGE_ICON, layout="wide")
 
@@ -71,7 +70,7 @@ def get_store() -> holdings_lib.PortfolioStore:
     every write would be silently discarded.
     """
     if data.portfolio_backend() == "sqlite":
-        return holdings_lib.SqlitePortfolioStore(get_session)
+        return holdings_lib.SqlitePortfolioStore(data.get_session)
     # `SessionStateProxy` implements the MutableMapping protocol the store asks
     # for but doesn't declare it, so the cast states what's already true rather
     # than widening the store's own contract to accommodate Streamlit.
