@@ -17,7 +17,13 @@ if config.config_file_name is not None:
 
 # Use the app's own settings (env vars / .env) as the single source of
 # truth for the DB URL, instead of duplicating it in alembic.ini.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# The settings' DATABASE_URL, unless the caller named a database explicitly:
+# `demo_data.ensure_schema_current(url)` migrates the file it was given, and
+# overwriting that here would have migrated whatever the settings point at
+# instead. `alembic.ini` carries a placeholder, so the CLI still uses settings.
+_PLACEHOLDER = "driver://user:pass@localhost/dbname"
+if config.get_main_option("sqlalchemy.url") in (None, "", _PLACEHOLDER):
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 target_metadata = Base.metadata
 

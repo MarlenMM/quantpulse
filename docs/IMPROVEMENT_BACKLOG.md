@@ -604,6 +604,36 @@ strings shown. Static suite 29/29, e2e 6/6, pytest 1,949.
 only `emit_route_pages.py` writes — and every `npm run build` wipes `dist/`. Run
 the emitter after each build (the Pages workflow always does).
 
+### Point 45 — the published database was read at whatever schema it had
+
+Found 2026-09-26 while preparing finding 34, the first new database column since
+the demo database became a release asset. The nightly migrates before it writes,
+but **nothing that only reads the published file migrated it**: the Pages build
+pre-rendered the asset as downloaded, and the hosted Streamlit app used its
+downloaded copy as-is. With 34's columns the pre-render would have failed on its
+first push, and the hosted Stock Detail page would have raised — and kept raising
+on a warm container, which never downloads again, even after the nightly had
+published a migrated file.
+
+- `pages.yml` gains **Migrate it to head** between the fetch and the pre-render
+  (CI already did this for its pinned fixture). A test requires that order in any
+  workflow that pre-renders the database.
+- `demo_data.ensure_schema_current(url)` upgrades a SQLite database to head;
+  `lib.data.get_session` calls it once per process (`ensure_schema`, a cached
+  resource) after the download check. It leaves alone any database without an
+  `alembic_version` table (a test's `create_all`), and builds Alembic's `Config`
+  without the ini file so `env.py` doesn't reconfigure the host's logging.
+- **A trap found on the way:** `env.py` overwrote any URL with the settings'
+  `DATABASE_URL`, so migrating a named file would have migrated whatever the
+  settings pointed at. It now honours an explicit URL; the CLI's ini placeholder
+  still falls back to settings.
+
+Mutation-checked four ways (migrate step removed, session not migrating, the
+unconditional URL override restored, the managed-database guard removed). Run
+alone on `HEAD` plus these files against the published, not-yet-migrated
+database, the suite passed but for two Streamlit tests that assert a category is
+missing on the older local database — true there, not on the published one.
+
 ### Point 29 — the landing page downloaded Plotly to draw one dial
 
 Fixed 2026-09-25. **Measured on the built site** (raw bytes; Pages gzips):

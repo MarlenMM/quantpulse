@@ -39,6 +39,7 @@ updates, and it is what stopped the gutted database reaching the site.
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 
 import requests
@@ -121,3 +122,58 @@ def fetch(
         return True
     finally:
         partial.unlink(missing_ok=True)
+
+
+_MIGRATIONS = Path(__file__).resolve().parent / "storage" / "migrations"
+_logger = logging.getLogger(__name__)
+
+
+def ensure_schema_current(database_url: str) -> bool:
+    """Upgrade a SQLite database Alembic manages to the current schema. True if it did.
+
+    Point 45. The nightly migrates the demo database before it writes, but the
+    Pages build and the hosted app read the release asset as downloaded -- so a
+    new column (finding 34's were the first since the database became a release
+    asset) made the reader select columns the file did not have yet. A warm
+    Streamlit container never downloads again, so it would have kept failing
+    after the nightly had published a migrated copy.
+
+    Only a database with an `alembic_version` table is touched: one built some
+    other way (a test's `create_all`) is its creator's business, and upgrading
+    it would try to create tables that already exist. The Alembic `Config` is
+    built without an ini file so `env.py` does not reconfigure the host's
+    logging.
+    """
+    prefix = "sqlite:///"
+    if not database_url.startswith(prefix):
+        return False
+    path = Path(database_url[len(prefix) :])
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+
+    import sqlite3
+
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    with sqlite3.connect(path) as connection:
+        managed = connection.execute(
+            "select 1 from sqlite_master where type='table' and name='alembic_version'"
+        ).fetchone()
+        current = (
+            connection.execute("select version_num from alembic_version").fetchone()
+            if managed
+            else None
+        )
+    if not managed:
+        return False
+    config = Config()
+    config.set_main_option("script_location", str(_MIGRATIONS))
+    config.set_main_option("sqlalchemy.url", database_url)
+    head = ScriptDirectory.from_config(config).get_current_head()
+    if current is not None and current[0] == head:
+        return False
+    _logger.info("Migrating %s from %s to %s", path.name, current[0] if current else None, head)
+    command.upgrade(config, "head")
+    return True
