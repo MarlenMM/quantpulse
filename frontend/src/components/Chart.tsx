@@ -128,7 +128,14 @@ export function Chart({
   return (
     // Plotly renders to canvas/SVG with no inherent description, so without
     // this the whole figure is invisible to a screen reader.
-    <div role="img" aria-label={ariaLabel} style={{ minHeight: height }}>
+    //
+    // `figure`, not `img` (finding 31). `img` tells assistive technology "one
+    // picture, no parts", and the modebar puts real focusable buttons inside --
+    // 8, 3 and 8 on Stock Detail -- so a keyboard user tabbed into controls a
+    // screen reader had just said were not there (axe: nested-interactive,
+    // serious). A figure may contain controls. The modebar itself stays: it is
+    // the only visible way back out of a zoom.
+    <div role="figure" aria-label={ariaLabel} style={{ minHeight: height }}>
       {/* Plotly is a separate chunk, so this fallback is on screen for as long
           as that chunk takes to arrive. A placeholder the size of the figure
           keeps the page from collapsing and then jumping when it lands. */}

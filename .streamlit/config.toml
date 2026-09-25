@@ -92,7 +92,7 @@ codeBackgroundColor = "#f2efe8"
 greenColor = "#1c8b4f"
 yellowColor = "#8a6a1c"
 redColor = "#bf3327"
-grayColor = "#78746a"
+grayColor = "#706c63"
 
 [theme.light.sidebar]
 backgroundColor = "#f2efe8"

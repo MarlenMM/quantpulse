@@ -40,7 +40,7 @@ const FALLBACK: ThemeTokens = {
   grid: "rgba(27, 26, 23, 0.09)",
   accent: "#1d4e89",
   accentBand: "rgba(29, 78, 137, 0.16)",
-  muted: "#78746a",
+  muted: "#706c63",
   up: "#1c8b4f",
   down: "#bf3327",
 };
