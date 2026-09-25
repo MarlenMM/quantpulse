@@ -35,7 +35,7 @@ from quantpulse.storage import persistence
 from quantpulse.storage.db import get_session as _engine_session
 
 
-@st.cache_resource(show_spinner="Downloading the demo database (~66 MB, once)...")
+@st.cache_resource(show_spinner="Downloading the demo database (about 80 MB, once)...")
 def ensure_demo_database() -> bool:
     """Download the demo database if this host has not got it. True if it did.
 

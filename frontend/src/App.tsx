@@ -8,10 +8,12 @@ import Screener from "./pages/Screener";
 import StockDetail from "./pages/StockDetail";
 import TrackRecord from "./pages/TrackRecord";
 import Glossary from "./pages/Glossary";
+import Portfolio from "./pages/Portfolio";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/screener", label: "Screener" },
+  { to: "/portfolio", label: "Portfolio" },
   { to: "/track-record", label: "Track Record" },
   { to: "/glossary", label: "Glossary" },
 ];
@@ -38,6 +40,8 @@ function Routes() {
       return <Dashboard />;
     case "/screener":
       return <Screener />;
+    case "/portfolio":
+      return <Portfolio />;
     case "/track-record":
       return <TrackRecord />;
     case "/glossary":
@@ -49,7 +53,7 @@ function Routes() {
         <>
           <h1>No such page</h1>
           <p className="standfirst">
-            There is nothing at <code>{path}</code>. The four pages are in the bar above;{" "}
+            There is nothing at <code>{path}</code>. The five pages are in the bar above;{" "}
             <Link to="/screener">the Screener</Link> is where most routes lead.
           </p>
         </>

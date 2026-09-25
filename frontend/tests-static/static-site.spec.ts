@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 
-import { humanize } from "../src/lib/format";
+import { formatPrice, humanize } from "../src/lib/format";
+import { analyse, type Inputs, type Rating } from "../src/lib/portfolio";
+import { EXAMPLE } from "../src/lib/portfolioStore";
 
 /**
  * The published static site actually serves its data.
@@ -157,6 +159,7 @@ test("client-side navigation gives every page its own tab title", async ({ page 
 
   for (const [label, route] of [
     ["Screener", "screener"],
+    ["Portfolio", "portfolio"],
     ["Track Record", "track-record"],
     ["Glossary", "glossary"],
   ] as const) {
@@ -190,7 +193,7 @@ test("client-side navigation gives every page its own tab title", async ({ page 
  * because they contain nothing focusable. Checked on every page, because the
  * next chart can land anywhere.
  */
-for (const path of ["dashboard", "stocks/AIZ", "screener", "track-record", "glossary"]) {
+for (const path of ["dashboard", "stocks/AIZ", "screener", "portfolio", "track-record", "glossary"]) {
   test(`nothing marked as a picture on ${path} contains a control`, async ({ page }) => {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -375,6 +378,7 @@ test.describe("mobile layout", () => {
   for (const [name, path] of [
     ["dashboard", ""],
     ["screener", "screener"],
+    ["portfolio", "portfolio"],
     ["track record", "track-record"],
     ["stock detail", "stocks/AIZ"],
     ["glossary", "glossary"],
@@ -717,4 +721,122 @@ test("narrowing a filter while deep in the pages does not show an empty table", 
   await page.getByLabel("Search symbol or company").fill("AAPL");
   await expect(page.locator("tbody tr").first()).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+
+/**
+ * Finding 33: the demo's portfolio, against the real published data.
+ *
+ * `tests/portfolio.spec.ts` pins `analyse()` to the engine; this pins the page
+ * to `analyse()` -- the figures on screen must be what it computes from the
+ * same published files -- and drives what a visitor does: load the example,
+ * reload, add and refuse trades, export and import, clear.
+ */
+function readData(name: string): unknown {
+  return JSON.parse(readFileSync(join(process.cwd(), "dist", "data", name), "utf8"));
+}
+
+function exampleAnalysis() {
+  const screener = readData("screener__profile-balanced.json") as {
+    rows: { symbol: string; sector: string | null; rating: Rating | null; composite_score: number | null }[];
+  };
+  const symbols = [...new Set(EXAMPLE.transactions.map((t) => t.symbol))];
+  const prices: Inputs["prices"] = {};
+  for (const symbol of symbols) {
+    const detail = readData(`stocks__${symbol}.json`) as {
+      prices: { date: string; close: number; adj_close: number | null }[];
+    };
+    prices[symbol] = detail.prices.map((b) => [b.date, b.close, b.adj_close ?? b.close]);
+  }
+  const bySymbol = new Map(screener.rows.map((r) => [r.symbol, r]));
+  return analyse({
+    cash: EXAMPLE.cash,
+    transactions: EXAMPLE.transactions,
+    prices,
+    sectors: Object.fromEntries(symbols.map((s) => [s, bySymbol.get(s)?.sector ?? null])),
+    ratings: Object.fromEntries(
+      symbols.flatMap((s) => (bySymbol.get(s)?.rating ? [[s, bySymbol.get(s)!.rating as Rating]] : [])),
+    ),
+    sector_candidates: {},
+  });
+}
+
+async function loadExample(page: Page): Promise<void> {
+  await page.goto("portfolio");
+  await page.getByRole("button", { name: "Load the example portfolio" }).click();
+  await expect(page.getByRole("heading", { name: "Risk of today’s mix" })).toBeVisible();
+}
+
+test.describe("the portfolio", () => {
+  test("shows what the tested analysis computes from the published data", async ({ page }) => {
+    const errors = watchForErrors(page);
+    await loadExample(page);
+    const expected = exampleAnalysis();
+
+    const holdings = page.locator("section.card table").first().locator("tbody tr");
+    await expect(holdings).toHaveCount(Object.keys(expected.positions).length);
+    await expect(page.getByText(formatPrice(expected.total_value), { exact: true })).toBeVisible();
+    for (const warning of expected.concentration.warnings) {
+      await expect(page.getByText(warning, { exact: true })).toBeVisible();
+    }
+    expect(expected.risk.var, "the example must be long enough for a VaR").not.toBeNull();
+    await expect(
+      page.getByText(`${(expected.risk.var! * 100).toFixed(1)}%`, { exact: true }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("survives a reload, because it lives in this browser", async ({ page }) => {
+    await loadExample(page);
+    await page.reload();
+    await expect(page.locator("section.card table").first().locator("tbody tr")).toHaveCount(5);
+  });
+
+  test("a blank price means that day's published close, and an oversell is refused", async ({ page }) => {
+    await loadExample(page);
+    const detail = readData("stocks__AAPL.json") as { prices: { date: string; close: number }[] };
+    const day = detail.prices[detail.prices.length - 5];
+
+    const form = page.locator("form");
+    // Exact names: the Symbol field's name must be "Symbol" alone (its datalist
+    // of 503 companies once sat inside the label and joined its name).
+    await expect(form.getByRole("combobox", { name: "Symbol", exact: true })).toBeVisible();
+    await form.getByLabel("Symbol").fill("AAPL");
+    await form.getByLabel("Buy or sell").selectOption("sell");
+    await form.getByLabel("Shares").fill("10");
+    await form.getByLabel("Date").fill(day.date);
+    await form.getByRole("button", { name: "Add trade" }).click();
+    // The first table: after a sell the section also holds the realized-gains one.
+    const ledger = page
+      .locator("section", { has: page.getByRole("heading", { name: "Transactions" }) })
+      .locator("table")
+      .first();
+    await expect(ledger.locator("tbody tr")).toHaveCount(6);
+    await expect(ledger.locator("tbody tr").last()).toContainText(formatPrice(day.close));
+
+    // 25 bought, 10 sold: 15 left, so 100 more cannot be sold.
+    await form.getByLabel("Shares").fill("100");
+    await form.getByRole("button", { name: "Add trade" }).click();
+    await expect(page.getByRole("alert")).toContainText("cannot sell 100 shares of AAPL");
+    await expect(ledger.locator("tbody tr")).toHaveCount(6);
+  });
+
+  test("exports a CSV that imports back, and clears", async ({ page }) => {
+    await loadExample(page);
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export transactions as CSV" }).click();
+    const file = await download;
+    const path = await file.path();
+    expect(readFileSync(path, "utf8")).toContain("symbol,action,shares,price,date");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Clear the portfolio" }).click();
+    await expect(page.getByText(/Nothing here yet/)).toBeVisible();
+
+    await page.getByLabel("Import a transactions CSV").setInputFiles(path);
+    await expect(page.getByRole("status").filter({ hasText: "Imported" })).toContainText(
+      "Imported 5 transactions",
+    );
+    await expect(page.locator("section.card table").first().locator("tbody tr")).toHaveCount(5);
+  });
 });
