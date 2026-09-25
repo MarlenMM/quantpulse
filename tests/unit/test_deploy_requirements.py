@@ -48,6 +48,38 @@ def test_the_machine_learning_stack_is_not_installed_by_the_deployed_app() -> No
         )
 
 
+#: Streamlit Community Cloud's documented choice of dependency file: the
+#: entrypoint's directory first, then the repository root, and within each the
+#: first of these that exists. Only that one file is installed.
+#: https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies
+_HOST_ORDER = ("uv.lock", "Pipfile", "environment.yml", "requirements.txt", "pyproject.toml")
+_ENTRYPOINT = REPO / "app" / "Home.py"
+
+
+def _file_the_host_installs() -> Path:
+    for directory in (_ENTRYPOINT.parent, REPO):
+        for name in _HOST_ORDER:
+            if (directory / name).exists():
+                return directory / name
+    raise AssertionError("no dependency file at all")
+
+
+def test_the_host_installs_the_slim_list_not_the_lockfile() -> None:
+    """Measured on the first real deploy (2026-09-25): the host logged "More than
+    one requirements file detected ... Used: uv-sync with uv.lock" and installed
+    torch, transformers and spaCy's stack -- about 2.5 GB no page imports. At the
+    repository root `uv.lock` outranks `requirements.txt`; a file beside the
+    entrypoint outranks both. So the slim list lives in `app/` too.
+    """
+    chosen = _file_the_host_installs()
+    assert chosen == REPO / "app" / "requirements.txt", f"the host would install {chosen}"
+    assert chosen.read_text() == render(), (
+        "app/requirements.txt is stale -- run sync_requirements.py"
+    )
+    for package in HEAVY:
+        assert f"\n{package}==" not in chosen.read_text()
+
+
 @pytest.mark.parametrize("package", APP_PACKAGES)
 def test_every_pinned_package_is_a_real_locked_version(package: str) -> None:
     """Pins come from `uv.lock`, so a typo in the name list fails here."""

@@ -310,7 +310,10 @@ is the one step that cannot be scripted. The repo is already prepared for it:
    the demo database, about 83 MB, behind a spinner; later views are instant.
    Any page can be the first one — a shared link straight to the Screener works.
 
-`requirements.txt` is what that host installs, and it deliberately omits torch,
+`app/requirements.txt` is what that host installs — a copy of the root
+`requirements.txt` beside the entrypoint, because the host takes a dependency
+file there ahead of the root, where it would otherwise pick `uv.lock` and install
+everything (the first deploy did, 2026-09-25). It deliberately omits torch,
 transformers and spaCy — the refresh job's models, roughly 2.5 GB of wheels,
 which no page imports and the free tier cannot fit. It is generated from
 `uv.lock` by `scripts/sync_requirements.py`, and every page render in the test
