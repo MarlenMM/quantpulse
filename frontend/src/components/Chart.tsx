@@ -3,8 +3,9 @@
  * via `react-plotly.js`" — this is that claim being cashed in).
  *
  * **Plotly is loaded lazily, and that matters here.** The library is ~5 MB
- * unminified and dominates the bundle, but only two of the five pages draw a
- * chart — the Screener, Track Record and Glossary are tables and prose. A
+ * unminified and dominates the bundle, but only one of the five pages draws a
+ * chart — Stock Detail. The Screener, Track Record and Glossary are tables and
+ * prose, and the Dashboard's regime dial is SVG (finding 29). A
  * static import would make every visitor download a charting engine to read a
  * table, which on the free hosting tier this project targets is the difference
  * between a fast first paint and a slow one. `lazy` + `Suspense` splits it into
@@ -57,15 +58,32 @@ import { LoadingChart } from "./Common";
  * `tests/charts.spec.ts` is what guards this now. Only failure (2) is still
  * reproducible there, for exactly the reason above.
  */
+/** A module's default export, through one extra layer of CJS interop if present. */
+function unwrapDefault(mod: unknown): unknown {
+  const first = (mod as { default?: unknown }).default ?? mod;
+  const nested = (first as { default?: unknown })?.default;
+  return typeof first === "function" ? first : (nested ?? first);
+}
+
 function isElementType(value: unknown): boolean {
   if (typeof value === "function") return true;
   return typeof value === "object" && value !== null && "$$typeof" in value;
 }
 
+/**
+ * Built from the factory around the trimmed Plotly in `lib/plotly.ts` rather
+ * than imported whole: the default entry bundles every trace type Plotly has.
+ * Both modules are loaded here, inside `lazy`, so neither reaches a page that
+ * draws no chart.
+ */
 const Plot = lazy(async () => {
-  const mod: unknown = await import("react-plotly.js");
-  const first = (mod as { default: unknown }).default;
-  const component = isElementType(first) ? first : (first as { default: unknown })?.default;
+  const [factoryModule, plotlyModule] = await Promise.all([
+    import("react-plotly.js/factory"),
+    import("../lib/plotly"),
+  ]);
+  const factory = unwrapDefault(factoryModule) as (plotly: unknown) => unknown;
+  const built = factory(unwrapDefault(plotlyModule));
+  const component = isElementType(built) ? built : (built as { default: unknown })?.default;
   if (!isElementType(component)) {
     throw new Error(
       "react-plotly.js did not resolve to a React component — its packaging changed again",

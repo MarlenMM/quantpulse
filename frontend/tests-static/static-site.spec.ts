@@ -59,6 +59,78 @@ test("the dashboard renders live figures from the pre-rendered data", async ({ p
   expect(errors).toEqual([]);
 });
 
+/**
+ * Finding 29: the landing page drew one dial with the whole of Plotly.
+ *
+ * Measured on the built site before the change: the Dashboard downloaded
+ * 4,373 KB of JavaScript, 4,113 KB of it the Plotly chunk (1.24 MB gzipped),
+ * to draw a semicircle, three bands and a number. The app chunk alone is
+ * ~261 KB. The budget sits between the two, so a chart library pulled back in
+ * by any route -- a stray `<Chart>`, an eager import -- fails here by size.
+ */
+test("the dashboard downloads no chart library", async ({ page }) => {
+  const scripts: { name: string; bytes: number }[] = [];
+  page.on("response", async (response) => {
+    if (!response.url().endsWith(".js")) return;
+    try {
+      scripts.push({ name: response.url().split("/").pop() ?? "", bytes: (await response.body()).length });
+    } catch {
+      // A response body can vanish on navigation; the size check below is
+      // still made on every script that did arrive.
+    }
+  });
+  await page.goto("dashboard");
+  await expect(page.locator(".regime-gauge")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+
+  await expect(page.locator(".js-plotly-plot")).toHaveCount(0);
+  const total = scripts.reduce((sum, s) => sum + s.bytes, 0);
+  expect(
+    total,
+    `the dashboard downloaded ${total} bytes of JavaScript: ` +
+      scripts.map((s) => `${s.name} ${s.bytes}`).join(", "),
+  ).toBeLessThan(400_000);
+});
+
+/**
+ * The dial's zones are where the label changes, not where a literal says.
+ *
+ * Both gauges drew risk-on from 65 while `market_regime` labels it from 60, so
+ * on 2026-09-16 a 64.7 was titled "Risk On" with its arc ending in the neutral
+ * band. The zone that contains the score must be the zone the label names, and
+ * its edges must be the cutoffs the API sent.
+ */
+test("the regime dial's zones are the label's own cutoffs", async ({ page }) => {
+  const regime = JSON.parse(
+    readFileSync(join(process.cwd(), "dist", "data", "regime__limit-90.json"), "utf8"),
+  ) as { regime_score: number; regime_label: string; risk_on_at: number; risk_off_at: number }[];
+  const latest = regime.at(-1)!;
+  await page.goto("dashboard");
+  await expect(page.locator(".regime-gauge")).toBeVisible();
+
+  const bands = await page.locator(".regime-gauge [data-band]").evaluateAll((paths) =>
+    paths.map((p) => ({
+      band: p.getAttribute("data-band"),
+      from: Number(p.getAttribute("data-from")),
+      to: Number(p.getAttribute("data-to")),
+    })),
+  );
+  expect(bands).toEqual([
+    { band: "risk_off", from: 0, to: latest.risk_off_at },
+    { band: "neutral", from: latest.risk_off_at, to: latest.risk_on_at },
+    { band: "risk_on", from: latest.risk_on_at, to: 100 },
+  ]);
+  const containing = bands.find(
+    (b) =>
+      latest.regime_score >= b.from &&
+      (latest.regime_score < b.to || (b.to === 100 && latest.regime_score === 100)),
+  );
+  // On the boundaries the label is inclusive at both cutoffs (>= on, <= off).
+  const onEdge =
+    latest.regime_score === latest.risk_on_at || latest.regime_score === latest.risk_off_at;
+  if (!onEdge) expect(containing?.band).toBe(latest.regime_label);
+});
+
 test("the screener loads a full ranked universe", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("screener");
@@ -114,6 +186,25 @@ test("a stock page deep link renders its charts", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: /^AIZ/ })).toBeVisible();
   await expect(page.locator(".js-plotly-plot")).toHaveCount(3);
   await expect(page.locator(".main-svg").first()).toBeVisible();
+
+  // Every figure drew the trace type it asked for. The app ships a Plotly with
+  // three trace types registered (`src/lib/plotly.ts`, finding 29), and an
+  // unregistered one fails silently: Plotly resolves it to an empty `scatter`,
+  // logs nothing, and every other assertion here still passes -- measured by
+  // unregistering `scatterpolar`, which blanked the radar with 28/28 green.
+  const types = await page.locator(".js-plotly-plot").evaluateAll((plots) =>
+    plots.map((el) => {
+      const figure = el as unknown as {
+        data: { type?: string }[];
+        _fullData: { type: string }[];
+      };
+      return {
+        asked: figure.data.map((trace) => trace.type ?? "scatter"),
+        drawn: figure._fullData.map((trace) => trace.type),
+      };
+    }),
+  );
+  for (const { asked, drawn } of types) expect(drawn).toEqual(asked);
 
   // The forecast table's default view must hold only horizons with a measured
   // accuracy. Every 63- and 252-day forecast in the published data is ungraded,
