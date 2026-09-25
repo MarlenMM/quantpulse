@@ -12,6 +12,15 @@ open finding in full, and the prompt for the next session.
 - **Previous (2026-09-03) audit page, points 1–18:** <https://claude.ai/code/artifact/daf2285a-ae37-4964-a239-976ad0a84116>
 - **Deeper per-fix write-ups** are in `docs/IMPROVEMENT_BACKLOG.md` §7 (points 19–25), and each commit message carries the full reasoning.
 
+**Continued again 2026-09-25** (HEAD `62cb07b`, **1,977 passed / 1 skipped**; static 41,
+e2e 15; CI and Pages green): **29–33 done** (33: user chose both), plus **43** (27's
+notify job broke the nightly's startup — fixed `4b78f59`, verified on GitHub) and **44**
+(hosted Streamlit empty after a deep link — fixed `be6f888`, verified in a simulated
+host). Verified on the live demo: landing JS 90 KB gz, titles change, cards and
+sitemap served, Portfolio computes. **Still not observed:** a scheduled nightly with
+the 26/27 jobs — the 2026-09-26 00:00 UTC run is the first that can start. Next: 34–40
+(34 and 35 need the user's call).
+
 **Continued 2026-09-25** (HEAD `e4303d1`, **1,943 passed / 1 skipped**, CI green on
 `bcb8450`): **26, 27, 41 fixed; 42 found and fixed; 28's README fixed** (the keys are
 still the user's). Per-finding status is marked in §3; detail in backlog §7. Findings
