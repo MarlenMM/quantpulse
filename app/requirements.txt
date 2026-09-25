@@ -1,0 +1,38 @@
+# Runtime dependencies for the *deployed Streamlit app only*.
+#
+# Why this file exists at all, when the project's real dependency source of
+# truth is `pyproject.toml` + `uv.lock`: Streamlit Community Cloud installs from
+# `requirements.txt`, and installing the full project there would fail. The
+# nightly data-refresh job (`scripts/refresh_data.py`) needs torch,
+# transformers and spaCy for the news and sentiment pipeline -- roughly 2.5 GB
+# of wheels on Linux -- and the free tier has neither the disk nor the memory
+# for them.
+#
+# The app never needs them: it reads rows the nightly already wrote and never
+# runs a model. That is verified rather than assumed -- every page render in
+# `tests/integration/test_ui_pages_real_data.py` asserts none of the three ends
+# up in `sys.modules`, and it runs inside the full environment where all three
+# are installed.
+#
+# GENERATED FILE -- do not edit the versions by hand. Every pin is read from
+# `uv.lock`, so the deployed app runs exactly what the test suite ran against.
+# Regenerate with `python scripts/sync_requirements.py`; CI fails if it is stale.
+
+streamlit==1.59.1
+plotly==6.9.0
+pandas==3.0.3
+numpy==2.5.1
+pyarrow==25.0.0
+scipy==1.18.0
+scikit-learn==1.9.0
+statsmodels==0.14.6
+pandas-ta-classic==0.6.52
+pyportfolioopt==1.6.0
+pandas-market-calendars==5.4.0
+sqlalchemy==2.0.51
+alembic==1.18.5
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+requests==2.34.2
+lxml==6.1.1

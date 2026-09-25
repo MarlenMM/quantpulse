@@ -18,6 +18,7 @@ updates:
     directory: "/"
     exclude-paths:
       - "requirements.txt"
+      - "app/requirements.txt"
     schedule:
       interval: "weekly"
 

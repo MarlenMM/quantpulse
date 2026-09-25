@@ -28,6 +28,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 LOCKFILE = REPO / "uv.lock"
 REQUIREMENTS = REPO / "requirements.txt"
+#: The same list beside the entrypoint, for Streamlit Community Cloud. The host
+#: installs exactly one dependency file -- the entrypoint's directory first, then
+#: the root, `uv.lock` ahead of `requirements.txt` -- so with only the root copy
+#: the first real deploy (2026-09-25) ran `uv sync` and installed torch,
+#: transformers and spaCy. `./run.sh` keeps reading the root copy.
+APP_REQUIREMENTS = REPO / "app" / "requirements.txt"
+TARGETS = (REQUIREMENTS, APP_REQUIREMENTS)
 
 # What the Streamlit app actually needs at runtime, in the order it is written
 # out. Grouped roughly by role so the file reads as an explanation rather than
@@ -111,21 +118,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     expected = render()
-    current = REQUIREMENTS.read_text() if REQUIREMENTS.exists() else ""
+    stale = [path for path in TARGETS if not path.exists() or path.read_text() != expected]
 
     if args.check:
-        if current != expected:
+        if stale:
+            names = ", ".join(str(path.relative_to(REPO)) for path in stale)
             print(
-                "requirements.txt is out of date with uv.lock -- "
-                "run `python scripts/sync_requirements.py`",
+                f"{names} out of date with uv.lock -- run `python scripts/sync_requirements.py`",
                 file=sys.stderr,
             )
             return 1
-        print("requirements.txt matches uv.lock")
+        print("requirements.txt and app/requirements.txt match uv.lock")
         return 0
 
-    REQUIREMENTS.write_text(expected)
-    print(f"wrote {REQUIREMENTS.relative_to(REPO)} ({len(APP_PACKAGES)} packages)")
+    for path in TARGETS:
+        path.write_text(expected)
+        print(f"wrote {path.relative_to(REPO)} ({len(APP_PACKAGES)} packages)")
     return 0
 
 
