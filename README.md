@@ -10,6 +10,8 @@ A self-hosted, $0-cost stock research & portfolio-management engine. Statistics 
 
 **Live demo: <https://marlenmm.github.io/quantpulse/>** — the research front end, no sign-up and no keys, and it holds its shape on a phone. Its Portfolio page keeps your holdings in your own browser — nothing is sent anywhere; the full Portfolio Manager, with the optimisers, rebalancing and history, is the Streamlit app.
 
+**The full app, hosted: <https://quantpulse-demo.streamlit.app>** — all seven Streamlit pages, including the Portfolio Manager (optimisers, rebalancing, history), on Streamlit Community Cloud. It sleeps when idle; the first visit after that takes a minute.
+
 **Run the whole thing locally, including the Portfolio Manager:** `./run.sh`. One command, no API key, no account — see [HOW_TO_USE.md](HOW_TO_USE.md) for a plain-English guide to both, and to which numbers on screen are solid and which are thin.
 
 > **The demo database is a release asset, not a committed file.** It is ~66 MB,
@@ -291,6 +293,14 @@ of it; for the rest run `./run.sh`, or deploy the Streamlit app below. A CSV
 exported from the demo imports into it unchanged.
 
 ### 2. Streamlit Community Cloud — the full app, one manual step
+
+**Deployed 2026-09-25 at <https://quantpulse-demo.streamlit.app>** with exactly
+the settings below (Python 3.12, `app/Home.py`, the two secrets). Verified after
+a reboot: a cold container whose first request was a deep link to the Screener
+downloaded the database and rendered all 503 names, and the build installed
+`app/requirements.txt` — 80 packages, no torch/transformers/spaCy. One thing the
+host does on its own: it replaces `pyarrow` 25.0.0 with 24.0.0, citing a known
+segfault, so the hosted app runs a pyarrow the test suite does not.
 
 The seven-page Streamlit app, including the Portfolio Manager and the LLM
 narration layer. Connecting a repo needs an interactive GitHub sign-in, so this
