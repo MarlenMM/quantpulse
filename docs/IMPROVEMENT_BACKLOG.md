@@ -398,6 +398,44 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 43 — my fix for 27 stopped the nightly from starting at all
+
+Found and fixed 2026-09-25, the morning after 27 shipped. The scheduled run
+`36076360382` ended in **`startup_failure`**: no job ran, 2026-09-24 was never
+fetched or published, and the demo stayed on 2026-09-23. GitHub's annotation:
+*"Error calling workflow … pages.yml … The nested job 'notify' is requesting
+'actions: read', but is only allowed 'actions: none'."*
+
+27 gave `pages.yml` a `notify` job with `actions: read`. The nightly's `publish`
+job calls `pages.yml` and granted only contents/pages/id-token. **GitHub checks
+every job of a called workflow against the caller's grant when the calling run
+starts — including a job whose `if:` would skip it.** On a push `pages.yml` is
+top-level and may ask for anything, so CI and Pages were green on every commit
+and only the scheduled run broke. And the `notify` job that should have reported
+it could not start either — 27's own stated limit, met on its first night.
+
+**Fix** (`4b78f59`): `actions: read` on the nightly's `publish` job.
+**Guard:** `test_a_called_workflow_never_asks_for_more_than_its_caller_grants`
+checks every caller of a local reusable workflow against every callee job's
+request, and requires the caller to have an explicit block; on the pre-fix file
+it fails with GitHub's own wording (two further mutations caught).
+
+**Verified on GitHub without running anything.** A refresh dispatched before the
+US open would store a pre-market options chain (the reason the cron waits for
+the close), so instead two throwaway branches carried the workflow with every
+job `if: false` — GitHub still validates the whole call graph at startup. The
+pre-fix copy: `startup_failure` (run `36127186443`); the fixed copy: started,
+every job skipped (run `36127189875`). Branches deleted afterwards.
+
+**What 09-24 cost:** prices backfill on the next run (the fetch is incremental
+from the last stored date); that day's options snapshot and its regime and
+composite rows cannot be recovered.
+
+**Traps:** (1) a called workflow's permissions are checked at the caller's
+startup, for skipped jobs too; (2) a workflow change that only a *schedule* runs
+is untested by every push — the `if: false` branch dispatch is a cheap,
+side-effect-free way to make GitHub validate it before the night does.
+
 ### Point 28 — five finished features wait on secrets only the owner can add
 
 Re-verified 2026-09-25. **Nothing to activate:** `gh secret list` still shows

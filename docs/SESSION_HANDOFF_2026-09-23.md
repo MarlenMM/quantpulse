@@ -642,6 +642,16 @@ on 2026-09-22 data and would have until the market turned risk-on. Fixed in
 holds. Reproduced on the published database first; mutation-checked two ways;
 live `health.json` moved to 2026-09-23 on the next publish.
 
+### 43 · The fix for 27 stopped the nightly from starting (S1) — FIXED 2026-09-25
+
+Run `36076360382` (2026-09-25 00:11 UTC): `startup_failure` — `pages.yml`'s new
+`notify` job asks for `actions: read`, which the nightly's `publish` job did not
+grant; GitHub validates called workflows' jobs at startup even when skipped. No
+job ran; 09-24 was not published. Fixed in `4b78f59`, guarded by
+`test_a_called_workflow_never_asks_for_more_than_its_caller_grants`, and verified
+on GitHub with `if: false` probe branches (before: `startup_failure`; after:
+started, all skipped). Backlog §7 has the detail.
+
 ## 4. Additional open items (not numbered in the audit)
 
 - **A. The regime index's macro-tone input fails.** `gdelt_client.fetch_tone_timeline`
