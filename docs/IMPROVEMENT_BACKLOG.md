@@ -398,6 +398,40 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 32 — 508 real pages, and a shared link arrived as a bare URL
+
+Fixed 2026-09-25. Measured on the live site: `/stocks/NVDA/` answered 200 with
+its own `<title>` and description, but carried **no Open Graph or Twitter tags**;
+`/quantpulse/sitemap.xml` and `/quantpulse/robots.txt` were 404.
+
+`scripts/emit_route_pages.py` now writes, into every page it emits (the root,
+`404.html`, the four fixed routes, every stock): `og:type`, `og:site_name`,
+`og:title` and `og:description` (the page's own), `og:url` and a canonical link
+(absolute; 404 claims none), one `og:image` with its size and alt text, and
+`twitter:card=summary_large_image`. It also writes `sitemap.xml` from the same
+route list (508 URLs; `lastmod` is the data's newest price date). Absolute URLs
+come from `actions/configure-pages`' `base_url`, which now runs before the
+emitter, so a fork's cards point at the fork.
+
+The image is `frontend/public/og-image.png`, 1200×630 PNG (unfurlers do not
+render SVG): the shared mark and the name on the light paper, rendered by
+`scripts/render_og_image.mjs` — re-run it if the mark or the name changes.
+
+**Not done, deliberately: `robots.txt`.** Crawlers read it only at the host
+root, and on a project site that is `marlenmm.github.io/robots.txt` — a URL only
+a separate `MarlenMM.github.io` repository could serve (it is 404 today). A file
+under `/quantpulse/` would be read by nothing; without one, everything is
+allowed already. The sitemap can be submitted in Google Search Console, which is
+an account action for the owner.
+
+**A trap the emitter had to handle:** the root `index.html` is both the shell
+every page is read from and a page itself, so a second run would have stacked a
+second set of tags on all 508 pages. The emitter strips its own tags before
+writing; a test runs it twice and requires identical output (also checked on the
+real `dist/`). Mutation-checked: `og:url` dropped, the strip removed, stocks
+missing from the sitemap, a relative image URL, `configure-pages` after the
+emitter — each caught by name.
+
 ### Point 31 — the charts failed an accessibility check, and so did the palette
 
 Fixed 2026-09-25. Measured with axe-core 4.10 on the local static build, every
