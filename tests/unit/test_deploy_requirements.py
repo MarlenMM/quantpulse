@@ -313,3 +313,26 @@ class TestDemoDatabaseIsFetched:
             "quantpulse_demo.db is still tracked by git — `.gitignore` does not apply "
             "to files already in the index; it needs `git rm --cached`."
         )
+
+
+def test_every_workflow_that_prerenders_the_database_migrates_it_first() -> None:
+    """Point 45: the Pages build read the release asset as downloaded.
+
+    The first column added since the database became a release asset (finding
+    34) would have failed the pre-render: the API selects columns the published
+    file does not have until the nightly migrates it.
+    """
+    import yaml
+
+    for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+        for job_name, job in yaml.safe_load(path.read_text())["jobs"].items():
+            runs = [str(step.get("run", "")) for step in job.get("steps", [])]
+            if not any("build_static_site.py" in run for run in runs):
+                continue
+            fetch = next(i for i, r in enumerate(runs) if "fetch_demo_db" in r)
+            migrate = [i for i, r in enumerate(runs) if "alembic upgrade head" in r]
+            build = next(i for i, r in enumerate(runs) if "build_static_site.py" in r)
+            assert migrate and fetch < migrate[0] < build, (
+                f"{path.name}:{job_name} pre-renders the fetched database without "
+                "migrating it to head first"
+            )

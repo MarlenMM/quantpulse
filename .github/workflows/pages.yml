@@ -99,6 +99,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # Point 45: the release asset is whatever the last nightly published, and
+      # a migration merged since then has not reached it. The API selects the
+      # current schema's columns, so pre-rendering an older file fails -- which
+      # the first new column since the move to a release asset (finding 34)
+      # would have done on its first push. CI migrates its pinned fixture the
+      # same way; this is the rolling asset's turn.
+      - name: Migrate it to head
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: "sqlite:///./quantpulse_demo.db"
 
       - uses: actions/setup-node@v7
         with:

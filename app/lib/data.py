@@ -29,6 +29,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from quantpulse import demo_data
 from quantpulse.analysis import risk
 from quantpulse.config import get_settings
 from quantpulse.storage import persistence
@@ -75,6 +76,21 @@ def ensure_demo_database() -> bool:
         return False
 
 
+@st.cache_resource(show_spinner=False)
+def ensure_schema() -> bool:
+    """Bring the configured database to the current schema, once per process (point 45).
+
+    Separate from `ensure_demo_database` because a file that is already here --
+    a warm container, a local copy -- is never downloaded again, yet may predate
+    a migration the nightly has since applied to the published one.
+    """
+    try:
+        return demo_data.ensure_schema_current(get_settings().database_url)
+    except Exception:
+        logger.exception("Could not bring the database to the current schema")
+        return False
+
+
 def get_session() -> Any:
     """The app's only way to open a database session: ensure the database first.
 
@@ -85,6 +101,7 @@ def get_session() -> Any:
     first call: `ensure_demo_database` is a cached resource.
     """
     ensure_demo_database()
+    ensure_schema()
     return _engine_session()
 
 

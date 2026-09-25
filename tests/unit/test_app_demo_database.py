@@ -122,3 +122,83 @@ def test_the_empty_file_is_really_replaced_end_to_end(tmp_path, database_at) -> 
     with patch("quantpulse.demo_data.requests.get", return_value=response):
         assert data.ensure_demo_database()
     assert target.stat().st_size == len(body)
+
+
+class TestThePublishedDatabaseIsReadAtTheCurrentSchema:
+    """Point 45: nothing that reads the published database migrated it first.
+
+    The nightly migrates before it writes; the Pages build and the hosted app
+    read the release asset as downloaded. With the first column added since the
+    database became a release asset (finding 34), the pre-render would have
+    failed and the hosted app's Stock Detail page would have raised -- and kept
+    raising on a warm container, which never downloads the file again.
+    """
+
+    @staticmethod
+    def _database_at(path: Path, revision: str) -> str:
+        from alembic import command
+        from alembic.config import Config
+
+        url = f"sqlite:///{path}"
+        config = Config()
+        config.set_main_option(
+            "script_location", str(APP.parent / "src" / "quantpulse" / "storage" / "migrations")
+        )
+        import os
+
+        before = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = url
+        get_settings.cache_clear()
+        try:
+            command.upgrade(config, revision)
+        finally:
+            if before is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = before
+            get_settings.cache_clear()
+        return url
+
+    def test_a_database_behind_head_is_brought_up_to_it(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        url = self._database_at(tmp_path / "old.db", "f5ad63651d6b")
+        assert demo_data.ensure_schema_current(url) is True
+        config = Config()
+        config.set_main_option(
+            "script_location", str(APP.parent / "src" / "quantpulse" / "storage" / "migrations")
+        )
+        head = ScriptDirectory.from_config(config).get_current_head()
+        version = (
+            sqlite3.connect(tmp_path / "old.db")
+            .execute("select version_num from alembic_version")
+            .fetchone()[0]
+        )
+        assert version == head
+        # Idempotent: the second call finds nothing to do.
+        assert demo_data.ensure_schema_current(url) is False
+
+    def test_a_database_alembic_does_not_manage_is_left_alone(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        path = tmp_path / "plain.db"
+        sqlite3.connect(path).execute("create table t (x int)").connection.commit()
+        assert demo_data.ensure_schema_current(f"sqlite:///{path}") is False
+        tables = {r[0] for r in sqlite3.connect(path).execute("select name from sqlite_master")}
+        assert tables == {"t"}
+
+    def test_the_apps_session_brings_the_schema_current_before_reading(
+        self, monkeypatch: pytest.MonkeyPatch, downloads
+    ) -> None:
+        calls: list[str] = []
+        monkeypatch.setattr(
+            demo_data, "ensure_schema_current", lambda url: calls.append(url) or False
+        )
+        data.ensure_schema.clear()
+        with data.get_session():
+            pass
+        data.ensure_schema.clear()
+        assert calls == [get_settings().database_url]
