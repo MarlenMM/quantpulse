@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -510,6 +511,17 @@ class Forecast(Base):
     historical_hit_rate: Mapped[float | None] = mapped_column(Float)
     baseline_hit_rate: Mapped[float | None] = mapped_column(Float)
     hit_rate_windows: Mapped[int | None] = mapped_column(Integer)
+    # Finding 34. `baseline_hit_rate` is the naive forecast's rate over *this
+    # model's own* graded pairs, so "hit rate vs naive" compares like with like;
+    # `edge_vs_naive` is their difference and `edge_ci_*` its 90% interval,
+    # bootstrapped by evaluation window (`backtest.paired_edge_ci`). The last
+    # two place the point forecast among the stock's own past moves of the same
+    # length (`forecasting.own_history_position`).
+    edge_vs_naive: Mapped[float | None] = mapped_column(Float)
+    edge_ci_low: Mapped[float | None] = mapped_column(Float)
+    edge_ci_high: Mapped[float | None] = mapped_column(Float)
+    own_history_percentile: Mapped[float | None] = mapped_column(Float)
+    outside_own_history: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class BacktestResult(Base):

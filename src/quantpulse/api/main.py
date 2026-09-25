@@ -185,6 +185,23 @@ def universe(session: Session = Depends(db_session)) -> list[TickerSummary]:
 # --------------------------------------------------------------------------- #
 
 
+def _forecast_row(symbol: str, row: dict[str, Any]) -> ForecastRow:
+    """A stored forecast, with its grading flag and finding 34's two sentences."""
+    return ForecastRow(
+        **row,
+        is_graded=forecasting.is_graded(row.get("historical_hit_rate")),
+        edge_note=forecasting.describe_edge(
+            row.get("edge_vs_naive"), row.get("edge_ci_low"), row.get("edge_ci_high")
+        ),
+        history_note=forecasting.describe_history_position(
+            symbol,
+            int(row["horizon_days"]),
+            row.get("own_history_percentile"),
+            row.get("outside_own_history"),
+        ),
+    )
+
+
 def _screener_row(row: dict[str, Any]) -> ScreenerRow:
     """One scored row, carrying the sentence that says what is behind it.
 
@@ -362,7 +379,7 @@ def stock_detail(
         explanation=_rating_explanation(score_rows[0]) if score_rows else None,
         prices=[PriceBar(**row) for row in _rows(bars)],
         forecasts=[
-            ForecastRow(**row, is_graded=forecasting.is_graded(row.get("historical_hit_rate")))
+            _forecast_row(ticker, row)
             for row in _rows(persistence.read_symbol_forecasts(session, ticker))
         ],
         patterns=[

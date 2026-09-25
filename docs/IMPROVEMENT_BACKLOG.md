@@ -604,6 +604,59 @@ strings shown. Static suite 29/29, e2e 6/6, pytest 1,949.
 only `emit_route_pages.py` writes — and every `npm run build` wipes `dist/`. Run
 the emitter after each build (the Pages workflow always does).
 
+### Point 34 — a forecast was shown beside a hit rate that was not evidence for it
+
+Done 2026-09-26; the owner chose **the interval plus a plausibility flag**.
+
+**Re-measured first, and it changed the question.** The audit's +90.7% SNDK row
+had moved; the largest graded forecast was GBR's 20-day +46.8%. The proposed
+per-symbol plausibility bound would have fired on **0 of ~2,940** graded
+forecasts outside the stock's own range (1 outside its 1st–99th percentile): SNDK
+rose 47× in 19 months, so +46.8% was its 72nd percentile. The real problem was
+the hit rate. Reproducing the nightly's pooled walk-forward exactly (GBR 20-day
+51.8%, 34 windows) and bootstrapping **by window** — twenty names in one window
+are one piece of evidence — **no model's edge over naive excluded zero at any
+graded horizon**: GBR 20d +3.5 pts [−0.9, +7.8], GBR 5d +0.6 [−1.7, +2.9], ARIMA
+20d +0.4 [−0.3, +1.2], ARIMA 5d −0.5 [−1.2, +0.1].
+
+**A second defect under the first:** "vs naive" was the naive forecast's rate over
+*its own* 39 windows while GBR is graded on 34; over GBR's windows naive was 48.2%,
+not the 49.4% printed beside it, although the page says "over the same periods".
+
+What changed:
+- `backtest.paired_edge_ci`: model minus naive over the same pairs, 90% interval
+  from resampling whole windows.
+- `refresh_data._pooled_hit_rates` → `PooledAccuracy(rate, windows, baseline_rate,
+  edge)`: naive measured on each model's own pairs; the edge and interval stored
+  per row (migration `a34e1d9c2b70`: five nullable columns).
+- `forecasting.own_history_position`: the forecast's percentile among the stock's
+  past h-day moves over the series the model was fitted on, and whether it is
+  beyond them all (≥60 moves, else nothing).
+- `forecasting.describe_edge` / `describe_history_position`: one sentence each,
+  sent by the API (`edge_note`, `history_note`) and printed verbatim by both
+  front ends. React: an *Edge vs naive* column with the Track Record's interval
+  whisker, a "beyond its history" marker, and the sentences under the table.
+  Streamlit: the same column as text, the marker, the same sentences.
+
+**Verified on the real thing:** the nightly's own `refresh_forecasts` run on a
+migrated copy of the published database (30 min, 5,534 rows) stored GBR 20d
+**+2.75 pts [−1.9, +7.0]** on 09-23 data — consistent with the independent 09-21
+measurement — with 52.2% vs 49.4% naive over the same 34 windows, now subtracting
+exactly; every interval straddles zero; the only "beyond its history" rows were
+three 63-day ones (a horizon finding 35 drops). Rendered in both front ends, both
+themes, 375px; axe unchanged.
+
+**Tests and mutations:** paired-CI unit tests (including "copies inside a window
+buy no precision"), sentence tests, pooled-accuracy tests, a caller-level
+`refresh_forecasts` test, an API round trip, and a data-driven static test.
+Mutation-checked eight ways; one — naive over its own pairs — **survived at
+first** because every fixture graded the model and naive on identical pairs;
+a stand-in model that declines to call on alternate windows now reproduces the
+production case and catches it. The e2e fixture was recaptured from the real API
+output, not patched. **Until the next weekly run (2026-09-28) the live rows are
+the old ones**, so the pages show "—" in the new column; nothing was backfilled
+by hand.
+
 ### Point 45 — the published database was read at whatever schema it had
 
 Found 2026-09-26 while preparing finding 34, the first new database column since

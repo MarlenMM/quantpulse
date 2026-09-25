@@ -128,6 +128,21 @@ export interface ForecastRow {
   // rendered identically.
   hit_rate_windows: number | null;
   /**
+   * Finding 34: the model's hit rate minus the naive forecast's over the same
+   * graded pairs, with its 90% interval bootstrapped by window. Null for the
+   * naive forecast itself and for rows stored before this was measured.
+   */
+  edge_vs_naive: number | null;
+  edge_ci_low: number | null;
+  edge_ci_high: number | null;
+  /** Share of the stock's own past moves of this length below the forecast (0-1). */
+  own_history_percentile: number | null;
+  /** True when the forecast is beyond every such past move. */
+  outside_own_history: boolean | null;
+  /** Both of the above as one sentence each, written by the server. */
+  edge_note: string | null;
+  history_note: string | null;
+  /**
    * Whether this row has a measured out-of-sample accuracy at all. Sent by the
    * server (`forecasting.is_graded`) rather than re-derived from a null check
    * here: it decides how prominently a number is displayed, and the same rule

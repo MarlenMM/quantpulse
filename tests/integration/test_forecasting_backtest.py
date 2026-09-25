@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import refresh_data
 from quantpulse.analysis import backtest, scoring
+from quantpulse.analysis import backtest as bt
 from quantpulse.analysis.forecasting import baseline_forecast
 from quantpulse.storage.models import (
     BacktestResult,
@@ -130,6 +131,45 @@ def test_refresh_forecasts_persists_rows_with_hit_rate(session: Session) -> None
     # The pooled baseline runner produced a non-null historical hit-rate.
     baseline = [f for f in forecasts if f.model_name == "baseline"]
     assert baseline and all(0.0 <= f.historical_hit_rate <= 1.0 for f in baseline)
+
+
+def test_refresh_forecasts_stores_each_rows_edge_and_history_position(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 34, asserted at the caller: the nightly stores what the helpers compute.
+
+    With ARIMA graded against the naive forecast, every ARIMA row carries its
+    edge (hit rate minus naive over the same pairs) and a window-bootstrapped
+    interval around it; the naive rows carry none; and every row is placed
+    among its stock's own past moves.
+    """
+    from quantpulse.analysis.forecasting import statistical_forecast
+
+    monkeypatch.setattr(
+        refresh_data,
+        "_FORECAST_RUNNERS",
+        {
+            "baseline": (baseline_forecast, "baseline"),
+            "arima": (statistical_forecast, "arima"),
+        },
+    )
+    monkeypatch.setattr(bt, "MIN_GRADED_WINDOWS", 5)
+    universe = _seed(session)
+    refresh_data.refresh_forecasts(session, universe, AS_OF)
+    session.flush()
+    rows = session.scalars(select(Forecast)).all()
+
+    arima = [f for f in rows if f.model_name == "arima"]
+    assert arima, "no ARIMA rows were written"
+    for f in arima:
+        assert f.edge_vs_naive is not None, "an ARIMA row was stored without its edge"
+        assert f.edge_ci_low <= f.edge_vs_naive <= f.edge_ci_high
+        assert f.edge_vs_naive == pytest.approx(f.historical_hit_rate - f.baseline_hit_rate)
+    for f in (f for f in rows if f.model_name == "baseline"):
+        assert f.edge_vs_naive is None
+        assert f.baseline_hit_rate == pytest.approx(f.historical_hit_rate)
+    assert all(f.own_history_percentile is not None for f in rows)
+    assert all(f.outside_own_history is not None for f in rows)
 
 
 def test_refresh_forecasts_is_append_only(session: Session) -> None:

@@ -36,6 +36,7 @@ from lib import charts, data
 from lib.brand import PAGE_ICON
 from lib.format import (
     confidence_label,
+    format_edge_cell,
     format_percent,
     format_price,
     format_ratio,
@@ -168,6 +169,7 @@ _FORECAST_COLUMNS = [
     "upper_price",
     "Hit rate",
     "vs naive",
+    "Edge vs naive",
     "Windows",
 ]
 _FORECAST_RENAMES = {
@@ -203,6 +205,12 @@ _FORECAST_COLUMN_CONFIG = {
     "High": st.column_config.NumberColumn(
         "High", help="Upper bound of the forecast range, not a target."
     ),
+    "Edge vs naive": st.column_config.TextColumn(
+        "Edge vs naive",
+        help="The hit rate minus the naive column's over exactly the same periods, "
+        "with its 90% interval in brackets. An interval that includes zero has not "
+        "shown any skill. The unit of evidence is the window, not the stock.",
+    ),
     "Windows": st.column_config.TextColumn(
         "Windows",
         help="How many distinct out-of-sample periods the two hit rates were "
@@ -226,6 +234,38 @@ def render_forecast_table(rows: pd.DataFrame) -> None:
         width="stretch",
         column_config=_FORECAST_COLUMN_CONFIG,
     )
+
+
+def render_forecast_notes(symbol: str, rows: pd.DataFrame) -> None:
+    """Finding 34's two sentences per row -- the same words the React page prints.
+
+    Both come from `forecasting.describe_edge` / `describe_history_position`,
+    which the API also calls, so the two front ends cannot word them apart.
+    """
+
+    def value(row: Any, name: str) -> Any:
+        v = getattr(row, name, None)
+        return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
+
+    lines = []
+    for r in rows.itertuples():
+        outside = value(r, "outside_own_history")
+        notes = [
+            forecasting.describe_edge(
+                value(r, "edge_vs_naive"), value(r, "edge_ci_low"), value(r, "edge_ci_high")
+            ),
+            forecasting.describe_history_position(
+                symbol,
+                int(r.horizon_days),
+                value(r, "own_history_percentile"),
+                None if outside is None else bool(outside),
+            ),
+        ]
+        text = " ".join(n for n in notes if n)
+        if text:
+            lines.append(f"- **{int(r.horizon_days)}-day:** {text}")
+    if lines:
+        st.markdown("\n".join(lines))
 
 
 def render_ungraded_forecasts(rows: pd.DataFrame) -> None:
@@ -976,6 +1016,11 @@ def main() -> None:
         )
         table = forecast_rows[forecast_rows["model_name"] == model].copy()
         table["Return"] = table["point_return"].map(format_signed_percent)
+        # Finding 34: a forecast beyond every move of that length this stock
+        # made in the history the model saw is marked where the number is.
+        if "outside_own_history" in table:
+            beyond = table["outside_own_history"].map(lambda v: v is True or v == 1)
+            table.loc[beyond, "Return"] = table.loc[beyond, "Return"] + " · beyond its history"
         # Always paired with the naive null's rate. A hit rate alone is not a
         # skill measure -- on real history the baseline's rate was exactly the
         # fraction of periods that happened to be up, so a bare "53%" reads as
@@ -990,11 +1035,20 @@ def main() -> None:
         # The sample size behind those two percentages. A rate over 40 distinct
         # out-of-sample windows and one over 3 are different claims, and without
         # this column they looked identical.
+        table["Edge vs naive"] = [
+            format_edge_cell(
+                getattr(r, "edge_vs_naive", None),
+                getattr(r, "edge_ci_low", None),
+                getattr(r, "edge_ci_high", None),
+            )
+            for r in table.itertuples()
+        ]
         table["Windows"] = table.get(
             "hit_rate_windows", pd.Series(index=table.index, dtype="float")
         ).map(lambda v: "—" if pd.isna(v) else f"{int(v)}")
         graded_mask = table["historical_hit_rate"].map(forecasting.is_graded)
         render_forecast_table(table[graded_mask])
+        render_forecast_notes(symbol, table[graded_mask])
         ungraded = table[~graded_mask]
         if not ungraded.empty:
             render_ungraded_forecasts(ungraded)

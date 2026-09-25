@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from types import FrameType
-from typing import Any
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -1303,29 +1303,57 @@ def _ohlcv_frames_by_symbol(ohlcv: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
-def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], tuple[float, int]]:
-    """Each (model, horizon)'s out-of-sample hit-rate **and its window count**, pooled.
+class PooledAccuracy(NamedTuple):
+    """One (model, horizon)'s published track record.
+
+    `rate` and `baseline_rate` are the model's and the naive forecast's hit rates
+    over the **same** graded pairs, so "hit rate vs naive" compares like with
+    like; `windows` is how many distinct evaluation windows those pairs span;
+    `edge` is `rate - baseline_rate` with its window-bootstrapped 90% interval
+    (`backtest.paired_edge_ci`), and `None` for the naive forecast itself.
+    """
+
+    rate: float
+    windows: int
+    baseline_rate: float
+    edge: backtest.BootstrapCI | None
+
+
+def _gradable_hits(predicted: float, realized: float) -> float | None:
+    """`directional_hit_rate`'s rule for one pair: flat or missing moves are not graded."""
+    if np.isnan(predicted) or np.isnan(realized) or realized == 0.0:
+        return None
+    return float(np.sign(predicted) == np.sign(realized))
+
+
+def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], PooledAccuracy]:
+    """Each (model, horizon)'s out-of-sample hit rate, window count, naive rate and edge, pooled.
 
     Runs the look-ahead-free walk-forward (`backtest.walk_forward_accuracy`) for
     every runner and horizon over the `_ACCURACY_SAMPLE_SIZE` longest-history
-    names, pools the per-fold predicted/realized pairs across those names, and
-    scores one honest hit-rate per (model_name, horizon). This is the stat shown
-    next to every individual forecast (Section 7.6) -- computed on a bounded
-    sample so it stays affordable, since the point estimate is a property of the
-    model, not of any one stock.
+    names and pools the per-fold pairs across them. This is the record shown next
+    to every individual forecast (Section 7.6) -- computed on a bounded sample so
+    it stays affordable, since it is a property of the model, not of one stock.
 
-    **The returned count is distinct evaluation windows, not pooled pairs**, and
-    a rate measured over fewer than `backtest.MIN_GRADED_WINDOWS` of them is
-    dropped rather than published. Pooling twenty symbols multiplies the pair
-    count twentyfold without adding a single new window: the sampled names all
-    share one trading calendar, so they are twenty readings of the *same*
-    history. Measured on real data, that inflated the 1-year horizon's apparent
-    sample from 1-3 windows to 20-60 pairs, and the ML model's "60% hit rate vs
-    52% naive" there was twenty correlated readings of a single year.
+    **The count is distinct evaluation windows, not pooled pairs**, and a rate
+    measured over fewer than `backtest.MIN_GRADED_WINDOWS` of them is dropped
+    rather than published. Pooling twenty symbols multiplies the pair count
+    twentyfold without adding a window: the names share one trading calendar,
+    so they are twenty readings of the *same* history. Measured on real data,
+    that inflated the 1-year horizon's apparent sample from 1-3 windows to 20-60
+    pairs.
+
+    **Finding 34.** Each model is compared with the naive forecast over its own
+    graded pairs -- GBR, which needs a longer training history, is graded on
+    fewer windows than the naive forecast, and over GBR's windows the naive rate
+    was 48.2%, not the 49.4% it scores over its own. The difference carries a
+    90% interval bootstrapped by window; on the published data none excluded
+    zero.
     """
     sample = sorted(frames.values(), key=len, reverse=True)[:_ACCURACY_SAMPLE_SIZE]
-    pooled: dict[tuple[str, int], tuple[list[float], list[float], set[pd.Timestamp]]] = {}
-    for prices in sample:
+    # (model, horizon) -> {(symbol index, window): hit}
+    graded: dict[tuple[str, int], dict[tuple[int, pd.Timestamp], float]] = {}
+    for index, prices in enumerate(sample):
         for model_fn, model_name in _FORECAST_RUNNERS.values():
             for horizon in _FORECAST_HORIZONS:
                 result = backtest.walk_forward_accuracy(
@@ -1333,28 +1361,45 @@ def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], 
                 )
                 if result is None:
                     continue
-                pred, real, windows = pooled.setdefault((model_name, horizon), ([], [], set()))
-                pred.extend(result.predicted.tolist())
-                real.extend(result.realized.tolist())
-                windows.update(result.as_of)
+                hits = graded.setdefault((model_name, horizon), {})
+                for window, predicted, realized in zip(
+                    result.as_of, result.predicted, result.realized, strict=True
+                ):
+                    hit = _gradable_hits(float(predicted), float(realized))
+                    if hit is not None:
+                        hits[(index, pd.Timestamp(window))] = hit
 
-    hit_rates: dict[tuple[str, int], tuple[float, int]] = {}
-    for key, (pred, real, windows) in pooled.items():
-        rate = backtest.directional_hit_rate(pred, real)
-        if rate is None:
+    accuracy: dict[tuple[str, int], PooledAccuracy] = {}
+    for (model_name, horizon), hits in graded.items():
+        naive = graded.get(("baseline", horizon), {})
+        pairs = sorted(hits) if model_name == "baseline" else sorted(set(hits) & set(naive))
+        windows = {window for _, window in pairs}
+        if not pairs:
             continue
         if len(windows) < backtest.MIN_GRADED_WINDOWS:
             logger.info(
                 "Not publishing the %s hit rate at h=%d: %d graded window(s), "
                 "below the %d needed for the figure to mean anything",
-                key[0],
-                key[1],
+                model_name,
+                horizon,
                 len(windows),
                 backtest.MIN_GRADED_WINDOWS,
             )
             continue
-        hit_rates[key] = (rate, len(windows))
-    return hit_rates
+        model_hits = np.array([hits[pair] for pair in pairs])
+        naive_hits = np.array([naive.get(pair, hits[pair]) for pair in pairs])
+        edge = (
+            None
+            if model_name == "baseline"
+            else backtest.paired_edge_ci(model_hits, naive_hits, [w for _, w in pairs])
+        )
+        accuracy[(model_name, horizon)] = PooledAccuracy(
+            rate=float(model_hits.mean()),
+            windows=len(windows),
+            baseline_rate=float(naive_hits.mean()),
+            edge=edge,
+        )
+    return accuracy
 
 
 def send_alerts(session: Session, today: date, *, after_pattern_id: int) -> int:
@@ -1582,12 +1627,13 @@ def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> 
             continue
         for fc in forecasting.generate_forecasts(prices, horizons=_FORECAST_HORIZONS):
             graded = hit_rates.get((fc.model_name, fc.horizon_days))
-            # The naive null's rate over the same horizon, so the UI can show
-            # "55% vs 53% naive" instead of a bare number that reads as skill.
-            # `baseline` is itself one of the runners, so this is the identical
-            # pooling over the identical sample -- not a second,
-            # differently-computed statistic.
-            baseline_graded = hit_rates.get(("baseline", fc.horizon_days))
+            edge = graded.edge if graded else None
+            # Where the point forecast sits among this stock's own past moves of
+            # the same length, over the same close series the model was fitted
+            # on (finding 34): a percentile, and whether it is beyond them all.
+            position = forecasting.own_history_position(
+                prices["close"], horizon_days=fc.horizon_days, forecast_return=fc.point_return
+            )
             records.append(
                 {
                     "symbol": symbol,
@@ -1598,11 +1644,18 @@ def refresh_forecasts(session: Session, universe: pd.DataFrame, today: date) -> 
                     "point_price": fc.point_price,
                     "lower_price": fc.lower_price,
                     "upper_price": fc.upper_price,
-                    "historical_hit_rate": graded[0] if graded else None,
-                    "baseline_hit_rate": baseline_graded[0] if baseline_graded else None,
-                    # How many distinct out-of-sample windows the rate above was
+                    "historical_hit_rate": graded.rate if graded else None,
+                    # The naive forecast over *this model's* graded pairs, so the
+                    # UI's "55% vs 53% naive" compares the same periods.
+                    "baseline_hit_rate": graded.baseline_rate if graded else None,
+                    # How many distinct out-of-sample windows the rates above were
                     # measured over -- null when there is no rate to qualify.
-                    "hit_rate_windows": graded[1] if graded else None,
+                    "hit_rate_windows": graded.windows if graded else None,
+                    "edge_vs_naive": edge.point if edge else None,
+                    "edge_ci_low": edge.low if edge else None,
+                    "edge_ci_high": edge.high if edge else None,
+                    "own_history_percentile": position.percentile,
+                    "outside_own_history": position.outside,
                 }
             )
     return persistence.upsert_forecasts(session, records)

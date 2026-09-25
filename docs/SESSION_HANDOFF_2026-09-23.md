@@ -541,7 +541,12 @@ pre-rendered data, the way the watchlist already works in `localStorage`. The
 first is minutes and gives the real thing; the second is real work and gives a
 demo that can't be taken down.
 
-### 34 · A +90.7% twenty-day forecast is published wearing a graded badge (S1) — needs the user's call
+### 34 · A +90.7% twenty-day forecast is published wearing a graded badge (S1) — DONE 2026-09-26 (user: interval + flag)
+
+**Status:** every graded row now carries its edge over naive (over the same pairs) with a
+window-bootstrapped 90% interval and a verdict sentence, plus its place in the stock's own
+history and a flag beyond it. Measured: no model/horizon's edge excludes zero. Live values
+arrive with the 2026-09-28 weekly run. Backlog §7.
 
 Evidence: SNDK · h=20 · gbr · point return **+90.7%** · hit rate 52.4% vs naive
 49.7% · 34 windows · STX +34.5% and WDAY +34.4% show **identical** 52.4 / 49.7 /

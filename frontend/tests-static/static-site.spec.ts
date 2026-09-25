@@ -329,6 +329,51 @@ test("a stock page deep link renders its charts", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+/**
+ * Finding 34: a graded forecast shows its edge over the naive forecast, with the
+ * interval, and says in words whether that edge is distinguishable from luck.
+ *
+ * Measured on the published data, no model's edge excluded zero at any graded
+ * horizon (GBR 20-day: +3.5 points, 90% interval -0.9 to +7.8), while the table
+ * printed a bare "51.8%" beside each forecast. Driven by the generated file, so
+ * it holds for rows stored before the edge was measured (an em dash, no
+ * sentence) and after (a whisker and the server's sentence, verbatim).
+ */
+test("graded forecasts show their edge over naive and whether it is luck", async ({ page }) => {
+  const errors = watchForErrors(page);
+  const payload = JSON.parse(
+    readFileSync(join(process.cwd(), "dist", "data", "stocks__AIZ.json"), "utf8"),
+  ) as {
+    forecasts: {
+      model_name: string;
+      horizon_days: number;
+      is_graded: boolean;
+      edge_vs_naive: number | null;
+      edge_note: string | null;
+      history_note: string | null;
+      outside_own_history: boolean | null;
+    }[];
+  };
+  await page.goto("stocks/AIZ");
+  const table = page.locator("table:has(th:text-is('Horizon (days)'))").first();
+  await expect(table.locator("tbody tr").first()).toBeVisible();
+  await expect(table.locator("th", { hasText: "Edge vs naive" })).toBeVisible();
+
+  const model = payload.forecasts[0].model_name; // the page's default: the first model
+  const graded = payload.forecasts.filter((f) => f.model_name === model && f.is_graded);
+  expect(graded.length, "AIZ should have graded rows").toBeGreaterThan(0);
+  for (const f of graded) {
+    for (const note of [f.edge_note, f.history_note]) {
+      if (note) await expect(page.getByText(note, { exact: false }).first()).toBeVisible();
+    }
+  }
+  const measured = graded.filter((f) => f.edge_vs_naive !== null).length;
+  await expect(table.locator(".whisker")).toHaveCount(measured);
+  const flagged = graded.filter((f) => f.outside_own_history).length;
+  await expect(table.locator(".beyond-history")).toHaveCount(flagged);
+  expect(errors).toEqual([]);
+});
+
 test("the track record shows a real backtest with its confidence interval", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("track-record");

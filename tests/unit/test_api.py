@@ -97,6 +97,13 @@ def _seed(session: Session) -> None:
             lower_price=99.0,
             upper_price=107.0,
             historical_hit_rate=0.55,
+            baseline_hit_rate=0.515,
+            hit_rate_windows=40,
+            edge_vs_naive=0.035,
+            edge_ci_low=-0.009,
+            edge_ci_high=0.078,
+            own_history_percentile=0.717,
+            outside_own_history=False,
         )
     )
     session.add(
@@ -314,6 +321,23 @@ class TestStockDetail:
         assert len(body["patterns"]) == 1
         assert body["analyst_consensus"]["strong_buy"] == 5
         assert [n["title"] for n in body["news"]] == ["Apple ships"]
+
+    def test_a_forecast_carries_its_edge_and_its_place_in_history(self, client: TestClient) -> None:
+        """Finding 34: the edge over naive with its interval, and both sentences.
+
+        Composed server-side so the two front ends print the same words.
+        """
+        row = client.get("/api/stocks/AAPL").json()["forecasts"][0]
+        assert row["edge_vs_naive"] == pytest.approx(0.035)
+        assert (row["edge_ci_low"], row["edge_ci_high"]) == (
+            pytest.approx(-0.009),
+            pytest.approx(0.078),
+        )
+        assert row["outside_own_history"] is False
+        assert row["edge_note"] == (
+            "+3.5 pts over naive (90% interval −0.9 to +7.8) — not distinguishable from luck."
+        )
+        assert row["history_note"] == "Larger than 72% of AAPL's past 5-day moves."
 
     def test_forecast_carries_its_own_track_record(self, client: TestClient) -> None:
         # Section 7.6: a forecast must be shown next to its own hit-rate, so it

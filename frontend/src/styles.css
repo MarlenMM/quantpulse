@@ -1108,3 +1108,17 @@ pre {
   width: 100%;
   height: auto;
 }
+
+/* Finding 34: the forecast table's edge column and its notes. The whisker is
+   the Track Record's, drawn against zero; here zero means "no better than the
+   naive forecast". */
+.edge-cell { min-width: 9rem; }
+.edge-cell .num { display: block; }
+.beyond-history {
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  color: var(--down-ink);
+  white-space: nowrap;
+}
+.forecast-notes { margin: var(--s3) 0 0; padding-left: 1.1rem; color: var(--text-quiet); }
+.forecast-notes li + li { margin-top: var(--s1); }

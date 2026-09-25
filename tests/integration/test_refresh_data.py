@@ -1368,9 +1368,9 @@ class TestPooledHitRateWindows:
         frames = self._frames(n_symbols=10, bars=700)
         rates = self._rates(frames, (5,))
         assert ("baseline", 5) in rates
-        _rate, windows = rates[("baseline", 5)]
+        windows = rates[("baseline", 5)].windows
         single = self._rates({"S0": frames["S0"]}, (5,))
-        assert windows == single[("baseline", 5)][1], (
+        assert windows == single[("baseline", 5)].windows, (
             "adding nine more symbols over the same dates must not add windows"
         )
 
@@ -1381,14 +1381,86 @@ class TestPooledHitRateWindows:
         frames = self._frames(n_symbols=5, bars=700)
         rates = self._rates(frames, (5, 252))
         assert ("baseline", 5) in rates
-        assert rates[("baseline", 5)][1] >= bt.MIN_GRADED_WINDOWS
+        assert rates[("baseline", 5)].windows >= bt.MIN_GRADED_WINDOWS
         assert ("baseline", 252) not in rates
 
     def test_a_published_rate_always_clears_the_minimum(self) -> None:
         frames = self._frames(n_symbols=3, bars=900)
-        for (_model, _h), (rate, windows) in self._rates(frames, (5, 20, 63, 252)).items():
-            assert 0.0 <= rate <= 1.0
-            assert windows >= bt.MIN_GRADED_WINDOWS
+        for (_model, _h), accuracy in self._rates(frames, (5, 20, 63, 252)).items():
+            assert 0.0 <= accuracy.rate <= 1.0
+            assert accuracy.windows >= bt.MIN_GRADED_WINDOWS
+
+
+class TestEdgeOverNaive:
+    """Finding 34: a hit rate is shown with the naive rate over the same pairs, and the edge.
+
+    GBR needs a longer training history than the naive forecast, so it is graded
+    over fewer windows (34 against 39 on the published data). The stored naive
+    rate was the naive forecast's rate over *its own* windows -- 49.4% -- while
+    over GBR's periods it was 48.2%, and the page says "over the same periods".
+    """
+
+    def _rates(self, frames):
+        runners = {
+            "baseline": refresh_data._FORECAST_RUNNERS["baseline"],
+            "arima": refresh_data._FORECAST_RUNNERS["arima"],
+        }
+        with (
+            patch.object(refresh_data, "_FORECAST_HORIZONS", (5,)),
+            patch.object(refresh_data, "_FORECAST_RUNNERS", runners),
+        ):
+            return refresh_data._pooled_hit_rates(frames)
+
+    def test_the_edge_is_the_model_minus_naive_over_the_same_pairs(self) -> None:
+        frames = TestPooledHitRateWindows._frames(n_symbols=4, bars=700)
+        rates = self._rates(frames)
+        model = rates[("arima", 5)]
+        assert model.edge is not None
+        assert model.edge.point == pytest.approx(model.rate - model.baseline_rate)
+        assert model.edge.low <= model.edge.point <= model.edge.high
+        # Windows are the resampling unit and the count the reader sees.
+        assert model.edge.n_observations == model.windows
+
+    def test_the_naive_forecast_has_no_edge_over_itself(self) -> None:
+        frames = TestPooledHitRateWindows._frames(n_symbols=2, bars=700)
+        naive = self._rates(frames)[("baseline", 5)]
+        assert naive.edge is None
+        assert naive.baseline_rate == pytest.approx(naive.rate)
+
+    def test_a_model_graded_on_fewer_windows_is_compared_on_those_windows(self) -> None:
+        """The production case: GBR is graded on 34 windows, the naive forecast on 39.
+
+        A stand-in model that declines to call (NaN) on every other window is
+        graded on a strict subset of the naive forecast's pairs. Its naive
+        comparison must come from that subset, not from the naive forecast's
+        own record -- the two differ, and the old code published the latter.
+        """
+        from dataclasses import replace
+
+        from quantpulse.analysis.forecasting import baseline_forecast
+
+        def sometimes(prices, horizon_days, **kwargs):
+            forecast = baseline_forecast(prices, horizon_days, **kwargs)
+            if len(prices) % 2:
+                return replace(forecast, point_return=float("nan"))
+            return replace(forecast, point_return=-forecast.point_return)
+
+        frames = TestPooledHitRateWindows._frames(n_symbols=3, bars=900)
+        runners = {
+            "baseline": refresh_data._FORECAST_RUNNERS["baseline"],
+            "sometimes": (sometimes, "sometimes"),
+        }
+        with (
+            patch.object(refresh_data, "_FORECAST_HORIZONS", (5,)),
+            patch.object(refresh_data, "_FORECAST_RUNNERS", runners),
+        ):
+            rates = refresh_data._pooled_hit_rates(frames)
+        model, naive = rates[("sometimes", 5)], rates[("baseline", 5)]
+        assert model.windows < naive.windows
+        assert model.baseline_rate != pytest.approx(naive.rate, abs=1e-6), (
+            "the naive comparison was taken from the naive forecast's own windows"
+        )
+        assert model.edge.point == pytest.approx(model.rate - model.baseline_rate)
 
 
 class TestPatternSignalsAreProduced:
