@@ -202,8 +202,8 @@ def horizon_dates(anchor: pd.Timestamp, offsets: Sequence[int]) -> list[pd.Times
     """Real calendar dates `offsets` **trading** days after `anchor`.
 
     Every horizon in this project is counted in trading days -- `forecasting.
-    DEFAULT_HORIZONS` is `(5, 20, 63, 252)`, i.e. a week, a month, a quarter and
-    a year of *sessions* -- so plotting them by adding that many *calendar* days
+    DEFAULT_HORIZONS` is `(5, 20)`, a week and a month of *sessions*, and until
+    point 35 also held 63 and 252 -- so plotting them by adding that many *calendar* days
     puts every forecast in the wrong place on a date axis, and increasingly so
     with distance: measured against the NYSE calendar from 2026-08-04, the
     20-day point landed 8 days early, the 63-day point 27 days early, and the

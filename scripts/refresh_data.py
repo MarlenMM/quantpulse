@@ -286,11 +286,11 @@ _STEP_TIMEOUT_SECONDS: dict[str, int] = {
 }
 
 # Phase 7 forecasting + backtest (Section 7.6). Both are among the heaviest steps
-# in the job -- generating four horizons x three models per name, and a
+# in the job -- generating two horizons x three models per name, and a
 # multi-year walk-forward -- so, like the news/13F workloads above, they ride the
 # weekly cadence (a documented cost choice, not a silent gap; Sections 6.10-6.13
 # on staged rollout and the model-cache work that would make this daily-affordable).
-_FORECAST_HORIZONS = forecasting.DEFAULT_HORIZONS  # (5, 20, 63, 252) trading days
+_FORECAST_HORIZONS = forecasting.DEFAULT_HORIZONS  # (5, 20) trading days; point 35
 # runner name -> (model callable, the `model_name` its Forecast carries), so a
 # forecast row's historical_hit_rate can be keyed to the pooled accuracy below.
 _FORECAST_RUNNERS: dict[str, tuple[Any, str]] = {
@@ -298,8 +298,9 @@ _FORECAST_RUNNERS: dict[str, tuple[Any, str]] = {
     "arima": (forecasting.statistical_forecast, "arima"),
     "ml": (forecasting.ml_forecast, "gbr"),
 }
-# Enough trailing history to fit the longest horizon's ML training window plus
-# its forward-return target, with room for weekends/holidays (~3.5 years).
+# ~3.5 years of trailing history. This is also the history the hit rates are
+# graded over, so shrinking it now that the longest horizon is 20 days would cut
+# the number of graded windows, not just the fetch.
 _FORECAST_PRICE_LOOKBACK_DAYS = 1280
 # The model's own out-of-sample hit-rate (shown alongside every forecast,
 # Section 7.6) is pooled over this many names -- a bounded sample keeps the

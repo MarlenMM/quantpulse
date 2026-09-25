@@ -140,9 +140,11 @@ function ForecastNotes({ rows }: { rows: ForecastRow[] }) {
  *
  * They used to sit in the same table as the graded rows, differing only by
  * three dashes — and they are precisely the rows carrying the largest numbers.
- * On the real universe every 63- and 252-day forecast is ungraded, the 252-day
- * ones average +16% and reach +231%, and a reader skimming saw "+82.2%, target
- * $379.77" set exactly like a figure standing on 154 measured windows. Section
+ * When this was written every 63- and 252-day forecast was ungraded, the 252-day
+ * ones averaged +16% and reached +231%, and a reader skimming saw "+82.2%, target
+ * $379.77" set exactly like a figure standing on 154 measured windows. (Those two
+ * horizons are no longer published at all — point 35 — so this now appears only
+ * when a model is short of graded windows at 5 or 20 days.) Section
  * 7.6's rule — "a forecast without its own track record next to it invites more
  * confidence than it's earned" — was satisfied to the letter by the dashes and
  * defeated by the typography.
@@ -166,9 +168,8 @@ function UngradedForecasts({ rows }: { rows: ForecastRow[] }) {
       <p className="callout callout-warn">
         <strong>These horizons have no measured accuracy at all.</strong> Not a low hit
         rate — no hit rate: the model has never been graded over enough independent periods
-        at these horizons for a number to mean anything. A one-year horizon needs roughly
-        independent <em>years</em> to test against, and three years of stored history does
-        not contain many. Treat what follows as the model talking, not as a track record.
+        at these horizons for a number to mean anything. Treat what follows as the model
+        talking, not as a track record.
       </p>
       <ForecastTable rows={rows} />
     </details>
@@ -468,6 +469,7 @@ export default function StockDetail({ symbol }: { symbol: string }) {
               by construction — once ARIMA has a drift term it converges to the
               random-walk-with-drift null — so the two agreeing is not corroboration.
             </p>
+            <p className="muted small">{data.horizon_note}</p>
           </>
         ) : (
           <p className="muted">

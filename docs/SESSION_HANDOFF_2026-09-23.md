@@ -564,7 +564,10 @@ the point estimate sits outside that symbol's own historical distribution of
 h-day returns. Suppressing is cleaner; flagging is more honest to the project's
 "disclose, don't delete" rule.
 
-### 35 · Two of the four horizons can never be graded, and are recomputed every week (S2) — needs the user's call
+### 35 · Two of the four horizons can never be graded, and are recomputed every week (S2) — DONE 2026-09-26 (user: drop them, say why)
+
+**Status:** only 5 and 20 days are published; the reader filters stored 63/252 rows out of
+both front ends and the static site at once; each Stock Detail page says why. Backlog §7.
 
 Evidence: `MIN_GRADED_WINDOWS = 30` distinct evaluation windows · h=63 → **9**
 windows available · h=252 → **0** · both published ungraded every run · 30

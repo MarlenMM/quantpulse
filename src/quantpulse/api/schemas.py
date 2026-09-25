@@ -397,6 +397,9 @@ class StockDetail(BaseModel):
     explanation: RatingExplanation | None = None
     prices: list[PriceBar] = Field(default_factory=list)
     forecasts: list[ForecastRow] = Field(default_factory=list)
+    #: Why the forecasts stop at 20 days (point 35). Composed server-side so both
+    #: front ends print the same sentence.
+    horizon_note: str
     patterns: list[PatternRow] = Field(default_factory=list)
     analyst_consensus: AnalystConsensusModel | None = None
     news: list[NewsItem] = Field(default_factory=list)
