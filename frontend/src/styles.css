@@ -90,7 +90,9 @@
   --border-strong: #b9b1a1;
   --text: #1b1a17;
   --text-quiet: #55524a;
-  --muted: #78746a;
+  /* 4.93:1 on --bg, 4.56 on --sunken (WCAG AA). #78746a was 4.39 / 4.06 and failed
+     axe on every light page (finding 31). test_text_contrast.py computes these. */
+  --muted: #706c63;
   --accent: #1d4e89;
   --accent-quiet: rgba(29, 78, 137, 0.1);
   --hover: rgba(27, 26, 23, 0.045);
@@ -103,6 +105,12 @@
   --flat: #8a6a1c;
   --down: #bf3327;
   --down-strong: #8e1f18;
+  /* Chip text only (finding 31): the mark colours above are 3.3-4.7:1 as
+     text on their own 12% tint; these are the same hues, just dark enough for AA. */
+  --up-ink: #177241;
+  --flat-ink: #7b5e19;
+  --down-ink: #b33025;
+  --down-strong-ink: #8e1f18;
   --neutral: #7a756b;
 
   --warn-tint: rgba(138, 106, 28, 0.09);
@@ -144,6 +152,12 @@
   --flat: #cb9d43;
   --down: #e8756a;
   --down-strong: #cf4c3f;
+  /* Chip text only (finding 31): only Strong Sell needed lifting here
+     (#cf4c3f was 3.4-3.8:1 on its tint); the rest are the mark colours. */
+  --up-ink: #3faa6c;
+  --flat-ink: #cb9d43;
+  --down-ink: #e8756a;
+  --down-strong-ink: #d86f65;
   --neutral: #8d887e;
 
   --warn-tint: rgba(203, 157, 67, 0.11);
@@ -168,7 +182,7 @@
     --border-strong: #b9b1a1;
     --text: #1b1a17;
     --text-quiet: #55524a;
-    --muted: #78746a;
+    --muted: #706c63;
     --accent: #1d4e89;
     --accent-quiet: rgba(29, 78, 137, 0.1);
     --hover: rgba(27, 26, 23, 0.045);
@@ -178,6 +192,12 @@
     --flat: #8a6a1c;
     --down: #bf3327;
     --down-strong: #8e1f18;
+    /* Chip text only (finding 31): the mark colours above are 3.3-4.7:1 as
+       text on their own 12% tint; these are the same hues, just dark enough for AA. */
+    --up-ink: #177241;
+    --flat-ink: #7b5e19;
+    --down-ink: #b33025;
+    --down-strong-ink: #8e1f18;
     --neutral: #7a756b;
 
     --warn-tint: rgba(138, 106, 28, 0.09);
@@ -644,10 +664,10 @@ td .ticker, .ticker {
    that differs per category. A strip on every card would be decoration; a
    strip whose colour *is* the verdict is information. */
 .chip[data-rating="strong_buy"] { --chip-ink: var(--up-strong); --chip-tint: color-mix(in srgb, var(--up-strong) 12%, transparent); }
-.chip[data-rating="buy"]        { --chip-ink: var(--up);        --chip-tint: color-mix(in srgb, var(--up) 12%, transparent); }
-.chip[data-rating="hold"]       { --chip-ink: var(--flat);      --chip-tint: color-mix(in srgb, var(--flat) 12%, transparent); }
-.chip[data-rating="sell"]       { --chip-ink: var(--down);      --chip-tint: color-mix(in srgb, var(--down) 12%, transparent); }
-.chip[data-rating="strong_sell"]{ --chip-ink: var(--down-strong); --chip-tint: color-mix(in srgb, var(--down-strong) 12%, transparent); }
+.chip[data-rating="buy"]        { --chip-ink: var(--up-ink);        --chip-tint: color-mix(in srgb, var(--up) 12%, transparent); }
+.chip[data-rating="hold"]       { --chip-ink: var(--flat-ink);      --chip-tint: color-mix(in srgb, var(--flat) 12%, transparent); }
+.chip[data-rating="sell"]       { --chip-ink: var(--down-ink);      --chip-tint: color-mix(in srgb, var(--down) 12%, transparent); }
+.chip[data-rating="strong_sell"]{ --chip-ink: var(--down-strong-ink); --chip-tint: color-mix(in srgb, var(--down-strong) 12%, transparent); }
 
 .chip-glyph { font-family: var(--font-ui); font-size: 0.85em; line-height: 1; }
 

@@ -470,7 +470,10 @@ of identical entries; a screen reader announces the same page name each time.
 `"NVDA — Nvidia"` string `scripts/emit_route_pages.py` already writes, so the two
 can't drift.
 
-### 31 · Every chart fails an accessibility check, and only the charts do (S2)
+### 31 · Every chart fails an accessibility check, and only the charts do (S2) — FIXED 2026-09-25
+
+**Status:** charts are `role="figure"`; light `--muted` → #706c63 and chip-only inks
+(both approved by the user); axe 0 violations on all 5 pages × 2 themes. Backlog §7.
 
 Evidence: axe-core 4.10 on the live site · Screener 0 · Track Record 0 · Glossary
 0 · Stock Detail **3 × nested-interactive** (serious) · Dashboard **1** ·

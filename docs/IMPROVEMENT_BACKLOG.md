@@ -398,6 +398,46 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 31 — the charts failed an accessibility check, and so did the palette
+
+Fixed 2026-09-25. Measured with axe-core 4.10 on the local static build, every
+page, both themes:
+
+| | before | after |
+|---|---|---|
+| `nested-interactive` (serious) | Stock Detail ×3 (Dashboard's went with 29) | 0 |
+| `color-contrast` (serious), light theme | **13–116 per page, every page** | 0 |
+| dark theme | Strong Sell chip below AA (not on screen during the run) | 0 |
+
+**The charts.** Plotly figures sat in `role="img"` wrappers while the modebar put
+8, 3 and 8 focusable buttons inside them. They are `role="figure"` now (a figure
+may contain controls); the modebar stays, because it is the only visible way out
+of a zoom. A static test checks every page for any `role="img"` with a focusable
+descendant — it caught a link planted in the SVG dial — and that the three
+charts are labelled figures.
+
+**The palette — the audit missed this, probably because it ran in dark mode.**
+The light `--muted` (#78746a) was 4.39:1 on the page and 4.06 on sunken panels,
+under AA's 4.5. With the user's approval it is **#706c63** (4.93 / 4.56 / 5.23),
+changed in all four copies (both light blocks, the chart fallback, Streamlit's
+light `grayColor`). Then the rating chips: text on its own 12% tint was Buy
+3.27–3.72, Hold 3.81–4.32, Sell 4.12–4.71 in light, and Strong Sell 3.37–3.80 in
+dark. Also with approval, chips now take **chip-only inks** (`--up-ink`,
+`--flat-ink`, `--down-ink`, `--down-strong-ink`: light #177241 / #7b5e19 /
+#b33025, dark Strong Sell #d86f65), same hues; the tints and the chart colours
+are unchanged.
+
+`tests/unit/test_text_contrast.py` computes WCAG ratios from the stylesheet's
+own tokens — every text token on every background, every chip ink on its tint
+composited over every background, in all three theme blocks — and checks the
+four copies of `--muted` agree. It found the dark Strong Sell failure that axe
+could not, because axe only sees what is rendered.
+
+**Traps:** (1) **axe only judges what is on screen** — the dark run said "0"
+while a Strong Sell chip would have failed; compute token pairs instead. (2)
+**`npm run test:e2e` leaves an API-mode `dist/`** (§2) — the first axe run here
+measured empty pages and reported "no h1" everywhere.
+
 ### Point 30 — the browser tab never changed as you moved through the app
 
 Fixed 2026-09-25. Reproduced in a browser before the change: clicking from the

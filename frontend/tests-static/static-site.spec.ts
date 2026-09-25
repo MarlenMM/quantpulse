@@ -178,6 +178,49 @@ test("client-side navigation gives every page its own tab title", async ({ page 
   await expect(page).toHaveTitle(emittedTitle("screener"));
 });
 
+/**
+ * Finding 31: a picture must not contain controls.
+ *
+ * Every Plotly figure sat in a `role="img"` wrapper -- "one image, no parts" to
+ * assistive technology -- while Plotly's modebar put real, focusable buttons
+ * inside it (8, 3 and 8 on Stock Detail). axe-core flags that as
+ * `nested-interactive` (serious): a keyboard user tabs into controls a screen
+ * reader has just said are not there. Charts are `role="figure"` now, which may
+ * have interactive children; the dials and whiskers drawn by hand stay `img`
+ * because they contain nothing focusable. Checked on every page, because the
+ * next chart can land anywhere.
+ */
+for (const path of ["dashboard", "stocks/AIZ", "screener", "track-record", "glossary"]) {
+  test(`nothing marked as a picture on ${path} contains a control`, async ({ page }) => {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    if (path.startsWith("stocks/")) await expect(page.locator(".js-plotly-plot")).toHaveCount(3);
+
+    const offenders = await page.locator('[role="img"]').evaluateAll((pictures) =>
+      pictures
+        .map((el) => ({
+          label: el.getAttribute("aria-label") ?? el.tagName,
+          focusable: el.querySelectorAll(
+            'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          ).length,
+        }))
+        .filter((picture) => picture.focusable > 0),
+    );
+    expect(offenders).toEqual([]);
+  });
+}
+
+test("every chart is a labelled figure", async ({ page }) => {
+  await page.goto("stocks/AIZ");
+  await expect(page.locator(".js-plotly-plot")).toHaveCount(3);
+  const figures = page.getByRole("figure");
+  await expect(figures).toHaveCount(3);
+  for (const label of await figures.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")))) {
+    expect(label).toMatch(/AIZ/);
+  }
+});
+
 test("the screener loads a full ranked universe", async ({ page }) => {
   const errors = watchForErrors(page);
   await page.goto("screener");
