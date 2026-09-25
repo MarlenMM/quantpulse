@@ -11,6 +11,11 @@ thing here and another beside the number it explains.
 
 import streamlit as st
 
+# ruff: noqa: E402 -- the call below must run before the other lib imports (point 46)
+from lib.code_reload import refresh_changed_code
+
+refresh_changed_code()
+
 from lib.brand import PAGE_ICON
 from lib.glossary import CATEGORIES, TERMS, search_terms
 

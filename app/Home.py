@@ -8,6 +8,11 @@ Streamlit puts this file's directory on `sys.path`, which is what makes
 
 import streamlit as st
 
+# ruff: noqa: E402 -- the call below must run before the other lib imports (point 46)
+from lib.code_reload import refresh_changed_code
+
+refresh_changed_code()
+
 from lib import charts, data
 from lib.brand import PAGE_ICON
 from lib.format import (

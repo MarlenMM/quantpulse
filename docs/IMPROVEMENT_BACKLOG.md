@@ -604,6 +604,33 @@ strings shown. Static suite 29/29, e2e 6/6, pytest 1,949.
 only `emit_route_pages.py` writes — and every `npm run build` wipes `dist/`. Run
 the emitter after each build (the Pages workflow always does).
 
+### Point 46 — the hosted app served new pages on top of old modules
+
+Found 2026-09-26, the first code push after the Community Cloud deploy that
+changed a shared module. The host applies each push to the running app's files
+and keeps the process; Streamlit drops changed modules only for sessions
+connected when the files change. After finding 34's push, the hosted Stock
+Detail page raised `ImportError: cannot import name 'format_edge_cell' from
+'lib.format'` — the page was new, the module was not — until the app was
+rebooted (done at once; the page then rendered, including point 45's migration of
+the container's old database).
+
+**Fix:** `app/lib/code_reload.refresh_changed_code()`, called by every page before
+its other `lib` imports: it compares source modification times under `app/lib`
+and `src/quantpulse` with its last snapshot and drops the modules whose source
+changed (and the package attribute `from pkg import mod` would otherwise hand
+back). A function call, not an import side effect, because a module cannot remove
+itself from `sys.modules` mid-import; pages carry a file-level E402 waiver
+saying so.
+
+**Reproduced and verified on a real server** with a copy of the repository: visit
+Stock Detail, disconnect, "deploy" a new function in `lib/format.py` used by the
+page, visit again — *without* the call: `ImportError`, as in production; *with*
+it: the new code served. Tests cover the drop, the no-change path, the
+record-then-compare sequence, and that every page calls it first.
+**Limit:** the first call in a process only records the baseline, so a process
+already stale before this existed needed one reboot.
+
 ### Point 34 — a forecast was shown beside a hit rate that was not evidence for it
 
 Done 2026-09-26; the owner chose **the interval plus a plausibility flag**.
