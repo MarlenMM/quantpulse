@@ -19,6 +19,22 @@ build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) 
 wins — verified after a reboot, together with point 44 on a cold deep link. The host
 swaps pyarrow 25.0.0 → 24.0.0 by itself.
 
+**Continued 2026-09-26 → checked 2026-10-01** (HEAD `753e468`, **2,024 passed / 1
+skipped**; e2e 16, static 42; CI and Pages green). **34 done** (`e596852`, user: interval
++ flag) and **35 done** (`753e468`, user: drop 63/252, say why). The 2026-09-28 weekly
+run published the edges live, e.g. AIZ GBR 20d −1.1 pts [−5.4, +2.9], arima 5d −0.4
+[−1.1, +0.3] "not distinguishable from luck". **45 found and fixed** (`70316f8`: the
+release-asset DB is migrated to head before Pages or the hosted app reads it). **46
+found and fixed** (`bd7adef`: Community Cloud kept stale modules after code-only pushes,
+so the page raised an ImportError; `app/lib/code_reload.refresh_changed_code()` runs
+first on every page. Verified on the host: the 35 push was served with no reboot).
+**Nightlies observed:** every scheduled run from 2026-09-26 to 2026-10-01 succeeded,
+with `staleness`, `keepalive / heartbeat`, `publish / build+deploy` all succeeding and
+`notify` skipped. That closes the 26/27/43 verification. Findings page version 10.
+**Open:** 36–40, plus §4 items A–C. 28 still waits on the user: only
+`SEC_EDGAR_USER_AGENT` is set. Dependabot PRs open: #29–#32 (react, react-dom,
+plotly.js 4.1.1, vite 8.3.1). Prompt for the next session: §7.
+
 **Continued again 2026-09-25** (HEAD `62cb07b`, **1,977 passed / 1 skipped**; static 41,
 e2e 15; CI and Pages green): **29–33 done** (33: user chose both), plus **43** (27's
 notify job broke the nightly's startup — fixed `4b78f59`, verified on GitHub) and **44**
@@ -743,10 +759,16 @@ Methodology decisions from earlier sessions are in memory
 9. zsh doesn't word-split unquoted parameters (see §1).
 10. SQLite has one writer; never open an own-session write inside an open shared session.
 11. A lock can be hiding an ordering bug — ask what would happen without it.
+12. A called workflow's `permissions` are validated when the caller starts, even for a skipped job (43). Validate risky workflow edits by pushing a probe branch with every job `if: false` and dispatching it.
+13. The demo DB is a release asset written by the last nightly. A push that adds a column meets a file without it, so migrate before reading (45).
+14. Community Cloud keeps the process across code-only pushes (46); it installs ONE dependency file (entrypoint dir first, and `uv.lock` beats `requirements.txt` at the root); open `/~/+/<Page>` to read the iframe'd app as text; "Manage app" holds the log and Reboot.
+15. A static test that expects a data shape fails on correct data. It happened twice: the "Risk On" literal (42) and a 252-day drawer row (35). Derive expectations from `dist/data/*.json`, and note that the forecast table shows only the selected model.
+16. Recapture e2e fixtures from the *published* DB (`scripts/fetch_demo_db.py <path>`, then `alembic upgrade head`, then `TestClient`), not the local `quantpulse_demo.db`, which goes stale. `npm run test:e2e` leaves an API-mode `dist`, so rebuild static after it.
+17. A commit message containing the skip-ci marker anywhere, even quoted, skips every push workflow. Grep the message before committing.
 
 ---
 
-## 7. Prompt for the next session (fixes 26–28)
+## 7. Prompt for the next session (fixes 36–40)
 
 Paste this as the first message of a new session:
 
@@ -754,80 +776,75 @@ Paste this as the first message of a new session:
 You are continuing work on QuantPulse (/Users/marlenmelis/Documents/quantpulse).
 
 Read first, in full, before doing anything else:
-1. docs/SESSION_HANDOFF_2026-09-23.md — the complete record of the last session.
-   Section 1 (environment facts) is mandatory: /usr/bin/git is broken (use
-   /opt/homebrew/bin/git; for gh, export PATH=/opt/homebrew/bin:$PATH or pass
-   -R MarlenMM/quantpulse), the scratchpad is not durable, zsh does not
-   word-split unquoted parameters, and never run two pytest processes at once.
-2. docs/IMPROVEMENT_BACKLOG.md §2 (traps) and §7 (points 19–25).
+1. docs/SESSION_HANDOFF_2026-09-23.md — the status blocks at the top, §1
+   (environment facts, mandatory), §3 findings 36–40 in full, §4 open items, and
+   §6 traps 1–17. Key facts: /usr/bin/git is broken (use /opt/homebrew/bin/git;
+   for gh, export PATH=/opt/homebrew/bin:$PATH), the scratchpad is not durable,
+   zsh does not word-split unquoted parameters (pass pytest paths literally), and
+   never run two pytest processes at once.
+2. docs/IMPROVEMENT_BACKLOG.md §2 (traps) and §7 (points 19–46).
 3. Your memory files for this project.
 
-Then fix findings 26, 27 and 28 from the handoff's section 3, in that order.
+First, check the pipeline: gh run list --workflow refresh_data.yml -L 3 (every
+scheduled run since 2026-09-26 succeeded; report any change).
+
+Then fix findings 36, 37, 38, 39 and 40 from the handoff's §3, in that order.
 Commit AND push each finding separately and automatically (the user's standing
 convention), ending each commit message with the attribution line your system
-reminder specifies.
+reminder specifies. Never put the skip-ci marker in a message, even quoted.
 
-Method — the same one that fixed 19–25:
+Method — the same one that fixed 19–35 and 41–46:
 - Measure and reproduce before changing anything; every fix starts from a number
   or an observed failure.
-- Look at the running thing: run logs (gh run list / gh run view --log), the
-  live site, the real database — not only unit tests.
+- Look at the running thing: run logs (gh run view --log), the live demo
+  (https://marlenmm.github.io/quantpulse), the hosted app
+  (https://quantpulse-demo.streamlit.app; read pages at /~/+/<Page>), the real
+  published database (scripts/fetch_demo_db.py <scratch path>, then
+  alembic upgrade head) — not only unit tests.
 - Write the test before the fix and watch it fail. Then mutation-check every new
-  guard: revert or break the fix, confirm the specific test fails with the right
-  message, restore. A mutation must compile (py_compile) and the harness must
-  print the real pytest tail, with arguments passed as "$@".
-- Keep tests hermetic: no live network (GDELT, Google News, SEC, Nasdaq, Discord,
-  GitHub). If a new code path can reach the network, check that existing tests
-  don't start reaching it.
-- Run the full suite before each commit, then watch CI on the pushed commit.
+  guard: break the fix, confirm the specific test fails with the right message,
+  restore. A mutation must compile, and the harness must print the real pytest tail.
+- Keep tests hermetic: no live GDELT, Google News, SEC, Nasdaq, Finnhub, FRED,
+  Discord or GitHub.
+- Before each commit run: uv run ruff check . && uv run ruff format --check . &&
+  uv run mypy src scripts app && uv run pytest -q -p no:cacheprovider; for
+  front-end changes also npm run test:e2e and the static suite (build with
+  scripts/build_static_site.py --database <db>, VITE_STATIC_API=1 npm run build,
+  scripts/emit_route_pages.py --dist frontend/dist, npm run test:static).
+- Watch CI and the Pages publish on each pushed commit. A push that changes
+  shared modules also exercises point 46 on the hosted app — check it renders.
 - Say plainly what was not done and why.
 
-Finding 26 — the schedule will be auto-disabled after 60 days without repository
-activity:
-- Verify the current risk: date of the most recent commit, and exactly what the
-  refresh_data.yml comment block (~lines 175–188, and ~257) claims.
-- Research what GitHub counts as "repository activity" for this rule before
-  choosing a mechanism; do not assume a bot push or an API call counts. Prefer a
-  mechanism whose effect you can verify (e.g. the workflow-enable API, or a real
-  periodic commit of something meaningful), and state its limits.
-- Implement it (a small scheduled workflow is the likely shape), with tests in the
-  style of tests/unit/test_refresh_workflow.py and test_deploy_requirements.py.
-- Rewrite the stale comment block in refresh_data.yml so it describes the release
-  asset, the restored cron and the 60-day rule (this closes finding 41 too — say
-  so in the handoff).
+Finding notes:
+- 36 (quarterly sources labelled by age): label 13F/fundamentals by their period
+  ("Q1 2026 filings — the newest SEC publishes"), composed server-side and
+  printed verbatim by both front ends, as edge_note/history_note are.
+- 37 (503 identical "FINNHUB_API_KEY is not set" warnings, plus FRED's 6): log
+  one line per missing key per run; prove it from a captured run log, and keep
+  the per-ticker path for real per-ticker failures.
+- 38 (documented counts drifted): recount from the code, not by hand — tests
+  (pytest 2,024 / e2e 16 / static 42 at 753e468), endpoints, pages, models — and
+  prefer a guard that derives each count over editing numbers again. Includes the
+  backlog's stale header statistics (§4 C).
+- 39 (./run.sh lacks the line that keeps Streamlit alive here): reproduce first.
+- 40 (Dependabot): open PRs are #29–#32 (react, react-dom, plotly.js 4.1.1, vite
+  8.3.1). Plotly and the chart stack have broken silently before (trace types
+  resolving to empty scatter), so test each bump against the static and e2e
+  suites before merging; decide an ongoing policy (grouping, schedule, which
+  bumps need the browser suites) and ask the user if it's a genuine policy call.
+  Merging a PR is outward-facing: confirm with the user before merging.
+- §4 A (GDELT macro tone fails) and B (backtest harness quirk): look at these
+  after 36–40, and ask the user before designing a replacement data source.
 
-Finding 27 — nothing tells anyone when the pipeline breaks:
-- Add failure notification to refresh_data.yml and pages.yml (an if: failure()
-  job or step) that reports the run URL and what failed, through the existing
-  alerting code in src/quantpulse/alerting/ and the ALERT_DISCORD_WEBHOOK_URL
-  secret. That secret is UNSET: the unset/blank path must log one line and exit 0
-  (the project's convention — see Settings.alerting_configured()). Never log or
-  echo the webhook URL.
-- Add a staleness check: if the published health.json's newest price date is more
-  than N trading days old (use the market calendar, not weekdays — US holidays
-  cluster on Mondays), alert. Decide where it runs and justify N from the data
-  (STALE_AFTER_DAYS in app/lib/format.py is the existing vocabulary).
-- Test both without the network: the workflow structure, the unset-secret path,
-  and the staleness rule across a holiday week. Mutation-check.
+After each finding: add a docs/IMPROVEMENT_BACKLOG.md §7 entry, update that
+finding's status in docs/SESSION_HANDOFF_2026-09-23.md, and update the findings
+artifact https://claude.ai/artifact/HokUNu4qH7eg5jgxeTcByL (read it with the
+Artifact tool, strip the host wrapper, mark the finding Fixed, republish with url).
 
-Finding 28 — five features wait on secrets only the user can add:
-- Never ask for, obtain, or enter any key or webhook URL.
-- Re-verify with gh secret list which of FRED_API_KEY, FINNHUB_API_KEY,
-  ALERT_DISCORD_WEBHOOK_URL, ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY are set.
-- For each: confirm from the latest run log what the unset path does, confirm the
-  README's secrets table names it exactly and says what it unlocks and where it is
-  obtained, and fix the table if it is incomplete or wrong.
-- If the user has added any since 2026-09-23, verify the feature actually
-  activates on the next scheduled run (e.g. paper_trading_snapshots rows appear,
-  the regime's 10Y−2Y input is non-null, short_interest rows appear, an alert is
-  posted) and report the evidence.
-- Finish with a short, exact list of what the user still has to do.
-
-After each finding: update docs/IMPROVEMENT_BACKLOG.md (a new §7 entry), update
-the status of that finding in docs/SESSION_HANDOFF_2026-09-23.md, and update the
-findings artifact https://claude.ai/artifact/HokUNu4qH7eg5jgxeTcByL (read it
-first with the Artifact tool, strip the host wrapper as described in the handoff,
-mark the finding Fixed, republish with url).
+Security: never ask for, obtain, or enter any key or webhook URL; never log or
+echo the webhook URL. Finding 28 waits on the user adding FRED_API_KEY,
+FINNHUB_API_KEY, ALERT_DISCORD_WEBHOOK_URL and the ALPACA keys; if any has
+appeared (gh secret list), verify the feature activates on the next run.
 
 If a genuine methodology or design decision comes up, ask — the user engages with
 those. Do not re-ask decisions already recorded in memory. When offered a subset
