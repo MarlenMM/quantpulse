@@ -402,6 +402,18 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Handoff item D — one company's insider filings failed every week
+
+Found 2026-10-02 under finding 37's noise: `PTC: … insider_transactions:
+unconverted data remains when parsing with format "%Y-%m-%d": "-05:00"`. Form 4
+dates are XML Schema dates and may carry a UTC offset. `pd.to_datetime` infers
+the format from the first value, so a mix of plain and offset dates failed
+outright, losing all of PTC's insider rows each week; an offset first is read as
+`%Y-%m-%d-%H:%M` — a time. `edgar_client._xml_dates` takes the first ten
+characters. The test's first draft gave every date an offset and passed without
+the fix; only a mix reproduces it. Live check after the fix: PTC 8 rows
+(2026-05-07 → 2026-09-15).
+
 ### Handoff item B — the test clock broke the code under test
 
 Done 2026-10-02. The refresh harnesses pinned the clock with

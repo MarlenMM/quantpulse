@@ -301,9 +301,21 @@ def fetch_insider_transactions(
 
     df = pd.DataFrame(rows, columns=_INSIDER_TRANSACTION_COLUMNS)
     if not df.empty:
-        df["transaction_date"] = pd.to_datetime(df["transaction_date"]).dt.date
-        df["report_date"] = pd.to_datetime(df["report_date"]).dt.date
+        df["transaction_date"] = _xml_dates(df["transaction_date"])
+        df["report_date"] = _xml_dates(df["report_date"])
     return df
+
+
+def _xml_dates(values: "pd.Series[Any]") -> "pd.Series[Any]":
+    """Form 4's XML Schema dates as `date`s -- the day, ignoring any UTC offset.
+
+    A filer may write `2026-09-02-05:00`. Parsed whole, pandas infers the format
+    from the first value: a mix failed outright ("unconverted data remains"),
+    which cost PTC every insider row every week, and an offset first is read as
+    a *time* (`%Y-%m-%d-%H:%M`). The date is the first ten characters either way.
+    """
+    days = values.map(lambda value: value[:10] if isinstance(value, str) else value)
+    return pd.to_datetime(days, format="%Y-%m-%d").dt.date
 
 
 def _filing_plain_text(html: str) -> str:
