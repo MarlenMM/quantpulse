@@ -66,6 +66,22 @@ New behavior needs a test. Match the existing shape:
 Look at a neighboring test file in the same directory before writing a new
 one; this project is consistent about naming and structure on purpose.
 
+## Dependency updates
+
+Dependabot opens weekly pull requests (`.github/dependabot.yml`). For the
+frontend, React's four packages (`react`, `react-dom` and their `@types`) always
+arrive as one pull request — they must be the exact same version, and react 19.3
+opened alone never mounted the app — and every other minor or patch bump arrives
+as one grouped pull request. Majors outside React stay separate: those are the
+ones that have blanked the charts.
+
+Any pull request that changes `frontend/package.json` or its lockfile also runs
+the static-site suite in CI (`frontend-static`): a real database pre-rendered,
+the built site loaded in a browser, and every chart checked for the trace type
+it asked for. Type-check, build and the stubbed e2e suite were all green through
+both earlier chart breakages, so don't merge a frontend bump on those alone.
+`tests/unit/test_dependency_policy.py` keeps the grouping and the job in place.
+
 ## Code style
 
 - Formatting/linting is `ruff` (config in `pyproject.toml`), not up for

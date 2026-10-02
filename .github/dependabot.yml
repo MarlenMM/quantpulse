@@ -22,10 +22,26 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Grouped (finding 40, the owner's policy). Measured on 2026-10-02: react 19.3
+  # opened alone never mounted the app -- React error #527, react and react-dom
+  # must be the exact same version -- while react-dom 19.3 alone and all four
+  # open bumps together passed both browser suites. So React's packages always
+  # move as one pull request, majors included, and every other minor or patch
+  # bump arrives as one weekly pull request. Majors outside React stay separate:
+  # those are the ones (Vite 7 -> 8, react-plotly.js 2 -> 4) that have blanked
+  # the charts. A dependency joins the first group that matches, so React's
+  # group is listed first. CI runs the static-site suite on any pull request
+  # that changes the lockfile (`frontend-static` in ci.yml).
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
