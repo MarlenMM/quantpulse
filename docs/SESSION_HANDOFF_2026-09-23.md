@@ -626,7 +626,15 @@ staleness.
 — the newest SEC publishes". The row is computed server-side, so this is a
 sentence, not a feature.
 
-### 37 · One missing key writes 503 identical warnings (S4)
+### 37 · One missing key writes 503 identical warnings (S4) — FIXED 2026-10-02
+
+**Status:** Finnhub and FRED keys are each asked once per run (one line each);
+a real per-ticker failure is still logged per ticker, and the closing line now
+names how many tickers failed (each one marks the run "partial", which used to
+close with no reason). FRED's `except ValueError` no longer reads every
+ValueError as a missing key. Found under the noise: PTC's insider dates with a
+`-05:00` offset fail to parse (open, §4 D). Confirm on the 2026-10-05 weekly
+log. Backlog §7.
 
 Evidence: `AOS: short_interest: FINNHUB_API_KEY is not set` × **503**, once per
 ticker; FRED: 6 more of the same shape.
@@ -766,6 +774,10 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   unaffected, and no test asserts on it — but it adds a spurious
   `failed step(s): backtest` to those harness runs.
 - **C.** `docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale (part of 38).
+- **D. (found 2026-10-02 under 37's noise)** PTC's weekly fetch fails
+  `insider_transactions: unconverted data remains when parsing with format
+  "%Y-%m-%d": "-05:00"` — an EDGAR date carrying a UTC offset. One ticker's
+  insider rows are lost each week.
 
 ## 5. Technical judgement calls made this session (the user may overrule)
 

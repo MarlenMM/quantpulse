@@ -2597,7 +2597,15 @@ class TestAlerting:
             session.commit()
 
     @contextmanager
-    def _driven_run(self, engine: Engine, *, settings, today: date, seed=("hold",)):
+    def _driven_run(
+        self,
+        engine: Engine,
+        *,
+        settings,
+        today: date,
+        seed=("hold",),
+        short_interest_error: Exception | None = None,
+    ):
         """`run()` with every upstream source mocked and the clock pinned.
 
         `seed` is the ratings to store for the days before `today`, oldest
@@ -2634,7 +2642,8 @@ class TestAlerting:
             patch(
                 "refresh_data.short_interest_client.fetch_short_interest",
                 return_value={"symbol": "AAA", "pct_float_short": None, "days_to_cover": None},
-            ),
+                side_effect=short_interest_error,
+            ) as short_interest,
             patch(
                 "refresh_data.edgar_client.fetch_insider_transactions",
                 return_value=_empty_df(list(refresh_data._INSIDER_COLUMNS)),
@@ -2665,6 +2674,7 @@ class TestAlerting:
             patch("refresh_data.discord.send", return_value=1) as send,
         ):
             clock.now.return_value = datetime.combine(today, datetime.min.time())
+            self.short_interest = short_interest
             yield send, factory
 
     @staticmethod
@@ -2678,6 +2688,67 @@ class TestAlerting:
                 **overrides,
             },
         )
+
+    # Finding 37: one missing key wrote one identical warning per ticker -- 503 a
+    # weekly run -- and marked the run "partial" with no reason in its closing
+    # line. The real per-ticker failures sat in the middle of them.
+
+    WEEKLY_DAY = date(2026, 7, 20)  # a Monday
+
+    def test_a_missing_finnhub_key_is_one_line_per_run(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        settings = self._settings(finnhub_api_key=None)
+        with caplog.at_level(logging.INFO):
+            with self._driven_run(
+                engine,
+                settings=settings,
+                today=self.WEEKLY_DAY,
+                # What the real client raises without the key, per ticker.
+                short_interest_error=ValueError("FINNHUB_API_KEY is not set"),
+            ):
+                refresh_data.run(job_name="test_keys", force_weekly=True)
+
+        mentions = [r.getMessage() for r in caplog.records if "FINNHUB_API_KEY" in r.getMessage()]
+        assert len(mentions) == 1, mentions
+        assert "short interest" in mentions[0].lower()
+        self.short_interest.assert_not_called()
+        assert not any(": short_interest:" in r.getMessage() for r in caplog.records)
+
+    def test_a_real_per_ticker_failure_is_still_logged_and_named_at_the_close(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        settings = self._settings(finnhub_api_key="test-key")
+        # This harness has two reasons of its own to close "partial" (no ^GSPC,
+        # so the benchmark writes nothing; the backtest's clock quirk). Either one
+        # enters the closing guard, which would let a guard that ignores ticker
+        # errors pass -- so both are taken away and ticker errors are the only
+        # reason left.
+        with (
+            caplog.at_level(logging.INFO),
+            patch("refresh_data.refresh_benchmark_prices", return_value=1),
+            patch("refresh_data.refresh_backtest", return_value=1),
+        ):
+            with self._driven_run(
+                engine,
+                settings=settings,
+                today=self.WEEKLY_DAY,
+                short_interest_error=RuntimeError("HTTP 503 from Finnhub"),
+            ):
+                status = refresh_data.run(job_name="test_keys", force_weekly=True)
+
+        per_ticker = [
+            r.getMessage() for r in caplog.records if ": short_interest: HTTP 503" in r.getMessage()
+        ]
+        assert len(per_ticker) == len(self._SYMBOLS)
+        assert status == "partial"
+        closing = next(
+            r.getMessage() for r in caplog.records if "test_keys finished" in r.getMessage()
+        )
+        assert closing.startswith(
+            f"test_keys finished partial -- {len(self._SYMBOLS)} ticker(s) with fetch errors "
+            "(AAA, BBB, CCC, DDD, EEE; each logged above)"
+        ), closing
 
     def test_the_nightly_run_sends_the_digest(self, engine: Engine) -> None:
         today = date(2026, 7, 22)
@@ -3580,3 +3651,62 @@ class TestTheCatalogueWaitsForTheUniverse:
         # "A ranked symbol is never demoted" -- on the one night it could be.
         assert rows["NEWCO"] == ("ranked", True)
         assert rows["BBB"][1] is False
+
+
+class TestMacroSeriesAndTheFredKey:
+    """Finding 37, FRED's half: six "FRED_API_KEY not set" lines a run.
+
+    And a second fault in the same `except`: any `ValueError` was reported as the
+    key being unset, so a malformed response with the key present would have been
+    logged as a configuration problem rather than as the failure it was.
+    """
+
+    @staticmethod
+    def _fetchers(calls: list[str], error: Exception | None = None) -> tuple:
+        def fetch_cpi(*, start_date: date, end_date: date) -> pd.DataFrame:
+            calls.append("fetch_cpi")
+            if error is not None:
+                raise error
+            return pd.DataFrame(columns=["date", "indicator_name", "value"])
+
+        def fetch_gdp(*, start_date: date, end_date: date) -> pd.DataFrame:
+            calls.append("fetch_gdp")
+            return pd.DataFrame(columns=["date", "indicator_name", "value"])
+
+        return (fetch_cpi, fetch_gdp)
+
+    @staticmethod
+    def _run(engine: Engine, fetchers: tuple, **settings: Any) -> int:
+        from quantpulse.config import Settings
+
+        with (
+            patch.object(refresh_data, "_MACRO_SERIES_FETCHERS", fetchers),
+            patch("refresh_data.get_settings", return_value=Settings(_env_file=None, **settings)),
+            sessionmaker(bind=engine)() as session,
+        ):
+            return refresh_data.refresh_macro_indicators(session)
+
+    def test_no_key_is_one_line_and_no_request(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        calls: list[str] = []
+        with caplog.at_level(logging.INFO, logger="refresh_data"):
+            rows = self._run(engine, self._fetchers(calls), fred_api_key=None)
+
+        assert rows == 0
+        assert calls == []
+        lines = [r.getMessage() for r in caplog.records if "FRED_API_KEY" in r.getMessage()]
+        assert len(lines) == 1, lines
+        assert "fetch_cpi" in lines[0] and "fetch_gdp" in lines[0]
+
+    def test_a_real_value_error_is_reported_as_a_failure_not_a_missing_key(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        calls: list[str] = []
+        error = ValueError("could not convert string to float: '.'")
+        with caplog.at_level(logging.INFO, logger="refresh_data"):
+            self._run(engine, self._fetchers(calls, error), fred_api_key="test-key")
+
+        assert calls == ["fetch_cpi", "fetch_gdp"]
+        assert "not set" not in caplog.text
+        assert "Failed to fetch macro series fetch_cpi" in caplog.text

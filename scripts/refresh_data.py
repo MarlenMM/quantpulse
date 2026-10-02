@@ -623,6 +623,7 @@ def fetch_ticker_data(
     company_name: str | None = None,
     sector: str | None = None,
     today: date | None = None,
+    short_interest_configured: bool = True,
 ) -> TickerFetchResult:
     """Pure I/O: call external APIs for one ticker. No DB access -- safe to run concurrently.
 
@@ -631,6 +632,11 @@ def fetch_ticker_data(
     analyst consensus, short interest, insider filings, and Tier-1 news. Every
     fetch is isolated in its own try/except so one failing source degrades that
     one field to `None` rather than dropping the whole ticker.
+
+    `short_interest_configured=False` skips short interest without recording an
+    error: an unset `FINNHUB_API_KEY` is one fact about the run, said once by
+    `run()`, not 503 identical failures (finding 37). Errors here are for things
+    that went wrong with *this* ticker.
     """
     result = TickerFetchResult(symbol=symbol)
     today = today or date.today()
@@ -665,10 +671,11 @@ def fetch_ticker_data(
                 result.ffo_inputs = yfinance_client.fetch_ffo_inputs(symbol)
             except Exception as exc:
                 result.errors.append(f"ffo_inputs: {exc}")
-        try:
-            result.short_interest = short_interest_client.fetch_short_interest(symbol)
-        except Exception as exc:
-            result.errors.append(f"short_interest: {exc}")
+        if short_interest_configured:
+            try:
+                result.short_interest = short_interest_client.fetch_short_interest(symbol)
+            except Exception as exc:
+                result.errors.append(f"short_interest: {exc}")
         try:
             result.insider_df = edgar_client.fetch_insider_transactions(symbol)
         except Exception as exc:
@@ -735,15 +742,25 @@ def _upsert_analyst_consensus(
 
 
 def refresh_macro_indicators(session: Session) -> int:
+    """FRED's macro series. Without `FRED_API_KEY`, one line and nothing fetched.
+
+    It used to try each series and catch `ValueError` as "the key is not set":
+    six identical warnings a run (finding 37), and any real `ValueError` -- a
+    malformed response with the key present -- reported as a missing key. The
+    key is asked about once now, and every exception from a fetch is a failure.
+    """
+    if not get_settings().fred_api_key:
+        logger.warning(
+            "FRED_API_KEY is not set; skipping the FRED macro series (%s)",
+            ", ".join(fetch.__name__ for fetch in _MACRO_SERIES_FETCHERS),
+        )
+        return 0
     today = date.today()
     lookback = today - timedelta(days=14)
     rows = 0
     for fetch in _MACRO_SERIES_FETCHERS:
         try:
             df = fetch(start_date=lookback, end_date=today)
-        except ValueError:
-            logger.warning("Skipping macro series %s: FRED_API_KEY not set", fetch.__name__)
-            continue
         except Exception:
             logger.exception("Failed to fetch macro series %s", fetch.__name__)
             continue
@@ -2339,6 +2356,9 @@ def run(
     rows_updated = 0
     failed_steps: list[str] = []
     empty_steps: list[str] = []
+    #: Symbols whose fetch recorded an error. Each one marks the run "partial",
+    #: so the closing line has to say how many, or "partial" arrives with no reason.
+    tickers_with_errors: list[str] = []
     #: Things that are wrong without any step having failed or written nothing.
     #: A category empty for the whole universe is the one that has happened.
     degraded_reasons: list[str] = []
@@ -2463,6 +2483,14 @@ def run(
         sector_by_symbol = dict(zip(universe_df["symbol"], universe_df["sector"], strict=True))
 
         is_weekly = force_weekly or is_weekly_run(today)
+        # Asked once for the run rather than failing once per ticker (finding 37).
+        short_interest_configured = bool(get_settings().finnhub_api_key)
+        if is_weekly and not short_interest_configured:
+            logger.info(
+                "Short interest is not configured (FINNHUB_API_KEY is not set); "
+                "skipping it for all %d tickers",
+                len(active),
+            )
 
         results: list[TickerFetchResult] = []
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
@@ -2475,6 +2503,7 @@ def run(
                     company_name=name_by_symbol.get(symbol),
                     sector=sector_by_symbol.get(symbol),
                     today=today,
+                    short_interest_configured=short_interest_configured,
                 ): symbol
                 for symbol, last_date in active.items()
             }
@@ -2490,6 +2519,7 @@ def run(
             for result in results:
                 if result.errors:
                     logger.warning("%s: %s", result.symbol, "; ".join(result.errors))
+                    tickers_with_errors.append(result.symbol)
                     status = "partial"
                 # Each symbol's writes go in their own SAVEPOINT. Every other
                 # stage in this run is isolated behind `step()`; without the
@@ -2688,7 +2718,7 @@ def run(
         logger.exception("%s failed", job_name)
         status = "failed"
 
-    if failed_steps or empty_steps or degraded_reasons:
+    if failed_steps or empty_steps or degraded_reasons or tickers_with_errors:
         # Name them. "partial" on its own sends a reader to grep a long log for
         # a traceback; this puts the answer in the last line. An *empty* step is
         # reported separately from a failed one because they need different
@@ -2707,6 +2737,13 @@ def run(
             detail.append(f"step(s) that wrote nothing: {', '.join(empty_steps)}")
         if degraded_reasons:
             detail.append("; ".join(degraded_reasons))
+        if tickers_with_errors:
+            shown = ", ".join(sorted(tickers_with_errors)[:5])
+            more = len(tickers_with_errors) - 5
+            detail.append(
+                f"{len(tickers_with_errors)} ticker(s) with fetch errors "
+                f"({shown}{f' and {more} more' if more > 0 else ''}; each logged above)"
+            )
         logger.warning("%s finished %s -- %s", job_name, status, "; ".join(detail))
     else:
         logger.info("%s finished %s (%d rows)", job_name, status, rows_updated)
