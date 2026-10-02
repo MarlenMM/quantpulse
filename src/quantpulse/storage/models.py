@@ -15,6 +15,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+#: `datetime.date` under a name no column shadows -- `MarketRegime` has a column
+#: called `date`, which an annotation inside that class would resolve to instead.
+_Day = date
+
 # Alembic's own docs recommend fixing this before generating any migrations:
 # without it, unique/check/foreign-key constraints get dialect-assigned
 # anonymous names, so a future `op.drop_constraint()`/`op.alter_column()`
@@ -287,6 +291,11 @@ class MarketRegime(Base):
     vix_level: Mapped[float | None] = mapped_column(Float)
     breadth_pct_above_200dma: Mapped[float | None] = mapped_column(Float)
     macro_news_tone: Mapped[float | None] = mapped_column(Float)
+    #: The day `macro_news_tone` was read. Today's date for a fresh reading; an
+    #: earlier one when GDELT refused tonight and a reading up to three sessions
+    #: old was carried forward (handoff item A). NULL on rows from before.
+    #: `_Day`, not `date`: inside this class `date` is the column above.
+    macro_tone_as_of: Mapped[_Day | None] = mapped_column(Date, nullable=True)
     yield_curve_spread: Mapped[float | None] = mapped_column(Float)  # 10Y-2Y, Section 28
     regime_score: Mapped[float | None] = mapped_column(Float)  # 0-100, higher = risk-on
     regime_label: Mapped[str | None] = mapped_column(String(20))

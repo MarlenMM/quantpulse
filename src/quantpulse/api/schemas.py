@@ -19,6 +19,10 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+#: `datetime.date` under a name no field shadows: `RegimePoint` has a field called
+#: `date`, which an annotation later in that class would resolve to instead.
+_Day = date
+
 __all__ = [
     "HealthResponse",
     "GlossaryTerm",
@@ -434,6 +438,8 @@ class RegimePoint(BaseModel):
     vix_level: float | None = None
     breadth_pct_above_200dma: float | None = None
     macro_news_tone: float | None = None
+    #: The day the tone was read; earlier than `date` when it was carried forward.
+    macro_tone_as_of: _Day | None = None
     yield_curve_spread: float | None = None
     regime_score: float | None = None
     regime_label: str | None = None

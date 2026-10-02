@@ -3752,3 +3752,84 @@ class TestMacroSeriesAndTheFredKey:
         assert calls == ["fetch_cpi", "fetch_gdp"]
         assert "not set" not in caplog.text
         assert "Failed to fetch macro series fetch_cpi" in caplog.text
+
+
+class TestMacroToneRetriesThenCarriesForward:
+    """Handoff item A, the owner's call.
+
+    GDELT answered the nightly's single macro-tone request with HTTP 429 on
+    roughly four nights in ten (tone present on 22 of 36 regime days since
+    August) -- shared runner IPs, which the HTTP layer's ~7 s of retries cannot
+    wait out. So: two more attempts with real waits, then the newest stored
+    reading if it is at most three trading sessions old, dated by the day it was
+    *read* so a carried value cannot be carried again past that.
+    """
+
+    TODAY = date(2026, 10, 1)  # a Thursday; 9/28-9/30 are sessions
+
+    @staticmethod
+    def _refused() -> Exception:
+        import requests
+
+        return requests.exceptions.HTTPError("429 Client Error: Too Many Requests")
+
+    @staticmethod
+    def _tone(value: float) -> pd.DataFrame:
+        return pd.DataFrame([{"date": date(2026, 10, 1), "tone": value, "query": "q"}])
+
+    def _run(self, session: Session, outcomes: list) -> tuple[Any, list[float]]:
+        from quantpulse.storage.models import MarketRegime
+
+        waits: list[float] = []
+        with (
+            patch("refresh_data.gdelt_client.fetch_tone_timeline", side_effect=outcomes),
+            patch("refresh_data.time.sleep", side_effect=waits.append),
+        ):
+            refresh_data.refresh_market_regime(session, self.TODAY)
+        session.flush()
+        row = session.scalars(select(MarketRegime).where(MarketRegime.date == self.TODAY)).one()
+        return row, waits
+
+    @staticmethod
+    def _stored(session: Session, day: date, tone: float | None, as_of: date | None = None) -> None:
+        from quantpulse.storage.models import MarketRegime
+
+        session.add(MarketRegime(date=day, macro_news_tone=tone, macro_tone_as_of=as_of))
+        session.flush()
+
+    def test_a_refusal_then_an_answer_is_tonights_reading(self, session: Session) -> None:
+        row, waits = self._run(session, [self._refused(), self._refused(), self._tone(1.5)])
+        assert row.macro_news_tone == 1.5
+        assert row.macro_tone_as_of == self.TODAY
+        assert waits == list(refresh_data._MACRO_TONE_RETRY_WAITS)
+
+    def test_refused_three_times_carries_a_recent_reading_with_its_date(
+        self, session: Session
+    ) -> None:
+        self._stored(session, date(2026, 9, 29), -0.51)
+        row, _ = self._run(session, [self._refused()] * 3)
+        assert row.macro_news_tone == -0.51
+        assert row.macro_tone_as_of == date(2026, 9, 29)
+
+    def test_a_reading_exactly_three_sessions_old_is_carried(self, session: Session) -> None:
+        self._stored(session, date(2026, 9, 28), -0.4)  # Mon: 9/29, 9/30, 10/1 since
+        row, _ = self._run(session, [self._refused()] * 3)
+        assert row.macro_news_tone == -0.4
+        assert row.macro_tone_as_of == date(2026, 9, 28)
+
+    def test_a_reading_more_than_three_sessions_old_is_not_carried(self, session: Session) -> None:
+        self._stored(session, date(2026, 9, 25), -0.51)  # Fri: 9/28, 9/29, 9/30, 10/1 since
+        row, _ = self._run(session, [self._refused()] * 3)
+        assert row.macro_news_tone is None
+        assert row.macro_tone_as_of is None
+
+    def test_a_carried_reading_is_not_carried_again_past_its_own_date(
+        self, session: Session
+    ) -> None:
+        # Yesterday's row holds a tone carried from 9/25; today that is four
+        # sessions old, so it must not be passed on just because yesterday's row
+        # has it.
+        self._stored(session, date(2026, 9, 25), -0.51)
+        self._stored(session, date(2026, 9, 30), -0.51, as_of=date(2026, 9, 25))
+        row, _ = self._run(session, [self._refused()] * 3)
+        assert row.macro_news_tone is None

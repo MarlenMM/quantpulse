@@ -789,10 +789,16 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
 
 ## 4. Additional open items (not numbered in the audit)
 
-- **A. The regime index's macro-tone input fails.** `gdelt_client.fetch_tone_timeline`
-  is GDELT too; the 2026-09-21 run logged *"Failed to fetch GDELT macro tone"*.
-  Google News has no tone timeline. `describe_regime_coverage` already discloses a
-  missing input. No fix designed yet.
+- **A. The regime index's macro-tone input fails — DONE 2026-10-02 (user: retry,
+  then carry forward).** Measured: not dead but intermittent — GDELT answers the
+  one request with HTTP 429 on ~4 nights in 10 (tone on 22 of 36 regime days since
+  August; 3 of the last 4 missing). The HTTP layer's own retries wait ≤ ~7 s. Now:
+  two more attempts after 30 s and 90 s (each logged, so whether waiting helps can
+  be read off the next logs — **unmeasured until then**), then the newest stored
+  tone if ≤ 3 NYSE sessions old, recorded in `market_regime.macro_tone_as_of`
+  (migration `f315ae05e3f3`) by the day it was read so it cannot chain, and named
+  in the coverage sentence ("Macro news tone is the 29 Sep reading, carried
+  forward…"). Replacing GDELT was not chosen.
 - **B. Test-harness quirk — FIXED 2026-10-02.** `patch("refresh_data.datetime",
   wraps=datetime)` made the module's `datetime` a MagicMock, so `_coerce_date`'s
   `isinstance` raised and every weekly harness run closed with a spurious

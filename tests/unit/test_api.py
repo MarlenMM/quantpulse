@@ -881,6 +881,35 @@ class TestRegimeCoverageReachesTheClient:
             assert "the yield-curve spread is missing" in point["coverage_note"]
             break
 
+    def test_a_carried_macro_tone_is_dated_in_the_note(self, tmp_path) -> None:
+        """Handoff item A: the reader has to pass `macro_tone_as_of` through, or the
+        sentence cannot name the day a carried tone was read."""
+        day = TODAY - timedelta(days=2)
+        read_on = TODAY - timedelta(days=4)
+
+        def _seed_carried(session: Session) -> None:
+            session.add(
+                MarketRegime(
+                    date=day,
+                    vix_level=14.5,
+                    breadth_pct_above_200dma=66.4,
+                    macro_news_tone=-0.5,
+                    macro_tone_as_of=read_on,
+                    yield_curve_spread=0.4,
+                    regime_score=73.6,
+                    regime_label="risk_on",
+                )
+            )
+            session.commit()
+
+        for c in _client(tmp_path, extra=_seed_carried):
+            point = next(p for p in c.get("/api/regime").json() if p["date"] == day.isoformat())
+        assert point["macro_tone_as_of"] == read_on.isoformat()
+        assert point["coverage_note"].endswith(
+            f"Macro news tone is the {read_on.day} {read_on:%b} reading, carried forward "
+            "because none arrived for this date."
+        )
+
     def test_the_note_is_per_row_not_per_series(self, tmp_path) -> None:
         """A key added tomorrow makes tomorrow a four-input reading, not the history.
 

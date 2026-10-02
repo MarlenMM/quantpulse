@@ -249,17 +249,42 @@ def describe_regime_coverage(row: "dict[str, object] | pd.Series") -> str:
     missing = [label for column, label in REGIME_INPUT_LABELS if _is_absent(row, column)]
     total = len(REGIME_INPUT_LABELS)
     live = total - len(missing)
-    if not missing:
-        return f"All {_WORDS[total]} inputs are live."
     if live == 0:
         return "None of its four inputs produced a reading, so there is no score to read."
-    joined = _join(missing)
-    return (
-        f"{_WORDS[live].capitalize()} of its {_WORDS[total]} inputs are live — "
-        f"{joined} {'is' if len(missing) == 1 else 'are'} missing, so the score is "
-        f"renormalized over the rest rather than treating {'it' if len(missing) == 1 else 'them'} "
-        f"as neutral. Settings lists which data sources are configured."
-    )
+    if not missing:
+        sentence = f"All {_WORDS[total]} inputs are live."
+    else:
+        joined = _join(missing)
+        sentence = (
+            f"{_WORDS[live].capitalize()} of its {_WORDS[total]} inputs are live — "
+            f"{joined} {'is' if len(missing) == 1 else 'are'} missing, so the score is "
+            f"renormalized over the rest rather than treating "
+            f"{'it' if len(missing) == 1 else 'them'} as neutral. Settings lists which data "
+            f"sources are configured."
+        )
+    carried = _carried_tone_date(row)
+    if carried is not None:
+        sentence += (
+            f" Macro news tone is the {carried.day} {carried:%b} reading, carried forward "
+            f"because none arrived for this date."
+        )
+    return sentence
+
+
+def _carried_tone_date(row: "dict[str, object] | pd.Series") -> date | None:
+    """The day a carried-forward macro tone was read, or None if it is the row's own.
+
+    Handoff item A: a refused GDELT request carries the newest reading of at most
+    three sessions forward, and the coverage sentence has to say which day it is.
+    """
+    if _is_absent(row, "macro_news_tone"):
+        return None
+    as_of = row.get("macro_tone_as_of") if hasattr(row, "get") else None
+    day = row.get("date") if hasattr(row, "get") else None
+    if as_of is None or day is None or pd.isna(as_of) or pd.isna(day):
+        return None
+    as_of_date = pd.Timestamp(as_of).date()
+    return as_of_date if as_of_date < pd.Timestamp(day).date() else None
 
 
 _WORDS = {0: "none", 1: "one", 2: "two", 3: "three", 4: "four"}

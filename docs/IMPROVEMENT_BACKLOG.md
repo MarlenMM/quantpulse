@@ -402,6 +402,36 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Handoff item A — the regime's macro tone: retry, then carry forward
+
+Done 2026-10-02; the owner chose **retry, then carry forward** over replacing the
+source. **Measured first:** the input is intermittent, not dead — GDELT answers
+the nightly's one `timelinetone` request with HTTP 429 (shared runner IPs) on
+roughly four nights in ten: tone on 22 of 36 regime days since August, missing on
+3 of the last 4. The HTTP layer already retries a 429 three times, but with
+1-second full-jitter backoff — at most ~7 s.
+
+- `refresh_data._macro_news_tone` makes two more attempts after 30 s and 90 s
+  (`_MACRO_TONE_RETRY_WAITS`), logging each; **whether the waits help is not yet
+  measured** — the next weeks' logs will say.
+- `_macro_tone_for`: if still refused, the newest stored tone stands in when it is
+  at most `_MACRO_TONE_CARRY_SESSIONS = 3` NYSE sessions old, counted from the day
+  it was **read** — `market_regime.macro_tone_as_of` (migration `f315ae05e3f3`) —
+  so a carried value cannot be carried again past the limit.
+- `describe_regime_coverage` names it on both front ends: "Macro news tone is the
+  29 Sep reading, carried forward because none arrived for this date."
+- **Trap:** `Mapped[date | None]` inside `MarketRegime` (and the Pydantic
+  `RegimePoint`) resolved `date` to the class's own `date` column/field, which
+  `alembic check` showed as a NOT NULL column. Both modules now use a `_Day`
+  alias.
+
+Dry run on the published database with GDELT refusing: 2026-10-02 would carry
+the 29 Sep reading (−0.5144, three sessions); 2026-10-05 would not. Tests cover
+retry-then-answer, carry, the exact three-session boundary, four sessions, the
+no-chaining rule, the sentence and its API round trip; mutation-checked seven
+ways. Finding 38's guard caught this commit's migration count (18 → 19) before
+the docs did.
+
 ### Handoff item D — one company's insider filings failed every week
 
 Found 2026-10-02 under finding 37's noise: `PTC: … insider_transactions:

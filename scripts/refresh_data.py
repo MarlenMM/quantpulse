@@ -1034,17 +1034,74 @@ def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, to
     return written
 
 
+#: Waits before the second and third macro-tone attempts (handoff item A).
+#:
+#: GDELT answered the nightly's one request with HTTP 429 on roughly four nights
+#: in ten -- tone present on 22 of 36 regime days, August to September -- from
+#: GitHub's shared runner IPs. The HTTP layer already retries a 429 three times,
+#: but with 1-second full-jitter backoff: at most ~7 s, against a limit shared
+#: with every other job on that address. These are long enough to be a
+#: different moment. Whether they help is not yet measured; each attempt logs.
+_MACRO_TONE_RETRY_WAITS: tuple[float, ...] = (30.0, 90.0)
+
+#: How many trading sessions old a stored tone may be and still stand in for a
+#: refused one -- the owner's call. Counted from the day it was read.
+_MACRO_TONE_CARRY_SESSIONS = 3
+
+
 def _macro_news_tone(today: date) -> float | None:
     """Latest GDELT macro-tone reading for the Market Regime Index's Tier-3 input."""
-    try:
-        tone_df = gdelt_client.fetch_tone_timeline(_MACRO_TONE_QUERY, timespan="14d")
-    except Exception:
-        logger.exception("Failed to fetch GDELT macro tone")
-        return None
-    if tone_df.empty:
+    tone_df = None
+    attempts = 1 + len(_MACRO_TONE_RETRY_WAITS)
+    for attempt in range(1, attempts + 1):
+        try:
+            tone_df = gdelt_client.fetch_tone_timeline(_MACRO_TONE_QUERY, timespan="14d")
+            if attempt > 1:
+                logger.info("GDELT macro tone answered on attempt %d of %d", attempt, attempts)
+            break
+        except Exception:
+            if attempt == attempts:
+                logger.exception("Failed to fetch GDELT macro tone after %d attempts", attempts)
+                return None
+            wait = _MACRO_TONE_RETRY_WAITS[attempt - 1]
+            logger.warning(
+                "GDELT macro tone refused (attempt %d of %d); trying again in %.0fs",
+                attempt,
+                attempts,
+                wait,
+            )
+            time.sleep(wait)
+    if tone_df is None or tone_df.empty:
         return None
     latest = tone_df.sort_values("date").iloc[-1]
     return float(latest["tone"]) if pd.notna(latest["tone"]) else None
+
+
+def _macro_tone_for(session: Session, today: date) -> tuple[float | None, date | None]:
+    """Tonight's macro tone and the day it was read -- or a recent one carried forward.
+
+    A carried reading keeps its own date, so it cannot be passed on beyond
+    `_MACRO_TONE_CARRY_SESSIONS` by being carried again; the coverage sentence
+    names that date on both front ends.
+    """
+    tone = _macro_news_tone(today)
+    if tone is not None:
+        return tone, today
+    stored = persistence.read_latest_macro_tone(session, before=today)
+    if stored is None:
+        return None, None
+    value, read_on = stored
+    sessions_since = len(trading_days_between(read_on + timedelta(days=1), today))
+    if sessions_since > _MACRO_TONE_CARRY_SESSIONS:
+        logger.info(
+            "No macro tone tonight; the newest (%s) is %d sessions old, past the %d allowed",
+            read_on,
+            sessions_since,
+            _MACRO_TONE_CARRY_SESSIONS,
+        )
+        return None, None
+    logger.info("No macro tone tonight; carrying the %s reading forward", read_on)
+    return value, read_on
 
 
 def refresh_market_regime(session: Session, today: date) -> int:
@@ -1069,15 +1126,18 @@ def refresh_market_regime(session: Session, today: date) -> int:
     )
     breadth = market_regime.compute_breadth(price_history, today)
 
+    macro_tone, macro_tone_as_of = _macro_tone_for(session, today)
     reading = market_regime.compute_market_regime(
         today,
         vix_level=vix_level,
         vix_history=vix_history,
         breadth_pct=breadth,
-        macro_tone=_macro_news_tone(today),
+        macro_tone=macro_tone,
         yield_curve_spread_value=spread,
     )
-    return persistence.upsert_market_regime(session, market_regime.regime_to_record(reading))
+    record = market_regime.regime_to_record(reading)
+    record["macro_tone_as_of"] = macro_tone_as_of
+    return persistence.upsert_market_regime(session, record)
 
 
 def _none_if_nan(value: Any) -> float | None:

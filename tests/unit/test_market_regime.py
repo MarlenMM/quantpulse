@@ -200,6 +200,26 @@ class TestCoverageIsDescribedHonestly:
         )
         assert "no score to read" in note
 
+    def test_a_carried_tone_is_dated(self) -> None:
+        """Handoff item A, the owner's call: a tone up to three sessions old is used
+        when tonight's is refused -- and the sentence says which day it is from."""
+        from datetime import date
+
+        row = {**self._row(), "date": date(2026, 10, 1), "macro_tone_as_of": date(2026, 9, 29)}
+        note = market_regime.describe_regime_coverage(row)
+        assert note.startswith("All four inputs are live.")
+        assert note.endswith(
+            "Macro news tone is the 29 Sep reading, carried forward because none "
+            "arrived for this date."
+        )
+
+    def test_a_same_day_tone_adds_nothing(self) -> None:
+        from datetime import date
+
+        for as_of in (date(2026, 10, 1), None):
+            row = {**self._row(), "date": date(2026, 10, 1), "macro_tone_as_of": as_of}
+            assert market_regime.describe_regime_coverage(row) == "All four inputs are live."
+
     def test_the_labels_cover_exactly_the_blended_signals(self) -> None:
         """A signal described here and blended there under another name would drift.
 
