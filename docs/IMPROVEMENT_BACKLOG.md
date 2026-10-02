@@ -402,6 +402,21 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Handoff item B — the test clock broke the code under test
+
+Done 2026-10-02. The refresh harnesses pinned the clock with
+`patch("refresh_data.datetime", wraps=datetime)`, which makes the module's
+`datetime` a MagicMock; `_coerce_date`'s `isinstance(value, datetime)` then raised
+"isinstance() arg 2 must be a type", and every weekly run through a harness closed
+`failed step(s): backtest`. Production was unaffected, but the spurious reason
+entered the closing-line guard and **shadowed it**: finding 37's mutation that
+dropped ticker errors from the guard survived until that test stubbed the
+backtest out. `_pinned_clock()` returns a real `datetime` subclass whose `now()`
+is pinned; all five harnesses use it, and 37's test no longer needs the stub.
+`test_the_harness_clock_does_not_break_the_backtest_step` runs the weekly branch
+(the daily one never reaches the backtest — the first draft of the test passed
+for that reason) and fails with the MagicMock clock put back.
+
 ### Point 40 — the Dependabot queue, and a policy for the next one
 
 Done 2026-10-02. **Measured first, each bump through both browser suites

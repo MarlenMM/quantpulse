@@ -361,6 +361,29 @@ def test_fetch_ticker_data_records_errors_without_raising() -> None:
     assert any("price_history" in e for e in result.errors)
 
 
+def _pinned_clock() -> type[datetime]:
+    """A real `datetime` subclass whose `now()` returns `.moment` -- to patch in as
+    `refresh_data.datetime`.
+
+    It replaced `patch("refresh_data.datetime", wraps=datetime)`, which turned the
+    module's `datetime` into a MagicMock: `_coerce_date`'s `isinstance(value,
+    datetime)` then raised "isinstance() arg 2 must be a type", and every weekly
+    run through these harnesses closed with `failed step(s): backtest` -- a
+    failure of the test's making that also shadowed the closing-line guard (handoff
+    item B). A subclass is still a type, so `isinstance` keeps working.
+    """
+
+    class _Pinned(datetime):
+        moment: datetime | None = None
+
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            assert cls.moment is not None, "set the pinned moment before the run"
+            return cls.moment
+
+    return _Pinned
+
+
 def _fake_session_factory(engine: Engine):
     factory = sessionmaker(bind=engine)
 
@@ -415,7 +438,7 @@ def test_run_end_to_end_with_tiny_mocked_universe(engine: Engine) -> None:
     # The weekly branch has its own tests; this one is the daily path.
     with (
         patch("refresh_data.get_session", fake_get_session),
-        patch("refresh_data.datetime", wraps=datetime) as clock,
+        patch("refresh_data.datetime", _pinned_clock()) as clock,
         patch("refresh_data.is_trading_day", return_value=True),
         patch("refresh_data.wikipedia_client.fetch_sp500_constituents", return_value=tiny_universe),
         patch(
@@ -452,7 +475,7 @@ def test_run_end_to_end_with_tiny_mocked_universe(engine: Engine) -> None:
             return_value=_empty_df(["date", "tone", "query"]),
         ),
     ):
-        clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday
+        clock.moment = datetime(2026, 7, 21, 22, 0)  # a Tuesday
         refresh_data.run(job_name="test_run")
 
     with factory() as session:
@@ -511,7 +534,7 @@ def test_a_category_empty_across_the_universe_degrades_the_run(
     )
     with (
         patch("refresh_data.get_session", fake_get_session),
-        patch("refresh_data.datetime", wraps=datetime) as clock,
+        patch("refresh_data.datetime", _pinned_clock()) as clock,
         patch("refresh_data.is_trading_day", return_value=True),
         patch("refresh_data.wikipedia_client.fetch_sp500_constituents", return_value=tiny_universe),
         patch(
@@ -536,7 +559,7 @@ def test_a_category_empty_across_the_universe_degrades_the_run(
         patch.object(refresh_data.scoring, "zero_coverage_categories", return_value=absent),
         caplog.at_level(logging.WARNING),
     ):
-        clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday: the daily path
+        clock.moment = datetime(2026, 7, 21, 22, 0)  # a Tuesday: the daily path
         refresh_data.run(job_name="coverage_run")
 
     with factory() as session:
@@ -1113,9 +1136,9 @@ def test_force_weekly_runs_the_weekly_branch_on_a_non_weekly_day(engine: Engine)
 
     with (
         patch("refresh_data.is_trading_day", return_value=True),
-        patch("refresh_data.datetime", wraps=datetime) as clock,
+        patch("refresh_data.datetime", _pinned_clock()) as clock,
     ):
-        clock.now.return_value = ordinary_thursday
+        clock.moment = ordinary_thursday
         forced, _ = _run_recording_weekly_flag(engine, force_weekly=True)
         default, _ = _run_recording_weekly_flag(engine)
 
@@ -2627,7 +2650,7 @@ class TestAlerting:
             patch("refresh_data.get_session", fake_get_session),
             patch("refresh_data.get_settings", return_value=settings),
             patch("refresh_data.is_trading_day", return_value=True),
-            patch("refresh_data.datetime", wraps=datetime) as clock,
+            patch("refresh_data.datetime", _pinned_clock()) as clock,
             patch(
                 "refresh_data.wikipedia_client.fetch_sp500_constituents",
                 return_value=self._universe(),
@@ -2673,7 +2696,7 @@ class TestAlerting:
             ),
             patch("refresh_data.discord.send", return_value=1) as send,
         ):
-            clock.now.return_value = datetime.combine(today, datetime.min.time())
+            clock.moment = datetime.combine(today, datetime.min.time())
             self.short_interest = short_interest
             yield send, factory
 
@@ -2688,6 +2711,26 @@ class TestAlerting:
                 **overrides,
             },
         )
+
+    def test_the_harness_clock_does_not_break_the_backtest_step(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Handoff item B: pinning the clock used to break the code under test.
+
+        `patch("refresh_data.datetime", wraps=datetime)` makes the module's
+        `datetime` a MagicMock, so `_coerce_date`'s `isinstance(value, datetime)`
+        raised "isinstance() arg 2 must be a type" and every run through this
+        harness closed with `failed step(s): backtest` -- a reason of the
+        harness's own that enters the closing-line guard and so shadowed it
+        (finding 37's closing-line mutation survived because of it).
+        """
+        with caplog.at_level(logging.INFO):
+            with self._driven_run(engine, settings=self._settings(), today=self.WEEKLY_DAY):
+                refresh_data.run(job_name="test_clock", force_weekly=True)
+        # The step did run (the weekly branch), and did not fail.
+        assert "backtest" in caplog.text
+        assert "step backtest failed" not in caplog.text
+        assert "isinstance() arg 2 must be a type" not in caplog.text
 
     # Finding 37: one missing key wrote one identical warning per ticker -- 503 a
     # weekly run -- and marked the run "partial" with no reason in its closing
@@ -2719,15 +2762,14 @@ class TestAlerting:
         self, engine: Engine, caplog: pytest.LogCaptureFixture
     ) -> None:
         settings = self._settings(finnhub_api_key="test-key")
-        # This harness has two reasons of its own to close "partial" (no ^GSPC,
-        # so the benchmark writes nothing; the backtest's clock quirk). Either one
-        # enters the closing guard, which would let a guard that ignores ticker
-        # errors pass -- so both are taken away and ticker errors are the only
-        # reason left.
+        # This harness's universe has no ^GSPC, so the benchmark step writes
+        # nothing and enters the closing guard by itself -- which would let a
+        # guard that ignores ticker errors pass. It is taken away, so ticker
+        # errors are the only reason left. (The harness's other reason, its
+        # clock breaking the backtest, is fixed: `_pinned_clock`.)
         with (
             caplog.at_level(logging.INFO),
             patch("refresh_data.refresh_benchmark_prices", return_value=1),
-            patch("refresh_data.refresh_backtest", return_value=1),
         ):
             with self._driven_run(
                 engine,
@@ -3608,7 +3650,7 @@ class TestTheCatalogueWaitsForTheUniverse:
                 patch("refresh_data.get_session", fake_get_session),
                 # A Tuesday, pinned: `run()` takes the weekly branch on a Monday,
                 # and a test that reads the real weekday is not a test.
-                patch("refresh_data.datetime", wraps=datetime) as clock,
+                patch("refresh_data.datetime", _pinned_clock()) as clock,
                 patch("refresh_data.is_trading_day", return_value=True),
                 patch(
                     "refresh_data.wikipedia_client.fetch_sp500_constituents",
@@ -3632,7 +3674,7 @@ class TestTheCatalogueWaitsForTheUniverse:
                     return_value=_empty_df(["date", "tone", "query"]),
                 ),
             ):
-                clock.now.return_value = datetime(2026, 7, 21, 22, 0)  # a Tuesday
+                clock.moment = datetime(2026, 7, 21, 22, 0)  # a Tuesday
                 refresh_data.run(job_name="test_rebalance")
         finally:
             logging.getLogger("refresh_data").removeHandler(handler)
