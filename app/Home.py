@@ -92,7 +92,9 @@ def render_empty_state() -> None:
     )
 
 
-def render_freshness(freshness: dict[str, object]) -> None:
+def render_freshness(
+    freshness: dict[str, object], notes: dict[str, tuple[str, bool]] | None = None
+) -> None:
     """When each source last ran, as a strip rather than a sentence.
 
     This used to be one caption of nine `name: age` pairs joined by middots,
@@ -100,6 +102,9 @@ def render_freshness(freshness: dict[str, object]) -> None:
     most important thing on the page for judging whether any other number here
     is worth anything. As label-over-value pairs it can be skimmed, and a source
     that is behind is marked so it can be found without reading all nine.
+
+    A source with a server-composed note (13F, finding 36) prints the note
+    instead of its age: a quarter's filings are described by their period.
     """
     if not freshness:
         return
@@ -110,11 +115,16 @@ def render_freshness(freshness: dict[str, object]) -> None:
     for start in range(0, len(items), 4):
         columns = st.columns(4)
         for column, (name, value) in zip(columns, items[start : start + 4], strict=False):
-            label = freshness_label(value)
+            note = (notes or {}).get(name)
+            if note is not None:
+                label, behind = note
+            else:
+                label = freshness_label(value)
+                behind = is_behind(name, label)
             # `:red[]` / `:gray[]` resolve to the theme's own colours, so a stale
             # source is marked in the same red the ratings use rather than in a
             # hardcoded hex that would be wrong in one of the two schemes.
-            marked = f":red[{label}]" if is_behind(name, label) else label
+            marked = f":red[{label}]" if behind else label
             column.markdown(f"**{humanize(name)}**  \n{marked}")
 
 
@@ -239,7 +249,7 @@ def main() -> None:
         st.caption(DISCLAIMER)
         return
 
-    render_freshness(data.data_freshness())
+    render_freshness(data.data_freshness(), data.freshness_notes())
     st.divider()
 
     left, right = st.columns([2, 1])

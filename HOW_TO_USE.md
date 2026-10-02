@@ -77,11 +77,14 @@ news haven't been collected yet (more below). **45% coverage means the score is
 real but partial: it is a good read on price behaviour and a poor read on
 whether the business is any good.**
 
-**"Never run".** The Dashboard's freshness strip, and the Settings page, list
-each dataset and when it last updated. Fundamentals, Analyst Consensus and
-Sentiment currently say *never run*. That is deliberate honesty, not a bug — the
-app leaves them visibly empty rather than quietly scoring them as zero, which
-would drag good companies down for no reason.
+**"Never run", and "Q1 2026 filings".** The Dashboard's freshness strip, and the
+Settings page, list each dataset and when it last updated; one that is behind is
+marked. A dataset that has never been collected says *never run* — deliberate
+honesty, not a bug: the app leaves it visibly empty rather than quietly scoring
+it as zero, which would drag good companies down for no reason. Institutional
+ownership is the exception to "how long ago": SEC publishes 13F filings once a
+quarter, weeks after the quarter ends, so it is labelled by its quarter and by
+whether that is still the newest SEC has published (the weekly run asks).
 
 **Ratings are relative, not absolute.** "Strong Buy" means top 10% *of this
 list*, whatever the market is doing. In a falling market the top 10% is still

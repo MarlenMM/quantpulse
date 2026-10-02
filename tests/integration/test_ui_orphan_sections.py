@@ -165,6 +165,7 @@ def _wired(engine: Engine) -> Iterator[None]:
         lib_data.rating_changes,
         lib_data.market_moving_news,
         lib_data.data_freshness,
+        lib_data.freshness_notes,
     ):
         reader.clear()
     with patch("lib.data.get_session", fake_get_session):
@@ -559,3 +560,64 @@ class TestPerStockRiskAndMacroOverlayAreVisible:
         assert not at.exception
         assert "Sector rotation" in [element.value for element in at.subheader]
         assert "not a forecast" in _text(at)
+
+
+class TestQuarterlySourcesSayTheirPeriod:
+    """Finding 36 on the Streamlit side: the 13F row prints the server's sentence.
+
+    "Institutional ownership: 169 days ago" was correct and read as neglect. The
+    same sentence the API sends -- composed once in `analysis.freshness` -- must
+    appear on the Dashboard's strip and in Settings' freshness table, in place of
+    the age.
+    """
+
+    HOME_PAGE = str(APP_DIR / "Home.py")
+    SETTINGS_PAGE = str(APP_DIR / "pages" / "5_Settings.py")
+
+    @pytest.fixture
+    def thirteen_f_engine(self, seeded_engine: Engine) -> Engine:
+        from quantpulse.analysis.freshness import THIRTEEN_F_CHECK
+        from quantpulse.storage import persistence
+        from quantpulse.storage.models import InstitutionalOwnership
+
+        with sessionmaker(bind=seeded_engine)() as session:
+            session.add(InstitutionalOwnership(symbol="NVDA", quarter_end_date=date(2026, 3, 31)))
+            persistence.record_source_check(
+                session,
+                THIRTEEN_F_CHECK,
+                checked_on=AS_OF - timedelta(days=3),
+                newest_period=date(2026, 3, 31),
+            )
+            session.commit()
+        return seeded_engine
+
+    @staticmethod
+    def _expected() -> str:
+        from quantpulse.analysis.freshness import describe_thirteen_f
+
+        note = describe_thirteen_f(
+            date(2026, 3, 31),
+            checked_on=AS_OF - timedelta(days=3),
+            checked_period=date(2026, 3, 31),
+            today=AS_OF,
+        )
+        assert note is not None
+        return note.label
+
+    def test_the_dashboard_strip_prints_the_period_not_the_age(
+        self, thirteen_f_engine: Engine
+    ) -> None:
+        at = _run(self.HOME_PAGE, thirteen_f_engine)
+        assert not at.exception
+        cells = [str(element.value) for element in at.markdown]
+        row = next(cell for cell in cells if cell.startswith("**Institutional Ownership**"))
+        assert self._expected() in row
+        assert "days ago" not in row
+
+    def test_the_settings_table_prints_it_too(self, thirteen_f_engine: Engine) -> None:
+        at = _run(self.SETTINGS_PAGE, thirteen_f_engine)
+        assert not at.exception
+        frames = [element.value for element in at.dataframe]
+        table = next(f for f in frames if "Dataset" in getattr(f, "columns", []))
+        row = table[table["Dataset"] == "Institutional Ownership"].iloc[0]
+        assert row["Age"] == self._expected()

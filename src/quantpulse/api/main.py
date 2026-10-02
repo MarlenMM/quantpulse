@@ -52,6 +52,7 @@ from quantpulse.api.schemas import (
     ForecastRow,
     ForwardTest,
     ForwardTestPoint,
+    FreshnessNoteOut,
     GlossaryTerm,
     HealthResponse,
     InvestorProfileModel,
@@ -162,6 +163,10 @@ def health(session: Session = Depends(db_session)) -> HealthResponse:
     return HealthResponse(
         has_data=any(value is not None for value in freshness.values()),
         freshness=freshness,
+        freshness_notes={
+            name: FreshnessNoteOut(label=note.label, behind=note.behind)
+            for name, note in persistence.read_freshness_notes(session).items()
+        },
     )
 
 

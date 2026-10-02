@@ -9,10 +9,18 @@
  * error instead of a silently fabricated number on screen.
  */
 
+/** A sentence the freshness strip prints instead of a source's age (finding 36). */
+export interface FreshnessNote {
+  label: string;
+  behind: boolean;
+}
+
 export interface Health {
   status: string;
   has_data: boolean;
   freshness: Record<string, string | null>;
+  /** Server-composed; printed verbatim in place of the age. */
+  freshness_notes: Record<string, FreshnessNote>;
 }
 
 export interface GlossaryTerm {

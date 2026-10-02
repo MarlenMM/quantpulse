@@ -40,6 +40,7 @@ from quantpulse.analysis import (
     analyst_consensus,
     backtest,
     forecasting,
+    freshness,
     fundamental,
     macro,
     patterns,
@@ -984,6 +985,10 @@ def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, to
             window[1],
             quarter,
         )
+        # What lets the freshness strip say "the newest SEC publishes" (finding 36).
+        persistence.record_source_check(
+            session, freshness.THIRTEEN_F_CHECK, checked_on=today, newest_period=quarter
+        )
         return 0
     logger.info("13F: using published window %s to %s", window[0], window[1])
     trend = edgar_13f_client.fetch_institutional_ownership_trend(window, universe)
@@ -1004,6 +1009,11 @@ def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, to
             window[1],
             quarter,
         )
+    # The file's own period, not the rule's prediction: the file is the source of truth.
+    reported = max(pd.Timestamp(record["quarter_end_date"]).date() for record in records)
+    persistence.record_source_check(
+        session, freshness.THIRTEEN_F_CHECK, checked_on=today, newest_period=reported
+    )
     return written
 
 

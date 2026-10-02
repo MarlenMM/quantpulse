@@ -31,7 +31,7 @@ from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from quantpulse.analysis import forecasting
+from quantpulse.analysis import forecasting, freshness
 from quantpulse.storage.models import (
     AnalystConsensus,
     BacktestResult,
@@ -54,6 +54,7 @@ from quantpulse.storage.models import (
     RefreshLog,
     SentimentScore,
     ShortInterest,
+    SourceCheck,
     ThematicBasket,
     Ticker,
     WatchlistEntry,
@@ -202,6 +203,34 @@ def has_institutional_quarter(session: Session, quarter_end: date) -> bool:
         .limit(1)
     )
     return session.execute(stmt).first() is not None
+
+
+def record_source_check(
+    session: Session, source: str, *, checked_on: date, newest_period: date | None
+) -> None:
+    """Record a successful check of `source`, replacing the previous one.
+
+    Not append-only, unlike the data tables: a check is a fact about the
+    pipeline, not about the market, and only the latest one means anything.
+    """
+    stmt = sqlite_insert(SourceCheck).values(
+        source=source, checked_on=checked_on, newest_period=newest_period
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["source"],
+        set_={"checked_on": stmt.excluded.checked_on, "newest_period": stmt.excluded.newest_period},
+    )
+    session.execute(stmt)
+
+
+def read_source_check(session: Session, source: str) -> tuple[date, date | None] | None:
+    """`(checked_on, newest_period)` of the last successful check, or `None`."""
+    row = session.execute(
+        select(SourceCheck.checked_on, SourceCheck.newest_period).where(
+            SourceCheck.source == source
+        )
+    ).first()
+    return None if row is None else (row.checked_on, row.newest_period)
 
 
 def upsert_options_signals(session: Session, records: Sequence[dict[str, Any]]) -> int:
@@ -1274,6 +1303,26 @@ def read_data_freshness(session: Session) -> dict[str, date | None]:
             select(func.max(InstitutionalOwnership.quarter_end_date))
         ).first(),
     }
+
+
+def read_freshness_notes(
+    session: Session, *, today: date | None = None
+) -> dict[str, freshness.FreshnessNote]:
+    """Sentences that replace a source's age in the freshness strip (finding 36).
+
+    Keyed like `read_data_freshness`, and only for the sources an age misdescribes:
+    13F, which is quarterly and published weeks in arrears, is labelled by the
+    quarter it reports on and by what the last SEC check found.
+    """
+    stored = session.scalars(select(func.max(InstitutionalOwnership.quarter_end_date))).first()
+    check = read_source_check(session, freshness.THIRTEEN_F_CHECK)
+    note = freshness.describe_thirteen_f(
+        stored,
+        checked_on=None if check is None else check[0],
+        checked_period=None if check is None else check[1],
+        today=today or date.today(),
+    )
+    return {} if note is None else {"institutional_ownership": note}
 
 
 def read_ticker_universe(session: Session, *, active_only: bool = True) -> pd.DataFrame:

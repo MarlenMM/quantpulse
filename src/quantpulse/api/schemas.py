@@ -37,6 +37,17 @@ __all__ = [
 ]
 
 
+class FreshnessNoteOut(BaseModel):
+    """A sentence the freshness strip prints instead of a source's age (finding 36).
+
+    Composed server-side (`quantpulse.analysis.freshness`) and printed verbatim
+    by both front ends; `behind` marks it the way an old age would be marked.
+    """
+
+    label: str
+    behind: bool
+
+
 class HealthResponse(BaseModel):
     """Liveness plus what the pipeline has actually produced.
 
@@ -48,6 +59,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     has_data: bool
     freshness: dict[str, date | None]
+    freshness_notes: dict[str, FreshnessNoteOut] = {}
 
 
 class GlossaryTerm(BaseModel):

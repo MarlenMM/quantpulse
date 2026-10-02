@@ -202,3 +202,38 @@ class TestThePublishedDatabaseIsReadAtTheCurrentSchema:
             pass
         data.ensure_schema.clear()
         assert calls == [get_settings().database_url]
+
+    def test_a_migration_pushed_to_a_running_process_is_applied(
+        self, monkeypatch: pytest.MonkeyPatch, downloads, tmp_path: Path
+    ) -> None:
+        """Point 45 meets point 46, as finding 36's push would have on the host.
+
+        Community Cloud keeps the process across a push, and `refresh_changed_code`
+        re-imports the changed `lib` modules -- but `st.cache_resource` keys a
+        function by its source, so a re-imported `ensure_schema` with the same
+        source is still "done". A push adding a migration (finding 36's
+        `source_checks`) would then be read by new code against the old schema:
+        "no such table" on the Dashboard until someone rebooted the app.
+        """
+        import importlib
+
+        calls: list[str] = []
+        monkeypatch.setattr(
+            demo_data, "ensure_schema_current", lambda url: calls.append(url) or False
+        )
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "a34e1d9c2b70_older.py").write_text("")
+        monkeypatch.setattr(demo_data, "MIGRATIONS_VERSIONS", versions, raising=False)
+        data.ensure_schema.clear()
+        try:
+            with data.get_session():
+                pass
+            # The push: lib.data re-imported, and one more migration on disk.
+            reloaded = importlib.reload(data)
+            (versions / "314d984542ff_newer.py").write_text("")
+            with reloaded.get_session():
+                pass
+        finally:
+            data.ensure_schema.clear()
+        assert len(calls) == 2, "the new migration was never applied in the running process"

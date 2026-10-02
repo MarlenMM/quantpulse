@@ -125,7 +125,21 @@ def fetch(
 
 
 _MIGRATIONS = Path(__file__).resolve().parent / "storage" / "migrations"
+MIGRATIONS_VERSIONS = _MIGRATIONS / "versions"
 _logger = logging.getLogger(__name__)
+
+
+def migration_signature() -> str:
+    """The migration files on disk, as one string -- it changes when one is added.
+
+    The hosted app migrates once per process, through a cached resource. A push
+    keeps the process (point 46) and Streamlit keys a cached function by its
+    source, so "once per process" also meant "never again": a pushed migration
+    met new code reading the old schema. Passing this as the cache key makes a
+    new migration file a new call. Listing a directory is cheap enough to do on
+    every session.
+    """
+    return ",".join(sorted(path.name for path in MIGRATIONS_VERSIONS.glob("*.py")))
 
 
 def ensure_schema_current(database_url: str) -> bool:

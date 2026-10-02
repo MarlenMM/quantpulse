@@ -42,11 +42,13 @@ st.set_page_config(page_title="QuantPulse — Settings", page_icon=PAGE_ICON, la
 def render_freshness() -> None:
     st.subheader("Data freshness")
     freshness = data.data_freshness()
+    # A quarterly source reads by its period, as on the Dashboard (finding 36).
+    notes = data.freshness_notes()
     rows = [
         {
             "Dataset": humanize(name),
             "Latest": "—" if value is None else value.isoformat(),
-            "Age": freshness_label(value),
+            "Age": notes[name][0] if name in notes else freshness_label(value),
         }
         for name, value in freshness.items()
     ]

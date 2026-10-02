@@ -184,6 +184,23 @@ class RefreshLog(Base):
     rows_updated: Mapped[int] = mapped_column(default=0)
 
 
+class SourceCheck(Base):
+    """When the pipeline last asked an upstream source what it had published.
+
+    One row per source, replaced on each successful check. It exists for
+    finding 36: the freshness strip labels 13F by its period and says "the
+    newest SEC publishes", which only the weekly check can know -- SEC's
+    publication lag is usually days and was once more than a month. A failed
+    check writes nothing, so the record ages and the strip says so.
+    """
+
+    __tablename__ = "source_checks"
+
+    source: Mapped[str] = mapped_column(String(40), primary_key=True)
+    checked_on: Mapped[date] = mapped_column(Date)
+    newest_period: Mapped[date | None] = mapped_column(Date)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — News & Event Intelligence (Section 7.3, 13)
 #
