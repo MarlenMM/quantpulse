@@ -111,3 +111,93 @@ jobs:
 
       - name: Audit
         run: npm audit --audit-level=high
+
+  # The static-site suite, on pull requests that change the frontend's
+  # dependencies (finding 40, the owner's policy). The e2e suite above stubs the
+  # API from a fixture; this one pre-renders a real database and checks, among
+  # other things, that every Plotly figure drew the trace type it asked for --
+  # the failure that has blanked the charts with every other check green. It
+  # used to run only in the publish workflow, i.e. after a merge, where a break
+  # shows up as a failed publish and a demo left on the old build.
+  #
+  # The pinned CI database, as the test job uses, so a bad night's data cannot
+  # fail a dependency pull request. A pull request that leaves the dependency
+  # files alone skips every step after the check and costs nothing.
+  frontend-static:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Did this pull request change the frontend's dependencies?
+        id: deps
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff --quiet "origin/$BASE...HEAD" -- frontend/package.json frontend/package-lock.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No change to the frontend's dependencies; nothing to check here."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.deps.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        if: steps.deps.outputs.changed == 'true'
+        run: uv sync --locked
+
+      - name: Fetch the pinned test database
+        if: steps.deps.outputs.changed == 'true'
+        run: ./scripts/fetch_demo_db.sh --ci-fixture
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Migrate it to head
+        if: steps.deps.outputs.changed == 'true'
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: "sqlite:///./quantpulse_demo.db"
+
+      - uses: actions/setup-node@v7
+        if: steps.deps.outputs.changed == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install client dependencies
+        if: steps.deps.outputs.changed == 'true'
+        run: npm ci
+        working-directory: frontend
+
+      - name: Pre-render the API to static JSON
+        if: steps.deps.outputs.changed == 'true'
+        run: uv run python scripts/build_static_site.py
+
+      - name: Build the client
+        if: steps.deps.outputs.changed == 'true'
+        run: npm run build
+        working-directory: frontend
+        env:
+          VITE_STATIC_API: "1"
+
+      - name: Give every route a real page
+        if: steps.deps.outputs.changed == 'true'
+        run: uv run python scripts/emit_route_pages.py --dist frontend/dist
+
+      - name: Install Playwright browser
+        if: steps.deps.outputs.changed == 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Check the built site against real data
+        if: steps.deps.outputs.changed == 'true'
+        run: npm run test:static
+        working-directory: frontend
