@@ -19,3 +19,21 @@ def _reset_circuit_breakers() -> None:
     reset_all_breakers()
     yield
     reset_all_breakers()
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Record the collected count when -- and only when -- it is the whole suite.
+
+    `tests/unit/test_documented_counts.py` checks the README's test count against
+    it (finding 38). A `-k`, `-m`, `--deselect` or path argument collects a
+    fraction, so then nothing is recorded and that check skips.
+    """
+    config = session.config
+    option = config.option
+    if (
+        config.args_source == pytest.Config.ArgsSource.TESTPATHS
+        and not option.keyword
+        and not option.markexpr
+        and not getattr(option, "deselect", None)
+    ):
+        config._quantpulse_whole_suite = len(session.items)  # type: ignore[attr-defined]
