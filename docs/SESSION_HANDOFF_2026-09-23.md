@@ -802,10 +802,11 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   subclass; a test runs the weekly branch and requires the backtest not to fail
   (mutation: the MagicMock clock back → fails).
 - **C.** ~~`docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale~~ — closed with 38.
-- **D. (found 2026-10-02 under 37's noise)** PTC's weekly fetch fails
-  `insider_transactions: unconverted data remains when parsing with format
-  "%Y-%m-%d": "-05:00"` — an EDGAR date carrying a UTC offset. One ticker's
-  insider rows are lost each week.
+- **D. (found 2026-10-02 under 37's noise) — FIXED 2026-10-02.** PTC's weekly fetch
+  failed `insider_transactions: unconverted data remains … "-05:00"`: Form 4
+  dates are XML Schema dates and may carry an offset; pandas inferred the format
+  from the first value, so a mix failed (and an offset first reads as a *time*).
+  `edgar_client._xml_dates` takes the day. Live check: PTC 8 rows.
 
 ## 5. Technical judgement calls made this session (the user may overrule)
 

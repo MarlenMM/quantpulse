@@ -412,3 +412,39 @@ def test_fetch_filing_excerpt_is_none_without_a_recent_filing(tmp_path: Path) ->
         patch("quantpulse.ingestion.edgar_client.fetch_recent_filings", return_value=[]),
     ):
         assert edgar_client.fetch_filing_excerpt("AAPL") is None
+
+
+def test_dates_with_a_utc_offset_are_read_as_their_day(tmp_path: Path) -> None:
+    """Handoff item D, found under finding 37's noise.
+
+    Form 4 dates are XML Schema dates, which may carry an offset: PTC's weekly
+    fetch failed every week on `"2026-09-02-05:00"` ("unconverted data remains
+    when parsing with format %Y-%m-%d") and lost all its insider rows. The day is
+    the first ten characters; `format="mixed"` would instead read it as 05:00
+    on that day, which is wrong in a different way.
+    """
+    # Mixed, as in production: pandas infers the format from the first value, so
+    # an offset on *every* date parses and only a mix fails.
+    offset_xml = _SAMPLE_FORM4_XML.replace(
+        "<transactionDate><value>2026-06-15</value></transactionDate>",
+        "<transactionDate><value>2026-06-14-05:00</value></transactionDate>",
+        1,
+    )
+    payload = _submissions_payload([("4", "2026-07-20")])
+    with (
+        patch(
+            "quantpulse.ingestion.edgar_client.get_settings", return_value=_fake_settings(tmp_path)
+        ),
+        patch(
+            "quantpulse.ingestion.edgar_client.get_json",
+            side_effect=[_cik_lookup_response(), payload, _cik_lookup_response()],
+        ),
+        patch("quantpulse.ingestion.edgar_client.get_text", return_value=offset_xml),
+        patch("quantpulse.ingestion.edgar_client.date") as mock_date,
+    ):
+        mock_date.today.return_value = date(2026, 7, 22)
+        mock_date.fromisoformat = date.fromisoformat
+        df = edgar_client.fetch_insider_transactions("AAPL", lookback_days=90, max_filings=10)
+
+    assert len(df) == 2
+    assert sorted(df["transaction_date"]) == [date(2026, 6, 14), date(2026, 6, 15)]
