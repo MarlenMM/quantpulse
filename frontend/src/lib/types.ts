@@ -286,6 +286,8 @@ export interface RegimePoint {
   vix_level: number | null;
   breadth_pct_above_200dma: number | null;
   macro_news_tone: number | null;
+  /** The day the tone was read; earlier than `date` when it was carried forward. */
+  macro_tone_as_of: string | null;
   yield_curve_spread: number | null;
   regime_score: number | null;
   regime_label: string | null;

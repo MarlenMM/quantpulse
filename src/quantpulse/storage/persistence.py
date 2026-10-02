@@ -150,6 +150,24 @@ def upsert_news_events(session: Session, records: Sequence[dict[str, Any]]) -> i
     return _append_only(session, NewsEvent, records)
 
 
+def read_latest_macro_tone(session: Session, *, before: date) -> tuple[float, date] | None:
+    """The newest stored macro tone before `before`, with the day it was *read*.
+
+    A row whose tone was itself carried forward reports the original day
+    (`macro_tone_as_of`), so a reading cannot be carried again past its limit.
+    Rows from before that column existed read as their own date.
+    """
+    row = session.execute(
+        select(MarketRegime.date, MarketRegime.macro_news_tone, MarketRegime.macro_tone_as_of)
+        .where(MarketRegime.date < before, MarketRegime.macro_news_tone.is_not(None))
+        .order_by(MarketRegime.date.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    return float(row.macro_news_tone), row.macro_tone_as_of or row.date
+
+
 def upsert_market_regime(session: Session, record: dict[str, Any]) -> int:
     """Append one day's Market Regime Index row (append-only — never recompute history)."""
     return _append_only(session, MarketRegime, [record])
@@ -1152,6 +1170,7 @@ def read_recent_market_regime(session: Session, *, limit: int = 90) -> pd.DataFr
                 "vix_level": row.vix_level,
                 "breadth_pct_above_200dma": row.breadth_pct_above_200dma,
                 "macro_news_tone": row.macro_news_tone,
+                "macro_tone_as_of": row.macro_tone_as_of,
                 "yield_curve_spread": row.yield_curve_spread,
                 "regime_score": row.regime_score,
                 "regime_label": row.regime_label,
