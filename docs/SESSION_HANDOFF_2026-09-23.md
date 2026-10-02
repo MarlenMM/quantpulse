@@ -793,11 +793,14 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   is GDELT too; the 2026-09-21 run logged *"Failed to fetch GDELT macro tone"*.
   Google News has no tone timeline. `describe_regime_coverage` already discloses a
   missing input. No fix designed yet.
-- **B. Test-harness quirk:** inside `TestAlerting._driven_run` (patched
-  `refresh_data.datetime` mock), the backtest step fails with
-  `isinstance() arg 2 must be a type` in `_coerce_date`. Test-only — production is
-  unaffected, and no test asserts on it — but it adds a spurious
-  `failed step(s): backtest` to those harness runs.
+- **B. Test-harness quirk — FIXED 2026-10-02.** `patch("refresh_data.datetime",
+  wraps=datetime)` made the module's `datetime` a MagicMock, so `_coerce_date`'s
+  `isinstance` raised and every weekly harness run closed with a spurious
+  `failed step(s): backtest`. It mattered more than "test-only" suggested: that
+  reason entered the closing-line guard and let 37's first closing-guard mutation
+  survive. All five harnesses now patch in `_pinned_clock()`, a real `datetime`
+  subclass; a test runs the weekly branch and requires the backtest not to fail
+  (mutation: the MagicMock clock back → fails).
 - **C.** ~~`docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale~~ — closed with 38.
 - **D. (found 2026-10-02 under 37's noise)** PTC's weekly fetch fails
   `insider_transactions: unconverted data remains when parsing with format
