@@ -314,6 +314,40 @@ class TestClassificationDeadline:
             results = ec.classify_articles(self._frame(9), chunk_size=3, deadline=50.0)
         assert all(r.event_type is ec.EventType.EARNINGS for r in results)
 
+    def test_never_starts_a_chunk_that_would_end_past_the_deadline(self) -> None:
+        """The 2026-09-28 weekly run, replayed on a simulated clock.
+
+        The step was killed inside a classifier call: the check asked "is it
+        past the deadline?" and the answer was no, so a 32-article chunk began
+        that took longer than the 120 s held back for persisting -- on that
+        runner ~9 s an article, ~288 s a chunk. SIGALRM landed mid-chunk and
+        the week's sentiment, already computed, was never written. The check
+        has to ask whether the *next* chunk can finish in time.
+        """
+        seconds_per_chunk = 288.0
+        clock = {"now": 0.0}
+        finished_at: list[float] = []
+
+        def _slow(batch, **kwargs):  # type: ignore[no-untyped-def]
+            clock["now"] += seconds_per_chunk
+            finished_at.append(clock["now"])
+            return self._fake(batch)
+
+        deadline = 1_000.0
+        with (
+            patch.object(ec, "_load_classifier", return_value=_slow),
+            patch.object(ec.time, "monotonic", lambda: clock["now"]),
+        ):
+            results = ec.classify_articles(self._frame(96), chunk_size=8, deadline=deadline)
+
+        assert finished_at, "no chunk ran at all"
+        assert max(finished_at) <= deadline, (
+            f"a chunk finished at {max(finished_at):.0f}s, past the {deadline:.0f}s deadline"
+        )
+        # It still used the time it had: three 288 s chunks fit in 1,000 s.
+        assert len(finished_at) == 3
+        assert sum(r.event_type is ec.EventType.EARNINGS for r in results) == 24
+
     def test_chunking_alone_classifies_everything(self) -> None:
         """No deadline: chunk boundaries must not drop rows."""
         with patch.object(ec, "_load_classifier", return_value=self._fake):

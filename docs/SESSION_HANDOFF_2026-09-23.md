@@ -19,6 +19,11 @@ build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) 
 wins — verified after a reboot, together with point 44 on a cold deep link. The host
 swaps pyarrow 25.0.0 → 24.0.0 by itself.
 
+**Continued 2026-10-02** (session fixing 36–40). Pipeline: the 2026-10-02 run
+succeeded too; secrets unchanged. **47 found and fixed first** (user's call): the
+2026-09-28 weekly run was killed mid-chunk in tier-1 classification and lost a
+week's sentiment (newest 2026-09-21). Per-finding status below.
+
 **Continued 2026-09-26 → checked 2026-10-01** (HEAD `753e468`, **2,024 passed / 1
 skipped**; e2e 16, static 42; CI and Pages green). **34 done** (`e596852`, user: interval
 + flag) and **35 done** (`753e468`, user: drop 63/252, say why). The 2026-09-28 weekly
@@ -718,6 +723,19 @@ job ran; 09-24 was not published. Fixed in `4b78f59`, guarded by
 `test_a_called_workflow_never_asks_for_more_than_its_caller_grants`, and verified
 on GitHub with `if: false` probe branches (before: `startup_failure`; after:
 started, all skipped). Backlog §7 has the detail.
+
+### 47 · Tier-1 classification started a chunk it could not finish, and lost a week's sentiment (S1) — FIXED 2026-10-02
+
+Found while measuring 36. Weekly run `36507584930` (2026-09-29 UTC) closed
+`partial -- failed step(s): tier1_news`, job green; sentiment newest 2026-09-21.
+The deadline was checked as "not past it yet" before each 32-article chunk, but a
+chunk took ~160–290 s (≥ 8.8 s/article on that runner) against a 120 s margin, so
+SIGALRM landed mid-chunk and the computed sentiment was never persisted.
+`classify_articles` now refuses a chunk that would end past the deadline, using
+the slowest chunk so far. Test replays it on a simulated clock (1,152 s → none
+past 1,000 s); mutation-checked. Backlog §7. **Still open:** a partial night does
+not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0 →
+≥ 8.8 s/article is unexplained. Verify on the 2026-10-05 weekly run.
 
 ## 4. Additional open items (not numbered in the audit)
 

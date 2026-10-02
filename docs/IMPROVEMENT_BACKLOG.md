@@ -398,6 +398,44 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 47 — the tier-1 deadline let a chunk start that could not finish
+
+Found 2026-10-02 while measuring finding 36: the 2026-09-28 weekly run
+(`36507584930`) closed `partial -- failed step(s): tier1_news`, and the job was
+green. `sentiment_scores`' newest date in the published database was
+**2026-09-21**: a week's sentiment, already computed, never written. Finding 22's
+coverage guard did not fire, because the composite's 30-day lookback still
+reached the 09-21 rows; the scores were a week staler than they said.
+
+**Measured from the log:** the step started ~02:37:36; entity tagging and
+FinBERT were done and BART loaded at 02:53:55; the alarm landed at 04:07:36
+*inside a classifier call*. The deadline was step start + 5,400 − 120 s, checked
+before each 32-article chunk as "is it past the deadline?". On that runner
+classification ran at **≥ 8.8 s an article** (5.0 on 09-21, 3.1 on 09-14), so a
+chunk took ~160–290 s — longer than the 120 s margin. The check passed, the
+chunk overran, SIGALRM killed the step, and the sentiment rows, which are
+decay-weighted by event type and so are built after classification, were lost
+with it.
+
+**Fix:** `classify_articles` keeps the slowest chunk time it has seen and does
+not start a chunk that would end past the deadline (`now + slowest ≥
+deadline`). The 120 s margin is left for what it was for, persisting. A slower
+runner now classifies fewer of the 500 and logs how many; it no longer loses the
+step.
+
+**Test:** `test_never_starts_a_chunk_that_would_end_past_the_deadline` replays
+the production shape on a simulated clock (288 s chunks, 1,000 s deadline):
+before the fix a chunk finished at 1,152 s; after, three chunks run and none
+ends past it. Mutation-checked by not recording the chunk time — fails with the
+same 1,152 s message.
+
+**Not done:** an alert for a "partial" night. Finding 27's notify job fires on a
+*failed job*; a partial refresh is green on purpose, and only the run's closing
+line and `refresh_log` say it. Whether a partial night should reach the webhook
+is worth deciding once the webhook exists (finding 28). The classifier slowing
+from 3.1 to ≥ 8.8 s an article over three weeks on the same runner image was
+not explained.
+
 ### Point 33 — half the product had no public link
 
 Done 2026-09-25; the owner chose **both** routes.
