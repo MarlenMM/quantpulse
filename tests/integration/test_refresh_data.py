@@ -2134,6 +2134,37 @@ class TestThirteenFKnowsWhenItIsAlreadyCurrent:
         fetch.assert_called_once()
         assert "filing-deadline rule predicted" in caplog.text
 
+    # Finding 36: the freshness strip says "the newest SEC publishes" only on the
+    # strength of this record, so each path must leave the right one -- or none.
+
+    def test_a_check_finding_the_quarter_stored_is_recorded(self, session: Session) -> None:
+        from quantpulse.analysis.freshness import THIRTEEN_F_CHECK
+
+        self._seed(session, date(2026, 3, 31))
+        self._refresh(session, return_value=_thirteen_f_trend())
+        assert persistence.read_source_check(session, THIRTEEN_F_CHECK) == (
+            date(2026, 9, 14),
+            date(2026, 3, 31),
+        )
+
+    def test_an_ingest_records_the_quarter_the_file_reports(self, session: Session) -> None:
+        from quantpulse.analysis.freshness import THIRTEEN_F_CHECK
+
+        self._seed(session)
+        self._refresh(session, return_value=_thirteen_f_trend(quarter_end=date(2025, 12, 31)))
+        assert persistence.read_source_check(session, THIRTEEN_F_CHECK) == (
+            date(2026, 9, 14),
+            date(2025, 12, 31),
+        )
+
+    def test_a_failed_check_records_nothing(self, session: Session) -> None:
+        from quantpulse.analysis.freshness import THIRTEEN_F_CHECK
+
+        self._seed(session)
+        with pytest.raises(OSError):
+            self._refresh(session, side_effect=OSError("connection reset"))
+        assert persistence.read_source_check(session, THIRTEEN_F_CHECK) is None
+
     @staticmethod
     def _weekly_run(
         engine: Engine, *, window: tuple[date, date] | None, stored: bool

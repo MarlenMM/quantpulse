@@ -77,12 +77,17 @@ def ensure_demo_database() -> bool:
 
 
 @st.cache_resource(show_spinner=False)
-def ensure_schema() -> bool:
-    """Bring the configured database to the current schema, once per process (point 45).
+def ensure_schema(migrations: str = "") -> bool:
+    """Bring the configured database to the current schema, once per set of migrations.
 
     Separate from `ensure_demo_database` because a file that is already here --
     a warm container, a local copy -- is never downloaded again, yet may predate
-    a migration the nightly has since applied to the published one.
+    a migration the nightly has since applied to the published one (point 45).
+
+    `migrations` (`demo_data.migration_signature()`) is only the cache key. It
+    used to take no argument, so it ran once per process -- and the hosted
+    process outlives a push (point 46), so a pushed migration was never applied
+    there: new code would have read the old schema until a reboot.
     """
     try:
         return demo_data.ensure_schema_current(get_settings().database_url)
@@ -101,7 +106,7 @@ def get_session() -> Any:
     first call: `ensure_demo_database` is a cached resource.
     """
     ensure_demo_database()
-    ensure_schema()
+    ensure_schema(demo_data.migration_signature())
     return _engine_session()
 
 
@@ -258,6 +263,16 @@ def refresh_log(limit: int = 20) -> pd.DataFrame:
 def data_freshness() -> dict[str, date | None]:
     with get_session() as session:
         return persistence.read_data_freshness(session)
+
+
+@st.cache_data(ttl=TTL_SECONDS, show_spinner=False)
+def freshness_notes() -> dict[str, tuple[str, bool]]:
+    """`{source: (label, behind)}` -- the server's sentences that replace an age (finding 36)."""
+    with get_session() as session:
+        return {
+            name: (note.label, note.behind)
+            for name, note in persistence.read_freshness_notes(session).items()
+        }
 
 
 @st.cache_data(ttl=TTL_SECONDS, show_spinner=False)

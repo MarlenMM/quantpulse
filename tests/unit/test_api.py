@@ -228,6 +228,36 @@ class TestHealth:
         assert body["has_data"] is True
         assert body["freshness"]["composite_scores"] == TODAY.isoformat()
 
+    def test_a_quarterly_source_carries_its_period_sentence(self, tmp_path) -> None:
+        """Finding 36: the sentence is composed here so both front ends print the
+        same words, as `edge_note` and `coverage_note` are."""
+        from quantpulse.analysis.freshness import THIRTEEN_F_CHECK, describe_thirteen_f
+        from quantpulse.storage.models import InstitutionalOwnership
+
+        quarter = date(2026, 3, 31)
+        checked = TODAY - timedelta(days=3)
+
+        def _seed_13f(session: Session) -> None:
+            session.add(InstitutionalOwnership(symbol="AAPL", quarter_end_date=quarter))
+            persistence.record_source_check(
+                session, THIRTEEN_F_CHECK, checked_on=checked, newest_period=quarter
+            )
+            session.commit()
+
+        expected = describe_thirteen_f(
+            quarter, checked_on=checked, checked_period=quarter, today=TODAY
+        )
+        assert expected is not None
+        for test_client in _client(tmp_path, extra=_seed_13f):
+            notes = test_client.get("/api/health").json()["freshness_notes"]
+        assert notes == {
+            "institutional_ownership": {"label": expected.label, "behind": expected.behind}
+        }
+        assert expected.label.startswith("Q1 2026 filings — the newest SEC publishes")
+
+    def test_no_quarterly_source_means_no_notes(self, client: TestClient) -> None:
+        assert client.get("/api/health").json()["freshness_notes"] == {}
+
     def test_never_populated_dataset_is_null_not_missing(self, client: TestClient) -> None:
         # The client must be able to tell "stale" from "never ran".
         freshness = client.get("/api/health").json()["freshness"]

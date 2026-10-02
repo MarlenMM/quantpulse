@@ -62,6 +62,41 @@ test("the dashboard renders live figures from the pre-rendered data", async ({ p
 });
 
 /**
+ * Finding 36: a quarterly source is labelled by its period, not its age.
+ *
+ * "Institutional ownership: 169 days ago" was correct and read as neglect. The
+ * server now sends a sentence ("Q1 2026 filings — the newest SEC publishes
+ * (checked 29 Sep)") and the strip prints it verbatim in place of the age.
+ * Read from the published `health.json`, never written here: which sentence it
+ * is depends on the data, and a test expecting one shape breaks on correct data.
+ */
+test("the freshness strip prints the server's sentence for a quarterly source", async ({
+  page,
+}) => {
+  const health = JSON.parse(
+    readFileSync(join(process.cwd(), "dist", "data", "health.json"), "utf8"),
+  ) as {
+    freshness: Record<string, string | null>;
+    freshness_notes?: Record<string, { label: string; behind: boolean }>;
+  };
+  const notes = health.freshness_notes ?? {};
+  // Stored 13F rows always get a note, so a missing one is the bug itself.
+  if (health.freshness.institutional_ownership) {
+    expect(
+      Object.keys(notes),
+      "health.json carries no freshness note although 13F rows are stored",
+    ).toContain("institutional_ownership");
+  }
+
+  await page.goto("dashboard");
+  for (const [name, note] of Object.entries(notes)) {
+    const row = page.locator(".freshness li").filter({ hasText: humanize(name) });
+    await expect(row.locator(".f-age")).toHaveText(note.label);
+    await expect(row.locator(".f-age")).toHaveClass(note.behind ? /is-stale/ : /^f-age$/);
+  }
+});
+
+/**
  * Finding 29: the landing page drew one dial with the whole of Plotly.
  *
  * Measured on the built site before the change: the Dashboard downloaded

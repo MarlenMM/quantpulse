@@ -398,6 +398,62 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 36 — a quarterly source was labelled by its age
+
+Done 2026-10-02. The strip printed "Institutional ownership: 185 days ago"
+(measured on the published database: newest quarter 2026-03-31) beside prices
+measured in days — correct, and it read as six months of neglect.
+
+**Measured before choosing the wording.** "Q1 2026 filings — the newest SEC
+publishes" is a claim. SEC published each of the eight windows before 2026 two to
+nine days after it closed (their `Last-Modified`), but on 2026-10-02 the
+June–August 2026 window was still a 404, 32 days after its close. A calendar
+rule would have printed the claim falsely or marked a current source behind;
+only asking SEC can decide it, and the weekly 13F step already asks. **User's
+call: record the check.**
+
+- `source_checks` (migration `314d984542ff`): one row per source,
+  `(checked_on, newest_period)`, replaced on each *successful* check. The 13F
+  step writes it when the newest window's quarter is already stored, and after
+  an ingest (with the period the file reports, not the rule's prediction). A
+  failed check writes nothing, so the record ages.
+- `analysis.freshness.describe_thirteen_f` composes the sentence: "Q1 2026
+  filings — the newest SEC publishes (checked 29 Sep)"; "— SEC not checked since
+  …" and marked behind past 16 days (two weekly runs); "— SEC's newest is Q2
+  2026" and marked behind if a newer quarter was seen; "— not yet checked against
+  SEC" until the first weekly run records one. Nothing stored → no sentence, so
+  the strip still says *never run*.
+- `/api/health` gains `freshness_notes: {source: {label, behind}}`; the React
+  strip, Streamlit's strip and Settings' table print the label verbatim in place
+  of the age. `STALE_AFTER_DAYS["institutional_ownership"]` stays as the
+  fallback a test requires of every source.
+- **Fundamentals were not relabelled**: their `as_of_date` is the weekly
+  snapshot's date (2026-09-28), so "4 days ago" is the honest label.
+
+**Tests:** the sentence in each state, the stored check, the API, both Streamlit
+surfaces, and a static-site test reading the published `health.json` (it failed
+first with `Received: "185 days ago"`). Mutation-checked eight ways (stale branch,
+newer-quarter branch, no record on the stored path, the rule's quarter instead
+of the file's, the API, Home, Settings, the React strip). Rendered at 375 px:
+the longest label wraps inside its cell. **Until the 2026-10-05 weekly run**
+records the first check, the live strip says "Q1 2026 filings — not yet checked
+against SEC".
+
+### Point 48 — a pushed migration would never have reached the hosted app
+
+Found 2026-10-02 while preparing 36, the first migration since point 46. The
+hosted app migrates its database through `lib.data.ensure_schema`, a
+`st.cache_resource` with no argument — once per process. Point 46 keeps the
+process across a push and re-imports changed `lib` modules, but Streamlit keys a
+cached function by its source, so the re-imported `ensure_schema` was still
+"done": 36's push would have had new code querying `source_checks` against the
+old schema, "no such table" on the Dashboard until someone rebooted the app.
+
+**Reproduced in a test** the way the host does it — call, `importlib.reload(lib.data)`,
+add a migration file, call again: one migration run, not two. **Fix:**
+`demo_data.migration_signature()` (the migration file names) is passed as the
+cache key, so a new migration is a new call. Mutation-checked two ways.
+
 ### Point 47 — the tier-1 deadline let a chunk start that could not finish
 
 Found 2026-10-02 while measuring finding 36: the 2026-09-28 weekly run

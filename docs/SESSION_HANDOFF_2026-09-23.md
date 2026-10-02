@@ -606,7 +606,16 @@ methodology that the data cannot grade them — or grade them against the deeper
 history in the local `quantpulse.db` (1972–2026, enough windows at both horizons).
 The second is more work and would make the rows real.
 
-### 36 · "Institutional ownership: 169 days ago" reads as neglect, and is correct (S4)
+### 36 · "Institutional ownership: 169 days ago" reads as neglect, and is correct (S4) — FIXED 2026-10-02
+
+**Status:** user's call — record the check. The weekly 13F step writes
+`source_checks` on each successful check; `/api/health.freshness_notes` carries
+"Q1 2026 filings — the newest SEC publishes (checked 29 Sep)" (or a marked
+"not checked since …"/"SEC's newest is …"), printed verbatim by both front ends.
+SEC's Jun–Aug 2026 window was still unpublished on 10-02 (32 days; usually 2–9),
+which is why a calendar rule could not decide it. Fundamentals left as an age
+(their date is the weekly snapshot's). Found with it: **48** (below). Backlog §7.
+Until the 2026-10-05 weekly run the live label reads "not yet checked against SEC".
 
 It is the most recent quarter SEC has published, pinned to the 31 March window
 end, and it sits in the freshness strip beside prices measured in days. A reader
@@ -723,6 +732,14 @@ job ran; 09-24 was not published. Fixed in `4b78f59`, guarded by
 `test_a_called_workflow_never_asks_for_more_than_its_caller_grants`, and verified
 on GitHub with `if: false` probe branches (before: `startup_failure`; after:
 started, all skipped). Backlog §7 has the detail.
+
+### 48 · A pushed migration would never have reached the hosted app (S1 for that host) — FIXED 2026-10-02
+
+`lib.data.ensure_schema` was a no-argument `st.cache_resource`; Streamlit keys it
+by source, so point 46's module reload left it "done" and 36's new table would
+have raised "no such table" on the hosted Dashboard until a reboot. Reproduced
+with `importlib.reload` in a test; the cache key is now the migration file list
+(`demo_data.migration_signature()`). Verify on the host after the 36 push.
 
 ### 47 · Tier-1 classification started a chunk it could not finish, and lost a week's sentiment (S1) — FIXED 2026-10-02
 

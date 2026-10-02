@@ -20,6 +20,7 @@ import {
   humanize,
   isBehind,
 } from "../lib/format";
+import type { FreshnessNote } from "../lib/types";
 import { useApi } from "../lib/useApi";
 
 function freshnessTone(source: string, label: string): string {
@@ -37,7 +38,13 @@ function freshnessTone(source: string, label: string): string {
  * source that is behind is coloured so it can be found without reading all
  * nine.
  */
-function Freshness({ freshness }: { freshness: Record<string, string | null> }) {
+function Freshness({
+  freshness,
+  notes,
+}: {
+  freshness: Record<string, string | null>;
+  notes: Record<string, FreshnessNote>;
+}) {
   const entries = Object.entries(freshness);
   if (entries.length === 0) return null;
   return (
@@ -45,11 +52,18 @@ function Freshness({ freshness }: { freshness: Record<string, string | null> }) 
       <h2>Data freshness</h2>
       <ul className="freshness">
         {entries.map(([name, value]) => {
-          const label = freshnessLabel(value);
+          // A quarterly source reads by its period, in the server's words (finding 36).
+          const note = notes[name];
+          const label = note ? note.label : freshnessLabel(value);
+          const tone = note
+            ? note.behind
+              ? "f-age is-stale"
+              : "f-age"
+            : freshnessTone(name, label);
           return (
             <li key={name}>
               <span className="f-name">{humanize(name)}</span>
-              <span className={freshnessTone(name, label)}>{label}</span>
+              <span className={tone}>{label}</span>
             </li>
           );
         })}
@@ -104,7 +118,7 @@ export default function Dashboard() {
         its mind about, and what regime it is all happening in.
       </p>
 
-      {health.data ? <Freshness freshness={health.data.freshness} /> : null}
+      {health.data ? <Freshness freshness={health.data.freshness} notes={health.data.freshness_notes} /> : null}
 
       <div className="split lede">
         {/* The subject of the page. It gets the raised surface, the serif
