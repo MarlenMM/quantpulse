@@ -234,6 +234,15 @@ def classify_articles(
     same way an over-cap already does, into an event type carrying its own
     documented half-life, instead of into nothing at all. Rows go through in
     chunks so the clock is checked often enough to matter.
+
+    **The check asks whether the next chunk can finish, not whether the
+    deadline has passed.** A chunk is the unit that cannot be abandoned, and on
+    the 2026-09-28 weekly run one took ~288 s (32 articles at ~9 s each) against
+    the 120 s the caller holds back for persisting. "Not past it yet" let that
+    chunk start, the step's alarm landed inside it, and the week's sentiment --
+    already computed -- was never written. So the slowest chunk seen so far is
+    the estimate for the next one, and a chunk that would end past the deadline
+    is not started.
     """
     present_columns = [c for c in text_columns if c in articles.columns]
 
@@ -256,8 +265,10 @@ def classify_articles(
         # for slow inference by the first chunk's deadline check.
         classifier = _load_classifier()
         classified = 0
+        slowest_chunk = 0.0
         for start in range(0, len(nonempty_positions), chunk_size):
-            if deadline is not None and time.monotonic() >= deadline:
+            chunk_started = time.monotonic()
+            if deadline is not None and chunk_started + slowest_chunk >= deadline:
                 logger.warning(
                     "Event classification stopped at its deadline after %d of %d "
                     "articles; the rest are recorded as '%s'.",
@@ -283,5 +294,6 @@ def classify_articles(
             for position, raw in zip(chunk, raw_list, strict=True):
                 results[position] = _result_from_raw(dict(raw))
             classified += len(chunk)
+            slowest_chunk = max(slowest_chunk, time.monotonic() - chunk_started)
 
     return pd.Series(results, index=articles.index)
