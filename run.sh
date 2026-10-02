@@ -7,7 +7,7 @@
 # The published demo (https://marlenmm.github.io/quantpulse/) is read-only --
 # GitHub Pages serves files, and the Portfolio Manager needs to write. This
 # script is the other half: the whole seven-page Streamlit app, including the
-# Portfolio Manager, against the demo database that is committed to this repo.
+# Portfolio Manager, against the published demo database.
 #
 # It needs no API key and no account. Everything it shows comes from
 # `quantpulse_demo.db`, which the scheduled refresh rebuilds and publishes as a
@@ -73,5 +73,14 @@ echo
 # Change it to `sqlite` if you want holdings to persist across restarts.
 export DATABASE_URL="sqlite:///./quantpulse_demo.db"
 export PORTFOLIO_BACKEND="${PORTFOLIO_BACKEND:-session}"
+
+# Arrow's system allocator instead of the mimalloc it bundles. Without this,
+# moving between pages can kill the server outright: SIGSEGV (exit 139) inside
+# libarrow's mimalloc as it initialises on a fresh script thread, converting a
+# table for display -- a blank page in the browser and no error in this terminal.
+# Reproduced on macOS with pyarrow 25 after about thirty page loads (finding 39).
+# The system allocator costs nothing noticeable here. Set the variable yourself
+# to choose another pool.
+export ARROW_DEFAULT_MEMORY_POOL="${ARROW_DEFAULT_MEMORY_POOL:-system}"
 
 exec "$VENV/bin/streamlit" run app/Home.py "$@"

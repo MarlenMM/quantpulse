@@ -672,7 +672,13 @@ still says **14 migrations and 1,824 tests** (actual: **1,895 passed, 1
 skipped**); `src/quantpulse/api/main.py` has **15** `@app.get` routes against a
 documented 14 — reconcile before trusting either number.
 
-### 39 · `./run.sh` doesn't ship the one line that keeps Streamlit alive here (S4)
+### 39 · `./run.sh` doesn't ship the one line that keeps Streamlit alive here (S4) — FIXED 2026-10-02
+
+**Status:** reproduced (run.sh as shipped: exit 139 after ~30 loads, same
+libarrow mimalloc stack; forced mimalloc with a fresh session per round: died at
+load 2, 3/3), fixed (`ARROW_DEFAULT_MEMORY_POOL` defaults to `system` in run.sh;
+3/3 trials survived 56 loads), guarded by a test that runs the real script with
+a stub streamlit. Backlog §7.
 
 Navigating a few pages segfaults the Streamlit process inside libarrow's bundled
 mimalloc — diagnosed on this machine, with `ARROW_DEFAULT_MEMORY_POOL=system`

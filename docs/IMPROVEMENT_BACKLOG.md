@@ -402,6 +402,31 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 39 — `./run.sh` did not ship the line that keeps Streamlit alive
+
+Done 2026-10-02. **Reproduced first**, with `run.sh` exactly as shipped (fresh
+`.venv-app`: pyarrow 25.0.0, Streamlit 1.59.1, pandas 3.0.3) and the seven pages
+driven in a real browser: the server exited **139 (SIGSEGV)** after ~30 loads,
+and the crash report's faulting frames were `mi_heap_main` ← `mi_thread_init` in
+`libarrow.2500.dylib` — the 2026-08-27 diagnosis exactly. With a fresh browser
+session per round (a new script thread each time) it is sharper: forcing
+`ARROW_DEFAULT_MEMORY_POOL=mimalloc`, the server died **at the second page load
+in 3 of 3 trials**.
+
+**Fix:** `run.sh` exports `ARROW_DEFAULT_MEMORY_POOL="${ARROW_DEFAULT_MEMORY_POOL:-system}"`
+with a comment saying what it works around (a value the user sets wins). With it,
+**3 of 3 trials survived 56 loads across 8 fresh sessions, 104 tables rendered
+each.** The header comment's "the demo database that is committed to this repo"
+(stale since point 18) went with it.
+
+**Test:** `tests/unit/test_run_sh.py` runs the real script in a temp copy with a
+stub `streamlit` that prints only the variables under test (a first version
+printed the whole environment, which a failing assertion would have put in a CI
+log). Mutation-checked: export removed; user's value overridden.
+
+**Not changed:** the hosted app (Linux, Community Cloud) has shown no such crash,
+and the test harness keeps its one-page-per-process rule.
+
 ### Point 38 — the documented counts drift, so they are derived now
 
 Done 2026-10-02. **Recounted from the code** (documented → actual): tests 1,554
