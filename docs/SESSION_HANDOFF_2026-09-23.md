@@ -688,7 +688,18 @@ server and no error.
 
 **Fix:** export it in `run.sh` with a comment saying what it works around.
 
-### 40 · Dependabot PRs, including the libraries that have broken the charts before (S4)
+### 40 · Dependabot PRs, including the libraries that have broken the charts before (S4) — DONE 2026-10-02
+
+**Status:** measured each bump through both browser suites: plotly 4.1.1, vite
+8.3.1 and react-dom 19.3 pass alone; react 19.3 alone never mounts (React error
+#527) — #30's red check was real. User: merge all four; policy = group + static
+suite on dependency PRs. `dependabot.yml` groups React's four packages (all
+update types) and all other npm minor/patch; `ci.yml` `frontend-static` runs the
+static suite on PRs touching the frontend's dependency files (9.5 min, verified
+on GitHub). Dependabot superseded #29–#32 with #33 (React) and #34 (plotly+vite);
+#34 was conflicting after #33, rebased and re-checked, then both squash-merged
+(`58615eb`, `d83445f`). Live demo verified: traces drawn as asked, no console
+errors. Backlog §7.
 
 As audited: vite 8.2.2 → 8.3.0, react 19 and react-dom, red for finding 21's
 reason. The standing rule applies to vite: `tsc`, the build and CI were all green
