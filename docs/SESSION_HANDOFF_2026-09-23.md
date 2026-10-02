@@ -19,10 +19,22 @@ build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) 
 wins — verified after a reboot, together with point 44 on a cold deep link. The host
 swaps pyarrow 25.0.0 → 24.0.0 by itself.
 
-**Continued 2026-10-02** (session fixing 36–40). Pipeline: the 2026-10-02 run
-succeeded too; secrets unchanged. **47 found and fixed first** (user's call): the
-2026-09-28 weekly run was killed mid-chunk in tier-1 classification and lost a
-week's sentiment (newest 2026-09-21). Per-finding status below.
+**Continued 2026-10-02** (HEAD `5c7c9b4`, **2,074 passed / 1 skipped**; e2e 16,
+static 43; CI and Pages green). Pipeline: the 2026-10-02 run succeeded; secrets
+unchanged (only `SEC_EDGAR_USER_AGENT`). **All of 36–40 done**, plus **47** (found
+first and fixed first, user's call: the 2026-09-28 weekly was killed mid-chunk in
+tier-1 classification and lost a week's sentiment), **48** (a pushed migration
+would never have reached the warm hosted app), and §4 **A** (retry + carry-forward,
+user's call), **B**, **C** (with 38), **D** (PTC's insider dates). User decisions
+this session: 36 → record the SEC check; 47 → fix first; 40 → merge all four,
+policy = group + static suite on dependency PRs; A → retry, then carry ≤ 3
+sessions. **To verify on the 2026-10-05 weekly run:** 47 (tier-1 stops before the
+alarm — look for "Event classification stopped at its deadline" or a full
+classification, and a new `sentiment_scores` date), 36 (the strip turns to "the
+newest SEC publishes (checked 5 Oct)"), 37 (one Finnhub line, one FRED line),
+A (the macro-tone attempt lines; whether the waits help). **Open:** §4 **E**
+(non-English tier-2 headlines), 47's two notes (a partial night does not alert;
+the classifier's slowdown), 28 (the user's secrets). Findings page version 17.
 
 **Continued 2026-09-26 → checked 2026-10-01** (HEAD `753e468`, **2,024 passed / 1
 skipped**; e2e 16, static 42; CI and Pages green). **34 done** (`e596852`, user: interval
@@ -808,6 +820,15 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   subclass; a test runs the weekly branch and requires the backtest not to fail
   (mutation: the MagicMock clock back → fails).
 - **C.** ~~`docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale~~ — closed with 38.
+- **E. (found 2026-10-02 on the hosted Dashboard) Non-English tier-2 headlines.**
+  The Google News fallback (finding 23) returns articles in other languages:
+  "Market-moving stories" showed Hindi, Vietnamese and Chinese titles, and at
+  least 232 of 2,247 tier-2 articles since 2026-09-22 (~10%; counting only
+  Devanagari, CJK and Vietnamese script) are non-English. FinBERT is an English
+  model, so their sentiment feeds industry tilts as noise. Not fixed. The RSS
+  query **already** sends `hl=en-US&gl=US&ceid=US:en` (`news_client.py`), so the
+  fix is a language filter on what comes back (or on the source domain) — measure
+  which articles get through, and how many each basket keeps, first.
 - **D. (found 2026-10-02 under 37's noise) — FIXED 2026-10-02.** PTC's weekly fetch
   failed `insider_transactions: unconverted data remains … "-05:00"`: Form 4
   dates are XML Schema dates and may carry an offset; pandas inferred the format
