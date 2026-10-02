@@ -402,6 +402,50 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 40 — the Dependabot queue, and a policy for the next one
+
+Done 2026-10-02. **Measured first, each bump through both browser suites
+locally** (e2e against the stubbed API; static against a pre-rendered database):
+
+| PR | alone | why |
+|---|---|---|
+| #31 plotly.js 4.1.0 → 4.1.1 | e2e 16/16, static 43/43 | |
+| #32 vite 8.2.2 → 8.3.1 | e2e 16/16, static 43/43 | |
+| #29 react-dom → 19.3.0 | e2e 16/16, static 43/43 | react-dom's exact peer pulls react to 19.3.0 in its lockfile |
+| #30 react → 19.3.0 | **app never mounts** | React error #527: react 19.3.0 vs react-dom 19.2.8 must match exactly |
+| all four together | e2e 16/16, static 43/43 | |
+
+#30's red `frontend` check was genuine, and Dependabot would keep opening the two
+React halves separately. The second gap was CI: pull requests ran only the stubbed
+e2e suite; the static suite — the one that checks every Plotly figure drew the
+trace type it asked for, the failure behind both earlier chart breakages — ran
+only in the publish workflow, after a merge.
+
+**Owner's calls:** merge all four; group the bumps and run the static suite on
+dependency pull requests.
+
+- `.github/dependabot.yml`: React's four packages are one group (every update
+  type — a major is exactly when they must match); every other npm minor/patch
+  bump is one weekly grouped PR; majors stay separate.
+- `ci.yml` `frontend-static`: on pull requests that change
+  `frontend/package.json` or its lockfile, fetch the pinned CI database, migrate,
+  pre-render, build in static mode, emit route pages, run `test:static`. Other
+  PRs skip every step after the change check. Verified locally on the pinned
+  fixture (43/43) and then on GitHub: 9m33s, 525 files pre-rendered, 43 passed.
+- `tests/unit/test_dependency_policy.py` holds the grouping and the job's shape;
+  mutation-checked six ways. CONTRIBUTING has a "Dependency updates" section.
+
+**How the merge went:** pushing the config made Dependabot supersede the four
+PRs with two grouped ones — #33 (the React group: exactly #29+#30) and #34
+(plotly.js + vite: exactly #31+#32). Both ran the new job green. #34 had been
+generated before #33 merged and was **conflicting**, so it was rebased by
+Dependabot and re-checked on the new head (static 43/43) before merging; a
+textual merge of two lockfile changes was not trusted. Squash-merged as
+`58615eb` and `d83445f`; CI and the Pages publish green on both. **On the live
+demo** (react 19.3.0, plotly.js 4.1.1, vite 8.3.1): NVDA's three figures drew
+the trace types they asked for (candlestick, scatterpolar, scatter) and the
+console had no errors.
+
 ### Point 39 — `./run.sh` did not ship the line that keeps Streamlit alive
 
 Done 2026-10-02. **Reproduced first**, with `run.sh` exactly as shipped (fresh
