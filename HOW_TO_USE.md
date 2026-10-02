@@ -51,7 +51,7 @@ Settings, which are marked below. Your local copy has all seven.
 | **Backtest / Track Record** | Did the ranking actually work? | The historical result of following the **momentum** half of the ranking, with confidence intervals and a benchmark to compare against. The page names its own signal and says plainly why it is not yet the full Buy/Sell rating — five of the seven scoring categories have only weeks of stored history, and ranking a 2023 rebalance by 2026 fundamentals would be look-ahead bias |
 | **Portfolio Manager** *(local only)* | Your own holdings | Enter what you own, see risk, correlation, sector concentration, add/trim/hold/sell suggestions, and three target allocations with a concrete trade list |
 | **Settings** *(local only)* | What's switched on | Which data sources are configured and when each last ran |
-| **Glossary** | Every term explained | 71 definitions in plain English; searchable by concept, not just by name |
+| **Glossary** | Every term explained | 74 definitions in plain English; searchable by concept, not just by name |
 
 **Investor profiles** (on the Screener) re-rank the same companies for a
 different priority: balanced, value, growth, income, momentum, conservative.

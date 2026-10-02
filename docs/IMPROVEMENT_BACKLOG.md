@@ -1,11 +1,15 @@
 # QuantPulse — improvement backlog and session handoff
 
-An 18-point audit was run on **2026-09-03** against the live demo, the committed
-demo database, and the pipeline's own upstream sources. **All eighteen points are fixed and live.**. This file is the handoff: what was done, what is
-left, and the things a new session would otherwise rediscover the hard way.
+An 18-point audit was run on **2026-09-03** against the live demo, the then-committed
+demo database, and the pipeline's own upstream sources. **All eighteen points are
+fixed and live**, and a second audit (points 19–48, §7) followed. This file is
+the handoff: what was done, what is left, and the things a new session would
+otherwise rediscover the hard way.
 
-**State at time of writing:** 1,824 tests, 14 Alembic migrations, CI and Pages
-green, working tree clean.
+**Counts** (tests, tables, migrations, endpoints, pages, glossary terms) live in
+the README's *By the numbers*, and `tests/unit/test_documented_counts.py` derives
+each from the code and fails when a living doc disagrees (finding 38). The dated
+figures in §3 and §7 are history — true on the day they say.
 
 ---
 
@@ -18,8 +22,8 @@ numbers that already exist. Phases 0–12 of `PROJECT_PLAN.md` are complete.
 | | |
 |---|---|
 | Engine | `src/quantpulse/` — ingestion, analysis, storage, read-only API |
-| Front ends | Streamlit (`app/`, 7 pages, the full app) and React+TS (`frontend/`, 5 pages, the public demo) |
-| Database | SQLite, 23 tables, Alembic-migrated. `quantpulse_demo.db` is **committed** |
+| Front ends | Streamlit (`app/`, 7 pages, the full app) and React+TS (`frontend/`, 6 pages, the public demo) |
+| Database | SQLite, 26 tables, Alembic-migrated. `quantpulse_demo.db` is a **release asset** (`demo-data`), rewritten by every refresh; CI reads the pinned `ci-fixture` |
 | Public demo | <https://marlenmm.github.io/quantpulse/> — pre-rendered API JSON + the SPA |
 | Refresh | `.github/workflows/refresh_data.yml`, weekdays 22:00 UTC; Monday carries the weekly branch |
 
@@ -31,9 +35,9 @@ supported.
 ### Commands
 
 ```bash
-uv run pytest                 # 1,824 tests
+uv run pytest                 # the whole suite (count: README)
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src scripts       # pre-commit checks scripts/ too, not just src/
+uv run mypy src scripts app   # pre-commit checks scripts/ and app/ too
 cd frontend && npm run test:e2e     # Playwright, stubbed API from a fixture
 cd frontend && npm run test:static  # Playwright, the real pre-rendered dist/
 ./run.sh                      # the whole app locally, no keys
@@ -397,6 +401,37 @@ never exposed, because the refresh migrates it nightly.
 publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
+
+### Point 38 — the documented counts drift, so they are derived now
+
+Done 2026-10-02. **Recounted from the code** (documented → actual): tests 1,554
+(README) / 1,824 (backlog) → **2,051** collected; tables 23 → **26**; migrations
+12 (ARCHITECTURE) / 13 (README) / 14 (backlog) → **18**; endpoints 14 → **15**
+(all GET under `/api/`); glossary terms 71 → **74**; React pages 5 (ARCHITECTURE,
+backlog) → **6**; engine "~16,700" lines → **21,520**. The backlog's header also
+still called the demo database "committed".
+
+**Fix — a guard, not another edit.** `tests/unit/test_documented_counts.py`
+derives each count (ORM metadata, the migrations directory, the FastAPI routes,
+the page files, the glossary dict, line counts) and checks every mention in the
+living docs — README, ARCHITECTURE, HOW_TO_USE and the backlog's header and §1.
+Each kind names the files it must be found in, so a reworded row fails as "the
+pattern is stale" instead of silently matching nothing. Fast-moving figures are
+lower bounds — "**2,000+** tests", "**21,000+** lines" — checked against the
+hundred/thousand they sit in, and the failure says what to write. The test count
+comes from a `pytest_collection_finish` hook in `tests/conftest.py` that records
+it only for a whole-suite collection (no path, `-k`, `-m` or `--deselect`), so a
+partial run skips that check; CI's bare `uv run pytest` always runs it.
+
+**Not counted:** the Playwright suites. Their tests are generated in loops (the
+static spec has 30 `test(` calls and 43 tests), so a count could only come from
+`playwright test --list`; the README now names the two suites without a number.
+Dated figures in the handoff and in §7 are history and are left alone.
+
+**Mutation-checked six ways:** a wrong table count in ARCHITECTURE, a wrong
+glossary count in HOW_TO_USE, the README row reworded, wrong engine lines, a
+wrong test count (whole-suite run: "README says 2,100+ tests; 2,060 are
+collected: write 2,000+"), and the hook treating a subset as the whole suite.
 
 ### Point 37 — one missing key wrote 503 identical warnings
 

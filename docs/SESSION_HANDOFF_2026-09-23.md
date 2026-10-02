@@ -646,7 +646,15 @@ that lost the database had its real errors in the middle of it.
 **Fix:** check the credential once, before the loop, and skip the step with a
 single line. *(Still present in the 2026-09-21 log.)*
 
-### 38 · The documented counts have drifted again, in several directions (S4)
+### 38 · The documented counts have drifted again, in several directions (S4) — FIXED 2026-10-02
+
+**Status:** recounted from the code (tests 2,051 collected, 26 tables, 18
+migrations, 15 endpoints, 7 + 6 pages, 74 glossary terms, 21,520 engine lines)
+and guarded: `tests/unit/test_documented_counts.py` derives each and checks every
+mention in README, ARCHITECTURE, HOW_TO_USE and the backlog header/§1; tests and
+lines are stated as lower bounds ("2,000+") checked to the hundred/thousand. §4 C
+(backlog header) closed with it. Playwright counts deliberately not documented.
+Backlog §7.
 
 Evidence (as audited): migration files on disk 16 · README says 13 ·
 ARCHITECTURE.md says 12 · backlog says 14.
@@ -773,7 +781,7 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   `isinstance() arg 2 must be a type` in `_coerce_date`. Test-only — production is
   unaffected, and no test asserts on it — but it adds a spurious
   `failed step(s): backtest` to those harness runs.
-- **C.** `docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale (part of 38).
+- **C.** ~~`docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale~~ — closed with 38.
 - **D. (found 2026-10-02 under 37's noise)** PTC's weekly fetch fails
   `insider_transactions: unconverted data remains when parsing with format
   "%Y-%m-%d": "-05:00"` — an EDGAR date carrying a UTC offset. One ticker's
