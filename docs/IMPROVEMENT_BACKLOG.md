@@ -398,6 +398,49 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 37 — one missing key wrote 503 identical warnings
+
+Done 2026-10-02. **Measured on the 2026-09-28 weekly run's log** (shapes counted
+with the symbol stripped): `SYM: short_interest: FINNHUB_API_KEY is not set` ×
+**503**, FRED's `Skipping macro series …: FRED_API_KEY not set` × **6**. Two more
+things were under the noise:
+
+- **One real per-ticker failure** sat in the 503: `PTC: short_interest: … ;
+  insider_transactions: unconverted data remains when parsing with format
+  "%Y-%m-%d": "-05:00"` — an insider date with a UTC offset. Not fixed here; see
+  the handoff's open items.
+- **Every per-ticker error marks the run "partial", and the closing line gave no
+  reason for it.** So with no Finnhub key a weekly run with nothing else wrong
+  would have closed `finished partial (N rows)`. The two recent weekly runs had
+  other reasons on their closing lines, which is why it never showed.
+- **FRED's `except ValueError` meant "the key is not set"** for any `ValueError`,
+  so a malformed response with the key present would have been reported as a
+  configuration problem.
+
+**Fix:** `run()` asks for `FINNHUB_API_KEY` once and logs one line ("Short
+interest is not configured …; skipping it for all N tickers"); `fetch_ticker_data`
+takes `short_interest_configured` and, when false, skips the fetch without
+recording an error. With the key set, a failure is still a per-ticker error.
+`refresh_macro_indicators` asks for `FRED_API_KEY` once — one line naming the six
+series — and every exception from a fetch is then a failure. The closing line now
+names per-ticker failures: "5 ticker(s) with fetch errors (AAA, …; each logged
+above)".
+
+**Tests:** a weekly `run()` with the client raising what it raises without the
+key logs `FINNHUB_API_KEY` exactly once and never calls it; with the key and a
+503, every ticker is still logged and the closing line names them; FRED without a
+key makes no request and one line; a real `ValueError` is a failure. Mutation-
+checked six ways — **one survived first**: dropping ticker errors from the closing
+guard changed nothing, because this harness always closes "partial" for two
+reasons of its own (no `^GSPC`; §4 B's backtest quirk). The test now removes both,
+and the mutation prints the old state exactly: `finished partial (497 rows)`.
+**To confirm from a real log:** the 2026-10-05 weekly run should show one
+Finnhub line and one FRED line.
+
+**Not changed:** 429 `pandas_ta` lines a weekly run ("Series has 121/141/161/181
+rows but indicator requires at least 200", 40 of each) — an SMA-200 asked of
+growing windows inside one step; noise of a different kind, recorded here.
+
 ### Point 36 — a quarterly source was labelled by its age
 
 Done 2026-10-02. The strip printed "Institutional ownership: 185 days ago"
