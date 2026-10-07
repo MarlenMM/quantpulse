@@ -402,6 +402,35 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Finding 47's notes — a partial night alerts now; quieter weekly logs
+
+Done 2026-10-08.
+
+- **A partial night tells someone.** A refresh that closes `partial` is green on
+  purpose, so finding 27's failure notice never fired for it — the 2026-09-28
+  weekly lost a week of sentiment that way. `refresh_data._notify_partial` now
+  posts "QuantPulse: refresh_data finished partial." with each closing-line
+  reason and the run's link (`pipeline.partial_message`), through the digest's
+  webhook and kill switch: unset is one log line, a refusing webhook is logged
+  and does not turn a finished night red. Partial nights are rare since 37, so
+  each is worth a message. **Trap:** the alert harness closed "partial" by itself
+  (no `^GSPC`), so four digest tests suddenly counted two messages; the harness
+  now stubs the benchmark as written by default, and partial-night tests opt in.
+  Mutation-checked three ways.
+- **The pandas_ta noise:** 429 "Series has N rows but indicator requires at
+  least 200" lines a weekly run — the forecasting walk-forward's growing windows
+  (20 names, 121–196 rows) asking for an SMA-200, which both callers turn into
+  NaN on purpose. That library logger emits nothing else; it is set to ERROR in
+  `quantpulse.analysis`.
+- **The classifier's margin** (7.8 s/article on 2026-10-05, ~13 of 90 minutes
+  spare): a deadline stop used to be one log line on a `success` night.
+  `classify_articles` now records `(classified, eligible)` on its result,
+  `process_tier1_news` reports a shortfall, and `run()` turns it into a
+  `degrade()` reason — "tier-1 classified 312 of 500 articles before its
+  deadline…" — so the night closes partial and the notice above goes out. Sentiment
+  is complete either way. Mutation-checked three ways (a full run reported as
+  short, the shortfall never reported, the classifier over-reporting).
+
 ### Handoff item F — a stalled GDELT timeline was stamped as tonight's reading
 
 Found and fixed 2026-10-07, while confirming item A on the 2026-10-05 weekly run.

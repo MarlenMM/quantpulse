@@ -348,6 +348,26 @@ class TestClassificationDeadline:
         assert len(finished_at) == 3
         assert sum(r.event_type is ec.EventType.EARNINGS for r in results) == 24
 
+    def test_the_result_says_how_many_it_reached(self) -> None:
+        """So the run can tell a full classification from one cut short by the
+        deadline (47's margin note) -- the log line alone reached nobody."""
+        clock = {"now": 0.0}
+
+        def _slow(batch, **kwargs):  # type: ignore[no-untyped-def]
+            clock["now"] += 288.0
+            return self._fake(batch)
+
+        with (
+            patch.object(ec, "_load_classifier", return_value=_slow),
+            patch.object(ec.time, "monotonic", lambda: clock["now"]),
+        ):
+            short = ec.classify_articles(self._frame(96), chunk_size=8, deadline=1_000.0)
+        assert (short.attrs["classified"], short.attrs["eligible"]) == (24, 96)
+
+        with patch.object(ec, "_load_classifier", return_value=self._fake):
+            full = ec.classify_articles(self._frame(10), max_classified=4)
+        assert (full.attrs["classified"], full.attrs["eligible"]) == (4, 4)
+
     def test_chunking_alone_classifies_everything(self) -> None:
         """No deadline: chunk boundaries must not drop rows."""
         with patch.object(ec, "_load_classifier", return_value=self._fake):

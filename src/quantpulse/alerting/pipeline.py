@@ -35,6 +35,7 @@ __all__ = [
     "failure_message",
     "is_stale",
     "last_completed_session",
+    "partial_message",
     "sessions_missing",
     "staleness_message",
 ]
@@ -123,6 +124,22 @@ def failure_message(workflow: str, run_url: str, failures: list[str]) -> str:
     else:
         lines.append("No failed job was reported; the run itself is marked failed.")
     lines.append(run_url)
+    return "\n".join(lines)
+
+
+def partial_message(job_name: str, reasons: list[str], run_url: str | None) -> str:
+    """A refresh that finished but finished *partial*: why, and where to read more.
+
+    Finding 47's open note. A partial night is green on purpose -- every step
+    that could run did, and its data was published -- so the failure notice
+    never fires for it. The 2026-09-28 weekly lost a week of sentiment that way,
+    seen only by reading the log. Partial nights are rare since 37 stopped a
+    missing key marking every weekly one, so each is worth a message.
+    """
+    lines = [f"QuantPulse: {job_name} finished partial."]
+    lines += [f"• {reason}" for reason in reasons]
+    if run_url:
+        lines.append(run_url)
     return "\n".join(lines)
 
 

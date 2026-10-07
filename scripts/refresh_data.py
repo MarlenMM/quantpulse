@@ -15,6 +15,7 @@ only add "database is locked" failures without buying any real parallelism.
 import argparse
 import logging
 import math
+import os
 import signal
 import sys
 import threading
@@ -36,6 +37,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from quantpulse.alerting import discord, rules
+from quantpulse.alerting import pipeline as pipeline_alerts
 from quantpulse.analysis import (
     analyst_consensus,
     backtest,
@@ -814,6 +816,7 @@ def _persist_tier1_news(
     today: date,
     *,
     deadline: float | None = None,
+    on_short_classification: Callable[[int, int], None] | None = None,
 ) -> int:
     """Run the (session-free) Tier-1 news models, then persist the results in one session.
 
@@ -822,7 +825,11 @@ def _persist_tier1_news(
     duration of hundreds of classifications.
     """
     sentiment_records, news_records = process_tier1_news(
-        results, universe, today, deadline=deadline
+        results,
+        universe,
+        today,
+        deadline=deadline,
+        on_short_classification=on_short_classification,
     )
     if not sentiment_records and not news_records:
         return 0
@@ -1504,6 +1511,36 @@ def _pooled_hit_rates(frames: dict[str, pd.DataFrame]) -> dict[tuple[str, int], 
     return accuracy
 
 
+def _run_url() -> str | None:
+    """This Actions run's page, from the variables every GitHub job sets."""
+    server = os.environ.get("GITHUB_SERVER_URL")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    run = os.environ.get("GITHUB_RUN_ID")
+    if not (server and repository and run):
+        return None
+    return f"{server}/{repository}/actions/runs/{run}"
+
+
+def _notify_partial(job_name: str, reasons: list[str]) -> None:
+    """Send the partial-run notice; never let it turn a finished night red.
+
+    Same webhook and kill switch as the digest, so an unset webhook is one log
+    line. A refusing webhook is logged rather than raised: the night's data is
+    already written, and the publish that follows should still happen.
+    """
+    settings = get_settings()
+    if not settings.alerting_configured():
+        logger.info(
+            "Alerting is not configured (no webhook URL); not sending the partial-run notice"
+        )
+        return
+    text = pipeline_alerts.partial_message(job_name, reasons, _run_url())
+    try:
+        discord.send(str(settings.alert_discord_webhook_url), text)
+    except Exception:
+        logger.exception("Could not send the partial-run notice")
+
+
 def send_alerts(session: Session, today: date, *, after_pattern_id: int) -> int:
     """Push the night's rating changes and new formations to a webhook (Section 10).
 
@@ -2069,6 +2106,7 @@ def process_tier1_news(
     today: date,
     *,
     deadline: float | None = None,
+    on_short_classification: Callable[[int, int], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Entity-tag, classify, and sentiment-score Tier-1 news into persistable records.
 
@@ -2119,6 +2157,18 @@ def process_tier1_news(
         deadline=deadline,
     )
     articles["event_type"] = classifications.apply(lambda c: c.event_type)
+    # `(classified, eligible)`: fewer means the deadline stopped the classifier
+    # (47's margin note). Sentiment is complete either way; event types past the
+    # cut-off default to "other", which shortens their decay half-life.
+    reached = classifications.attrs.get("classified")
+    allowed = classifications.attrs.get("eligible")
+    if (
+        on_short_classification is not None
+        and reached is not None
+        and allowed is not None
+        and reached < allowed
+    ):
+        on_short_classification(int(reached), int(allowed))
     logger.info(
         "Tier-1 news over %d articles: entity tagging %.0fs, sentiment %.0fs, "
         "classification %.0fs (cap %d).",
@@ -2847,7 +2897,16 @@ def run(
             )
             rows_updated += step(
                 "tier1_news",
-                lambda: _persist_tier1_news(results, universe_df, today, deadline=news_deadline),
+                lambda: _persist_tier1_news(
+                    results,
+                    universe_df,
+                    today,
+                    deadline=news_deadline,
+                    on_short_classification=lambda reached, allowed: degrade(
+                        f"tier-1 classified {reached} of {allowed} articles before its deadline "
+                        "(the rest default to event type 'other'; sentiment is complete)"
+                    ),
+                ),
             )
             tier2_deadline = time.monotonic() + (
                 _STEP_TIMEOUT_SECONDS["tier2_news"] - _NEWS_PERSIST_MARGIN_SECONDS
@@ -2890,6 +2949,8 @@ def run(
                 f"({shown}{f' and {more} more' if more > 0 else ''}; each logged above)"
             )
         logger.warning("%s finished %s -- %s", job_name, status, "; ".join(detail))
+        if status == "partial":
+            _notify_partial(job_name, detail)
     else:
         logger.info("%s finished %s (%d rows)", job_name, status, rows_updated)
 
