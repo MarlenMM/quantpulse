@@ -209,8 +209,7 @@ class TestCoverageIsDescribedHonestly:
         note = market_regime.describe_regime_coverage(row)
         assert note.startswith("All four inputs are live.")
         assert note.endswith(
-            "Macro news tone is the 29 Sep reading, carried forward because none "
-            "arrived for this date."
+            "Macro news tone is the 29 Sep reading, the newest available for this date."
         )
 
     def test_a_same_day_tone_adds_nothing(self) -> None:

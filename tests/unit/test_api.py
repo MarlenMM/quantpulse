@@ -906,8 +906,8 @@ class TestRegimeCoverageReachesTheClient:
             point = next(p for p in c.get("/api/regime").json() if p["date"] == day.isoformat())
         assert point["macro_tone_as_of"] == read_on.isoformat()
         assert point["coverage_note"].endswith(
-            f"Macro news tone is the {read_on.day} {read_on:%b} reading, carried forward "
-            "because none arrived for this date."
+            f"Macro news tone is the {read_on.day} {read_on:%b} reading, the newest "
+            "available for this date."
         )
 
     def test_the_note_is_per_row_not_per_series(self, tmp_path) -> None:
