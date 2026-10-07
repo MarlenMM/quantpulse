@@ -2198,6 +2198,31 @@ def _tier2_baskets_by_staleness(
 _TIER2_WINDOW_DAYS = 7
 
 
+#: How GDELT's `language` field names English. "English" is what the API sends;
+#: the short forms are accepted so a change of format cannot empty every basket.
+_ENGLISH = frozenset({"english", "eng", "en"})
+
+
+def _english_only(articles: pd.DataFrame) -> pd.DataFrame:
+    """GDELT articles in English only -- the language FinBERT and BART read.
+
+    Handoff item E. GDELT's artlist is multilingual: of 3,761 tier-2 rows stored
+    from 2026-09-22, 347 GDELT titles were in Ukrainian, Russian, Serbian,
+    Chinese, Malayalam and other non-Latin scripts, and about 79 more in Spanish,
+    Portuguese, French or Italian -- each scored by an English sentiment model
+    into the industry tilts. The query also asks for `sourcelang:english`; this
+    keeps the guarantee if GDELT ignores it. An empty result falls back to Google
+    News like any empty week.
+    """
+    if articles.empty or "language" not in articles.columns:
+        return articles
+    english = articles["language"].fillna("").astype(str).str.strip().str.lower().isin(_ENGLISH)
+    dropped = int((~english).sum())
+    if dropped:
+        logger.info("Tier-2: dropped %d non-English GDELT article(s)", dropped)
+    return articles[english].reset_index(drop=True)
+
+
 def _google_tier2_articles(basket: "thematic_mapping.ThematicBasket") -> pd.DataFrame:
     """One basket's week of Google News headlines, in the shape the GDELT path yields.
 
@@ -2287,9 +2312,15 @@ def refresh_tier2_news(session: Session, today: date, *, deadline: float | None 
         articles = pd.DataFrame()
         source = "gdelt"
         if not gdelt_refused:
-            query = "(" + " OR ".join(f'"{keyword}"' for keyword in basket.keywords) + ")"
+            query = (
+                "("
+                + " OR ".join(f'"{keyword}"' for keyword in basket.keywords)
+                + ") sourcelang:english"
+            )
             try:
-                articles = gdelt_client.fetch_articles(query, timespan=f"{_TIER2_WINDOW_DAYS}d")
+                articles = _english_only(
+                    gdelt_client.fetch_articles(query, timespan=f"{_TIER2_WINDOW_DAYS}d")
+                )
             except Exception:
                 gdelt_refused = True
                 logger.warning(

@@ -820,15 +820,15 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   subclass; a test runs the weekly branch and requires the backtest not to fail
   (mutation: the MagicMock clock back → fails).
 - **C.** ~~`docs/IMPROVEMENT_BACKLOG.md`'s header statistics are stale~~ — closed with 38.
-- **E. (found 2026-10-02 on the hosted Dashboard) Non-English tier-2 headlines.**
-  The Google News fallback (finding 23) returns articles in other languages:
-  "Market-moving stories" showed Hindi, Vietnamese and Chinese titles, and at
-  least 232 of 2,247 tier-2 articles since 2026-09-22 (~10%; counting only
-  Devanagari, CJK and Vietnamese script) are non-English. FinBERT is an English
-  model, so their sentiment feeds industry tilts as noise. Not fixed. The RSS
-  query **already** sends `hl=en-US&gl=US&ceid=US:en` (`news_client.py`), so the
-  fix is a language filter on what comes back (or on the source domain) — measure
-  which articles get through, and how many each basket keeps, first.
+- **E. Non-English tier-2 headlines — FIXED 2026-10-07.** Re-measured: the 2026-10-02
+  note blamed the Google News fallback, wrongly. Of 3,761 tier-2 rows since
+  2026-09-22, 347 GDELT titles were in non-Latin scripts and ~79 more in
+  Spanish/Portuguese/French/Italian; Google News contributed none (its 7
+  non-ASCII titles are English headlines with a foreign publisher name). GDELT
+  responses cached locally: 471 English vs ~50% other languages. Now the GDELT
+  query asks `sourcelang:english` and `refresh_data._english_only` keeps only rows
+  GDELT labels "English" (an all-foreign basket falls back to Google News).
+  Rows already stored age out of the 21-day window by ~2026-10-27.
 - **D. (found 2026-10-02 under 37's noise) — FIXED 2026-10-02.** PTC's weekly fetch
   failed `insider_transactions: unconverted data remains … "-05:00"`: Form 4
   dates are XML Schema dates and may carry an offset; pandas inferred the format

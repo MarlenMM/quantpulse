@@ -402,6 +402,27 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Handoff item E — tier-2 news scored foreign-language headlines with an English model
+
+Done 2026-10-07. **Re-measured, and the first diagnosis was wrong:** the
+2026-10-02 handoff blamed the Google News fallback. In the published database, of
+3,761 tier-2 rows since 2026-09-22, **347 GDELT titles** were in non-Latin
+scripts (Ukrainian, Russian, Serbian, Chinese, Malayalam…) and about 79 more in
+Spanish, Portuguese, French or Italian; Google News contributed none — its 7
+non-ASCII titles were English headlines with a foreign publisher name appended.
+GDELT responses cached on the development machine show the label format and the
+scale: 471 "English" against 63 Chinese, 59 German, 59 Spanish, 37 Korean…
+FinBERT is English-only, so each one fed noise into the industry tilts.
+
+**Fix:** the GDELT tier-2 query adds `sourcelang:english` (the record budget goes
+to English), and `refresh_data._english_only` keeps only rows GDELT labels
+English in case the operator is ignored; a basket left empty falls back to Google
+News like any empty week. Tests: mixed languages → only the English row is
+scored and stored, the query asks for English, an all-foreign basket falls back.
+Mutation-checked three ways. **Not done:** rows already stored stay in
+`read_tier2_news`'s 21-day window until about 2026-10-27 (they carry no language
+column to filter on at read time).
+
 ### Handoff item A — the regime's macro tone: retry, then carry forward
 
 Done 2026-10-02; the owner chose **retry, then carry forward** over replacing the

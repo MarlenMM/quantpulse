@@ -881,6 +881,55 @@ class TestTier2SourceFallback:
         session.flush()
         return rows, gdelt_fetch, google_fetch, scored
 
+    # Handoff item E: GDELT's artlist is multilingual. Of 3,761 tier-2 rows stored
+    # from 2026-09-22, 347 GDELT titles were in non-Latin scripts (Ukrainian,
+    # Russian, Serbian, Chinese, Malayalam...) and ~79 more in Spanish, Portuguese,
+    # French or Italian -- all scored by FinBERT, an English model, into the
+    # industry tilts.
+
+    @staticmethod
+    def _mixed_gdelt() -> pd.DataFrame:
+        def row(title: str, url: str, language: str) -> dict[str, Any]:
+            return {
+                "title": title,
+                "url": url,
+                "domain": "ex.com",
+                "published_at": pd.Timestamp(date(2026, 9, 15)),
+                "source_country": "",
+                "language": language,
+                "query": "q",
+            }
+
+        return pd.DataFrame(
+            [
+                row("Chipmakers lift guidance on AI demand", "https://ex.com/en", "English"),
+                row("Країни G7 мобілізують допомогу Україні", "https://ex.com/uk", "Ukrainian"),
+                row("特朗普7月狂做1156笔交易", "https://ex.com/zh", "Chinese"),
+                row("Venezuela afianza alianzas con África", "https://ex.com/es", "Spanish"),
+            ]
+        )
+
+    def test_only_english_gdelt_articles_are_scored_or_stored(self, session: Session) -> None:
+        from quantpulse.storage.models import NewsEvent
+
+        _, gdelt_fetch, google_fetch, scored = self._run(
+            session, gdelt={"return_value": self._mixed_gdelt()}
+        )
+
+        titles = {title for frame in scored for title in frame["title"]}
+        assert titles == {"Chipmakers lift guidance on AI demand"}, titles
+        stored = {e.title for e in session.scalars(select(NewsEvent).where(NewsEvent.tier == 2))}
+        assert stored == {"Chipmakers lift guidance on AI demand"}
+        google_fetch.assert_not_called()
+        # And GDELT is asked for English, so its record budget is spent on it.
+        assert all("sourcelang:english" in c.args[0] for c in gdelt_fetch.call_args_list)
+
+    def test_a_basket_with_nothing_in_english_asks_the_fallback(self, session: Session) -> None:
+        non_english = self._mixed_gdelt().iloc[1:]
+        rows, _, google_fetch, _ = self._run(session, gdelt={"return_value": non_english})
+        assert google_fetch.call_count >= 1
+        assert rows == 1  # the Google News fixture article
+
     def test_once_gdelt_refuses_it_is_not_asked_again_this_run(self, session: Session) -> None:
         """Each refusal cost about a minute of 429 backoff on the runner, per basket
         -- asking again seventeen times is the budget going nowhere."""
