@@ -19,6 +19,17 @@ build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) 
 wins — verified after a reboot, together with point 44 on a cold deep link. The host
 swaps pyarrow 25.0.0 → 24.0.0 by itself.
 
+**Continued 2026-10-07, later** (HEAD `46b684d` + this record; **2,091 passed /
+1 skipped**). The rest of the open list, fixed: pandas_ta noise (`79712b0`),
+stored non-English GDELT rows kept out of the tilt (`162b400`, langdetect,
+self-retiring ~2026-10-28), partial nights alert and a deadline-cut
+classification counts as partial (`5ce74a1`), and **49** found and fixed
+(`46b684d`) — with 48 and 49 verified together on a real Streamlit server.
+**Still pending:** A/F live confirmation (next nightly's macro-tone lines); the
+partial-night notice needs the webhook (28); SEC's Jun–Aug 13F window (404 on
+2026-10-07). **The user's:** 28 — `gh secret list` still only
+`SEC_EDGAR_USER_AGENT`.
+
 **Continued 2026-10-07** (HEAD after this commit; **2,078 passed / 1 skipped**).
 **Confirmed on the 2026-10-05 weekly run** (`37401936825`, closed `success (18125
 rows)` — the first clean weekly in this record): 47 (tier-1 finished in full,
