@@ -29,9 +29,9 @@ one FRED line), A (no refusals that night), 48 (published DB at the new head).
 (probe-image-size via plotly.js, source-map-js via vite) on main and on
 Dependabot's #35 — lockfile fix `2d58fa2`, both browser suites green; **E** fixed
 (`3bb8c22`; the cause was GDELT, not Google News); **F** found and fixed
-(`d5ff6a0`; a stalled tone timeline was stamped as tonight's). **Waiting on the
-user:** merge #35 (vite 8.3.2, rebased, all checks green including
-`frontend-static`); 28's secrets. **Still open:** 47's notes (a partial night
+(`d5ff6a0`; a stalled tone timeline was stamped as tonight's). **#35 merged** on the
+user's OK (vite 8.3.2, `4a475bf`; CI and Pages green; live NVDA charts drew the
+trace types asked for, console clean). **Waiting on the user:** 28's secrets. **Still open:** 47's notes (a partial night
 does not alert — needs the webhook; tier-1 has ~13 min of slack at 7.8 s/article).
 Findings page version 18.
 
