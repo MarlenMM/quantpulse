@@ -52,7 +52,8 @@ def test_a_changed_module_is_dropped_and_reloads_fresh(fake_tree: Path) -> None:
     os.utime(fake_tree / "util.py", (later, later))
 
     dropped, snapshot = code_reload.drop_stale_modules([fake_tree], snapshot)
-    assert dropped == ["fakepkg.util"]
+    # The whole tree, package included (finding 49), not only the changed file.
+    assert dropped == ["fakepkg", "fakepkg.util"]
     import fakepkg.util as reloaded
 
     assert reloaded.VALUE == 2
@@ -61,6 +62,31 @@ def test_a_changed_module_is_dropped_and_reloads_fresh(fake_tree: Path) -> None:
     from fakepkg import util
 
     assert util.VALUE == 2
+
+
+def test_an_unchanged_importer_sees_the_changed_module(fake_tree: Path) -> None:
+    """Finding 49, found verifying 48 on a real server. Dropping only the changed
+    file left `lib.data` -- unchanged -- holding the *old* `persistence` it had
+    imported, so a push that changed only engine modules was served stale until
+    a reboot: the new reader never ran, and its migration was never needed."""
+    (fake_tree / "user.py").write_text(
+        "from fakepkg import util\n\ndef value():\n    return util.VALUE\n"
+    )
+    import fakepkg.user
+
+    from lib import code_reload
+
+    snapshot = code_reload.snapshot([fake_tree])
+    assert fakepkg.user.value() == 1
+
+    (fake_tree / "util.py").write_text("VALUE = 2\n")
+    later = time.time() + 5
+    os.utime(fake_tree / "util.py", (later, later))
+    code_reload.drop_stale_modules([fake_tree], snapshot)
+
+    import fakepkg.user as reimported
+
+    assert reimported.value() == 2
 
 
 def test_nothing_changed_nothing_dropped(fake_tree: Path) -> None:
@@ -84,7 +110,7 @@ def test_the_first_call_records_and_later_calls_compare(monkeypatch, fake_tree: 
     assert code_reload.refresh_changed_code() == []
     later = time.time() + 5
     os.utime(fake_tree / "util.py", (later, later))
-    assert code_reload.refresh_changed_code() == ["fakepkg.util"]
+    assert code_reload.refresh_changed_code() == ["fakepkg", "fakepkg.util"]
     assert code_reload.refresh_changed_code() == []
 
 

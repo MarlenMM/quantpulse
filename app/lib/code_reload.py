@@ -52,7 +52,17 @@ def snapshot(roots: Iterable[Path]) -> Snapshot:
 
 
 def drop_stale_modules(roots: Iterable[Path], before: Snapshot) -> tuple[list[str], Snapshot]:
-    """Drop loaded modules whose source changed since `before`. Returns (names, new snapshot)."""
+    """If any source under `roots` changed since `before`, drop every loaded module there.
+
+    Every one, not only the changed files (finding 49). A module that did not
+    change still holds the objects it imported: `lib.data` kept the *old*
+    `persistence` after a push that changed only engine modules, so the pushed
+    reader never ran -- served stale until a reboot, found by running 48's
+    migration check on a real server. Re-importing the whole tree once per push
+    costs a page load a little time; serving half-old code costs correctness.
+
+    Returns (names dropped, new snapshot).
+    """
     roots = [Path(r).resolve() for r in roots]
     now = snapshot(roots)
     changed = {path for path, mtime in now.items() if before.get(path) != mtime}
@@ -61,7 +71,7 @@ def drop_stale_modules(roots: Iterable[Path], before: Snapshot) -> tuple[list[st
     dropped: list[str] = []
     for name, module in list(sys.modules.items()):
         source = getattr(module, "__file__", None)
-        if not source or str(Path(source).resolve()) not in changed:
+        if not source or not any(Path(source).resolve().is_relative_to(r) for r in roots):
             continue
         if name == __name__:
             continue
@@ -78,7 +88,7 @@ _last: Snapshot | None = None
 
 
 def refresh_changed_code() -> list[str]:
-    """Drop any repository module whose source changed since the last call. Returns their names."""
+    """Drop the repository's modules if any source changed since the last call. Returns names."""
     global _last
     if _last is None:
         _last = snapshot(ROOTS)
