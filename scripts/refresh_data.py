@@ -1225,7 +1225,7 @@ def refresh_composite_scores(session: Session, universe: pd.DataFrame, today: da
         else {}
     )
     sentiment_by_symbol = persistence.read_latest_sentiment(session, as_of=today)
-    tier2_news = persistence.read_tier2_news(session, as_of=today)
+    tier2_news = _drop_stored_foreign_gdelt(persistence.read_tier2_news(session, as_of=today))
     theme_members = persistence.read_theme_members(session)
     regime_score = persistence.read_latest_regime_score(session, as_of=today)
 
@@ -2235,6 +2235,46 @@ def _english_only(articles: pd.DataFrame) -> pd.DataFrame:
     if dropped:
         logger.info("Tier-2: dropped %d non-English GDELT article(s)", dropped)
     return articles[english].reset_index(drop=True)
+
+
+#: The day tier-2 ingestion began keeping only English GDELT articles (item E).
+_GDELT_ENGLISH_ONLY_FROM = datetime(2026, 10, 7)
+
+
+def _drop_stored_foreign_gdelt(tier2: pd.DataFrame) -> pd.DataFrame:
+    """Drop GDELT rows stored before `_GDELT_ENGLISH_ONLY_FROM` that are not English.
+
+    Item E's leftovers. Rows ingested before the filter stay in the tilt's 21-day
+    window, and nothing stored says their language, so a detector decides:
+    measured on 1,232 stored GDELT titles it called 584 English, and a hand-made
+    script-and-stopword test leaked Polish, Czech, Slovak, Turkish and Croatian.
+    Only GDELT rows: Google News rows are English by construction and the
+    detector misjudged 61 of 3,894 of their headlines. A stop-gap that retires
+    itself -- from about 2026-10-28 no pre-filter row is inside the window --
+    and is safe to delete then.
+    """
+    if tier2.empty or "source" not in tier2.columns:
+        return tier2
+    published = pd.to_datetime(tier2["published_at"])
+    suspect = (tier2["source"] == "gdelt") & (published < _GDELT_ENGLISH_ONLY_FROM)
+    if not suspect.any():
+        return tier2
+
+    from langdetect import DetectorFactory, LangDetectException, detect
+
+    DetectorFactory.seed = 0  # langdetect is randomised; the run must be repeatable
+
+    def english(title: Any) -> bool:
+        try:
+            return bool(detect(str(title)) == "en")
+        except LangDetectException:
+            return False
+
+    keep = ~suspect | tier2["title"].map(english)
+    dropped = int((~keep).sum())
+    if dropped:
+        logger.info("Industry tilt: left out %d stored non-English GDELT article(s)", dropped)
+    return tier2[keep].reset_index(drop=True)
 
 
 def _google_tier2_articles(basket: "thematic_mapping.ThematicBasket") -> pd.DataFrame:

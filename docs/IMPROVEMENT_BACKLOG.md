@@ -437,9 +437,19 @@ to English), and `refresh_data._english_only` keeps only rows GDELT labels
 English in case the operator is ignored; a basket left empty falls back to Google
 News like any empty week. Tests: mixed languages → only the English row is
 scored and stored, the query asks for English, an all-foreign basket falls back.
-Mutation-checked three ways. **Not done:** rows already stored stay in
-`read_tier2_news`'s 21-day window until about 2026-10-27 (they carry no language
-column to filter on at read time).
+Mutation-checked three ways.
+
+**The leftovers, 2026-10-08:** rows stored before the fix stay in the tilt's
+21-day window until about 2026-10-28, and nothing stored says their language. A
+hand-made script-and-stopword test was measured on the 1,232 stored GDELT titles
+and leaked Polish, Czech, Slovak, Turkish and Croatian, so `langdetect` (seeded,
+refresh-only; the hosted app never imports it) decides, for **GDELT rows
+published before 2026-10-07 only** — it called 584 of those English, and it
+misjudged 61 of 3,894 Google News headlines, which are English by construction.
+`refresh_data._drop_stored_foreign_gdelt` applies it where the composite reads
+tier-2; it retires itself once no pre-fix row is in the window and can be
+deleted then. The Dashboard's 3-day news panel clears on its own. Caller-level
+test plus three mutations.
 
 ### Handoff item A — the regime's macro tone: retry, then carry forward
 
