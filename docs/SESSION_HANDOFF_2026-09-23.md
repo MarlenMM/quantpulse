@@ -19,6 +19,22 @@ build used `uv.lock` (full ML stack); `app/requirements.txt` (commit `0da641c`) 
 wins — verified after a reboot, together with point 44 on a cold deep link. The host
 swaps pyarrow 25.0.0 → 24.0.0 by itself.
 
+**Continued 2026-10-07** (HEAD after this commit; **2,078 passed / 1 skipped**).
+**Confirmed on the 2026-10-05 weekly run** (`37401936825`, closed `success (18125
+rows)` — the first clean weekly in this record): 47 (tier-1 finished in full,
+500 articles at 7.8 s, ~77 of 90 min; sentiment dated 2026-10-05), 36 (live strip:
+"Q1 2026 filings — the newest SEC publishes (checked 5 Oct)"), 37 (one Finnhub,
+one FRED line), A (no refusals that night), 48 (published DB at the new head).
+**Done today:** `npm audit` began failing on two new high advisories
+(probe-image-size via plotly.js, source-map-js via vite) on main and on
+Dependabot's #35 — lockfile fix `2d58fa2`, both browser suites green; **E** fixed
+(`3bb8c22`; the cause was GDELT, not Google News); **F** found and fixed
+(`d5ff6a0`; a stalled tone timeline was stamped as tonight's). **Waiting on the
+user:** merge #35 (vite 8.3.2, rebased, all checks green including
+`frontend-static`); 28's secrets. **Still open:** 47's notes (a partial night
+does not alert — needs the webhook; tier-1 has ~13 min of slack at 7.8 s/article).
+Findings page version 18.
+
 **Continued 2026-10-02** (HEAD `5c7c9b4`, **2,074 passed / 1 skipped**; e2e 16,
 static 43; CI and Pages green). Pipeline: the 2026-10-02 run succeeded; secrets
 unchanged (only `SEC_EDGAR_USER_AGENT`). **All of 36–40 done**, plus **47** (found
