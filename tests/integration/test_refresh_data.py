@@ -3823,8 +3823,8 @@ class TestMacroToneRetriesThenCarriesForward:
         return requests.exceptions.HTTPError("429 Client Error: Too Many Requests")
 
     @staticmethod
-    def _tone(value: float) -> pd.DataFrame:
-        return pd.DataFrame([{"date": date(2026, 10, 1), "tone": value, "query": "q"}])
+    def _tone(value: float, day: date = date(2026, 10, 1)) -> pd.DataFrame:
+        return pd.DataFrame([{"date": day, "tone": value, "query": "q"}])
 
     def _run(self, session: Session, outcomes: list) -> tuple[Any, list[float]]:
         from quantpulse.storage.models import MarketRegime
@@ -3851,6 +3851,20 @@ class TestMacroToneRetriesThenCarriesForward:
         assert row.macro_news_tone == 1.5
         assert row.macro_tone_as_of == self.TODAY
         assert waits == list(refresh_data._MACRO_TONE_RETRY_WAITS)
+
+    def test_a_stalled_timeline_is_dated_by_its_last_point(self, session: Session) -> None:
+        """Item F: the stored tone for 2026-10-02 and 2026-10-05 was the same value,
+        -0.8164 -- GDELT's timeline had not moved, and the run stamped a 2 Oct
+        reading as read on 5 Oct. The reading is dated by the timeline's last
+        point, so the sentence says so and the three-session limit applies."""
+        row, _ = self._run(session, [self._tone(-0.8164, date(2026, 9, 29))])
+        assert row.macro_news_tone == -0.8164
+        assert row.macro_tone_as_of == date(2026, 9, 29)
+
+    def test_a_timeline_stalled_past_three_sessions_is_not_used(self, session: Session) -> None:
+        row, _ = self._run(session, [self._tone(-0.8164, date(2026, 9, 25))])
+        assert row.macro_news_tone is None
+        assert row.macro_tone_as_of is None
 
     def test_refused_three_times_carries_a_recent_reading_with_its_date(
         self, session: Session

@@ -829,6 +829,10 @@ not alert (27 alerts on failed jobs only); the classifier's slowdown 3.1 → 5.0
   query asks `sourcelang:english` and `refresh_data._english_only` keeps only rows
   GDELT labels "English" (an all-foreign basket falls back to Google News).
   Rows already stored age out of the 21-day window by ~2026-10-27.
+- **F. (found 2026-10-07) A stalled GDELT timeline was stamped as tonight's — FIXED.**
+  10-02 and 10-05 stored the same tone; 16–18 Sep one value three times. The
+  reading is now dated by the timeline's last point and must be ≤ 3 sessions old
+  (the A rule). Backlog §7.
 - **D. (found 2026-10-02 under 37's noise) — FIXED 2026-10-02.** PTC's weekly fetch
   failed `insider_transactions: unconverted data remains … "-05:00"`: Form 4
   dates are XML Schema dates and may carry an offset; pandas inferred the format

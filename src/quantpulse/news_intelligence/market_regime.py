@@ -265,8 +265,8 @@ def describe_regime_coverage(row: "dict[str, object] | pd.Series") -> str:
     carried = _carried_tone_date(row)
     if carried is not None:
         sentence += (
-            f" Macro news tone is the {carried.day} {carried:%b} reading, carried forward "
-            f"because none arrived for this date."
+            f" Macro news tone is the {carried.day} {carried:%b} reading, the newest "
+            f"available for this date."
         )
     return sentence
 

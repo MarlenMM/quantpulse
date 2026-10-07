@@ -1049,8 +1049,16 @@ _MACRO_TONE_RETRY_WAITS: tuple[float, ...] = (30.0, 90.0)
 _MACRO_TONE_CARRY_SESSIONS = 3
 
 
-def _macro_news_tone(today: date) -> float | None:
-    """Latest GDELT macro-tone reading for the Market Regime Index's Tier-3 input."""
+def _macro_news_tone(today: date) -> tuple[float, date] | None:
+    """Latest GDELT macro-tone reading for the Market Regime Index's Tier-3 input,
+    with the day it is about: the timeline's last point.
+
+    That point is normally the previous complete UTC day -- the trading day the
+    nightly is scoring. But the timeline can stall: the stored tone for
+    2026-10-02 and 2026-10-05 was the same -0.8164, and 16-18 Sep repeated one
+    value three times. Dating a reading by the run rather than by its point
+    presented a stale number as tonight's (item F).
+    """
     tone_df = None
     attempts = 1 + len(_MACRO_TONE_RETRY_WAITS)
     for attempt in range(1, attempts + 1):
@@ -1073,8 +1081,10 @@ def _macro_news_tone(today: date) -> float | None:
             time.sleep(wait)
     if tone_df is None or tone_df.empty:
         return None
-    latest = tone_df.sort_values("date").iloc[-1]
-    return float(latest["tone"]) if pd.notna(latest["tone"]) else None
+    latest = tone_df.sort_values("date", kind="stable").iloc[-1]
+    if pd.isna(latest["tone"]):
+        return None
+    return float(latest["tone"]), pd.Timestamp(latest["date"]).date()
 
 
 def _macro_tone_for(session: Session, today: date) -> tuple[float | None, date | None]:
@@ -1084,23 +1094,27 @@ def _macro_tone_for(session: Session, today: date) -> tuple[float | None, date |
     `_MACRO_TONE_CARRY_SESSIONS` by being carried again; the coverage sentence
     names that date on both front ends.
     """
-    tone = _macro_news_tone(today)
-    if tone is not None:
-        return tone, today
-    stored = persistence.read_latest_macro_tone(session, before=today)
-    if stored is None:
-        return None, None
-    value, read_on = stored
+    fetched = _macro_news_tone(today)
+    if fetched is not None:
+        value, read_on = fetched
+        if read_on < today:
+            logger.info("GDELT's macro-tone timeline ends on %s, not today", read_on)
+    else:
+        stored = persistence.read_latest_macro_tone(session, before=today)
+        if stored is None:
+            return None, None
+        value, read_on = stored
+        logger.info("No macro tone tonight; the newest stored reading is from %s", read_on)
     sessions_since = len(trading_days_between(read_on + timedelta(days=1), today))
     if sessions_since > _MACRO_TONE_CARRY_SESSIONS:
         logger.info(
-            "No macro tone tonight; the newest (%s) is %d sessions old, past the %d allowed",
+            "The newest macro tone (%s) is %d sessions old, past the %d allowed; "
+            "scoring the regime without it",
             read_on,
             sessions_since,
             _MACRO_TONE_CARRY_SESSIONS,
         )
         return None, None
-    logger.info("No macro tone tonight; carrying the %s reading forward", read_on)
     return value, read_on
 
 

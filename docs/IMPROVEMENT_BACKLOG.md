@@ -402,6 +402,24 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Handoff item F — a stalled GDELT timeline was stamped as tonight's reading
+
+Found and fixed 2026-10-07, while confirming item A on the 2026-10-05 weekly run.
+The stored tone for 2026-10-02 and 2026-10-05 was the same −0.8164; 16–18 Sep
+repeated one value three times (27 stored tones, 24 distinct). Not a cache: the
+tone cache is a 6-hour file on an ephemeral runner. A real timeline response
+(cached locally 2026-08-06) ends on the previous complete UTC day — normally the
+trading day being scored — so a repeat means GDELT's timeline had not moved, and
+`_macro_news_tone` took its last point without reading the point's date.
+
+**Fix, under the A decision:** the reading is dated by the timeline's last point
+(`macro_tone_as_of`), and fresh and stored readings share one rule — at most three
+NYSE sessions old, else the regime is scored without it. The coverage sentence
+now reads "…the 29 Sep reading, the newest available for this date", true for a
+refusal and a stall alike. Tests: a timeline ending three days back is dated by
+its point; one ending five sessions back is not used. Live confirmation still
+pending: GDELT refused every request from this machine on 2026-10-07 (3 of 3).
+
 ### Handoff item E — tier-2 news scored foreign-language headlines with an English model
 
 Done 2026-10-07. **Re-measured, and the first diagnosis was wrong:** the
@@ -440,7 +458,8 @@ roughly four nights in ten: tone on 22 of 36 regime days since August, missing o
   it was **read** — `market_regime.macro_tone_as_of` (migration `f315ae05e3f3`) —
   so a carried value cannot be carried again past the limit.
 - `describe_regime_coverage` names it on both front ends: "Macro news tone is the
-  29 Sep reading, carried forward because none arrived for this date."
+  29 Sep reading, the newest available for this date." (Reworded with item F,
+  where the old reading came from a stalled timeline rather than a refusal.)
 - **Trap:** `Mapped[date | None]` inside `MarketRegime` (and the Pydantic
   `RegimePoint`) resolved `date` to the class's own `date` column/field, which
   `alembic check` showed as a NOT NULL column. Both modules now use a `_Day`
