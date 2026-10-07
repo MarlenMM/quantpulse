@@ -505,13 +505,21 @@ def read_tier2_news(session: Session, *, as_of: date, lookback_days: int = 21) -
     """
     start = datetime.combine(as_of - timedelta(days=lookback_days), time.min)
     end = datetime.combine(as_of, time.max)
-    stmt = select(NewsEvent.matched_theme, NewsEvent.sentiment_score).where(
+    stmt = select(
+        NewsEvent.matched_theme,
+        NewsEvent.sentiment_score,
+        NewsEvent.title,
+        NewsEvent.source,
+        NewsEvent.published_at,
+    ).where(
         NewsEvent.tier == 2,
         NewsEvent.published_at >= start,
         NewsEvent.published_at <= end,
     )
     rows = session.execute(stmt).all()
-    return pd.DataFrame(rows, columns=["matched_theme", "sentiment_score"])
+    return pd.DataFrame(
+        rows, columns=["matched_theme", "sentiment_score", "title", "source", "published_at"]
+    )
 
 
 def read_theme_members(session: Session) -> dict[str, set[str]]:

@@ -339,3 +339,74 @@ class TestSection23ProfileTiltsAreActuallyApplied:
         refresh_data.refresh_composite_scores(session, self._seed(session), AS_OF)
         session.flush()
         assert self._stored(session, "growth") == {}
+
+
+def test_stored_foreign_gdelt_rows_do_not_reach_the_industry_tilt(session: Session) -> None:
+    """Handoff item E's leftovers. Ingestion keeps only English GDELT articles
+    from 2026-10-07, but rows stored before that stay in the tilt's 21-day window.
+    The composite drops the ones a language detector says are not English --
+    GDELT's only: Google News rows are English by construction, and the detector
+    misjudges about 1.6% of their headlines (measured on 3,894)."""
+    from unittest.mock import patch
+
+    universe = _seed_universe(session)
+
+    def news(article_id: str, title: str, source: str) -> NewsEvent:
+        return NewsEvent(
+            article_id=article_id,
+            tier=2,
+            title=title,
+            published_at=datetime.combine(AS_OF - timedelta(days=2), datetime.min.time()),
+            matched_symbols=[],
+            matched_theme="semiconductors",
+            event_type="other",
+            sentiment_score=0.5,
+            source=source,
+            source_url=f"https://ex.com/{article_id}",
+        )
+
+    session.add_all(
+        [
+            news(
+                "de",
+                "Kupferpreis nah am Rekord : Diese Zoll - Entscheidung "
+                "könnte den Kupfermarkt sprengen",
+                "gdelt",
+            ),
+            news("en", "Shipping Stocks Eclipse Chips in Asia as Freight Rates Jump", "gdelt"),
+            news("gn", "Mr. Bean Goes Solar - Forbes", "google_news"),
+        ]
+    )
+    session.flush()
+
+    seen: list[pd.DataFrame] = []
+    real = scoring.tier2_thematic_tilt
+
+    def spy(symbol: str, events: pd.DataFrame, members: dict) -> float | None:
+        seen.append(events)
+        return real(symbol, events, members)
+
+    with patch("refresh_data.scoring.tier2_thematic_tilt", side_effect=spy):
+        refresh_data.refresh_composite_scores(session, universe, AS_OF)
+
+    assert seen, "the composite never asked for an industry tilt"
+    titles = set(seen[0]["title"])
+    assert titles == {
+        "Shipping Stocks Eclipse Chips in Asia as Freight Rates Jump",
+        "Mr. Bean Goes Solar - Forbes",
+    }, titles
+
+
+def test_rows_ingested_after_the_filter_are_left_to_it() -> None:
+    """From 2026-10-07 the language is checked at ingestion by GDELT's own label;
+    the detector is not asked again, so the stop-gap retires itself."""
+    frame = pd.DataFrame(
+        {
+            "title": ["Kupferpreis nah am Rekord"],
+            "source": ["gdelt"],
+            "published_at": [datetime(2026, 10, 8, 9, 0)],
+            "matched_theme": ["semiconductors"],
+            "sentiment_score": [0.1],
+        }
+    )
+    assert len(refresh_data._drop_stored_foreign_gdelt(frame)) == 1
