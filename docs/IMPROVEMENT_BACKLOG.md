@@ -402,6 +402,30 @@ publish workflow still runs the static-site suite against the rolling asset
 before the demo updates, which is precisely what kept the gutted database off
 the public site on both nights it was published.
 
+### Point 49 — after a push, unchanged modules kept serving the old code
+
+Found and fixed 2026-10-08, while verifying 48 on a real server. Point 46's
+`refresh_changed_code` dropped only the modules whose files changed. A module
+that did not change keeps the objects it imported, so `lib.data` went on calling
+the **old** `persistence` after a push that changed only engine modules: the
+pushed reader never ran, the new migration was never needed, and the app served
+half-old code until a reboot — with no error to say so.
+
+**Fix:** when any source under `app/lib` or `src/quantpulse` changed, every
+loaded module there is dropped and re-imported (one re-import per push). Test:
+an unchanged importer sees the changed module (failed `1 == 2` before).
+
+**48 and 49 verified on a real Streamlit server** with a copy of the repository
+and the published database: visit, then "push" a migration adding a
+`market_regime` column plus the model and reader that use it, then visit again
+after `lib.data`'s 5-minute cache TTL.
+
+| configuration | after the push |
+|---|---|
+| 46 only (before 49) | page fine, **database not migrated** — the new code never loaded |
+| 49, with 48 reverted | `OperationalError` — new code, old schema |
+| 48 + 49 | page fine, database at the new revision |
+
 ### Finding 47's notes — a partial night alerts now; quieter weekly logs
 
 Done 2026-10-08.

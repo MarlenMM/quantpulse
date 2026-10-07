@@ -802,6 +802,14 @@ have raised "no such table" on the hosted Dashboard until a reboot. Reproduced
 with `importlib.reload` in a test; the cache key is now the migration file list
 (`demo_data.migration_signature()`). Verify on the host after the 36 push.
 
+### 49 · After a push, unchanged modules kept serving the old code (S1 for the hosted app) — FIXED 2026-10-08
+
+Found verifying 48 on a real server: 46's reload dropped only changed files, so
+`lib.data` kept the old `persistence`. Now the whole tree is re-imported when
+anything changed. 48 and 49 verified together on a real Streamlit server (46
+only: not migrated, new code never ran; 48 reverted: `OperationalError`; both:
+migrated and rendered). Backlog §7.
+
 ### 47 · Tier-1 classification started a chunk it could not finish, and lost a week's sentiment (S1) — FIXED 2026-10-02
 
 Found while measuring 36. Weekly run `36507584930` (2026-09-29 UTC) closed
