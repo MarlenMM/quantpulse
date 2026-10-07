@@ -729,6 +729,45 @@ def test_refresh_market_regime_computes_from_stored_inputs(session: Session) -> 
     assert regime.regime_label in {"risk_on", "neutral", "risk_off"}
 
 
+@pytest.mark.parametrize(("classified", "eligible", "expected"), [(1, 3, [(1, 3)]), (3, 3, [])])
+def test_process_tier1_news_reports_a_short_classification(
+    classified: int, eligible: int, expected: list[tuple[int, int]]
+) -> None:
+    from quantpulse.news_intelligence.event_classifier import EventClassification, EventType
+    from quantpulse.news_intelligence.sentiment import SentimentScore
+
+    as_of = date(2026, 7, 22)
+    universe = pd.DataFrame([{"symbol": "AAPL", "name": "Apple Inc.", "sector": "IT"}])
+    news = pd.DataFrame(
+        [
+            {
+                "title": "Apple earnings",
+                "link": "https://ex.com/a",
+                "summary": "",
+                "published_at": pd.Timestamp(as_of),
+                "source": "yahoo",
+                "symbol": "AAPL",
+            }
+        ]
+    )
+    result = refresh_data.TickerFetchResult(symbol="AAPL", tier1_news_df=news)
+    labels = pd.Series([EventClassification(EventType.EARNINGS, 0.9, {}, 7.0)])
+    labels.attrs.update(classified=classified, eligible=eligible)
+    reported: list[tuple[int, int]] = []
+    with (
+        patch("refresh_data.entity_extraction.tag_articles", return_value=pd.Series([["AAPL"]])),
+        patch("refresh_data.event_classifier.classify_articles", return_value=labels),
+        patch(
+            "refresh_data.sentiment.score_articles",
+            return_value=pd.Series([SentimentScore(0.5, 0.6, 0.1, 0.3)]),
+        ),
+    ):
+        refresh_data.process_tier1_news(
+            [result], universe, as_of, on_short_classification=lambda c, e: reported.append((c, e))
+        )
+    assert reported == expected
+
+
 def test_process_tier1_news_produces_sentiment_and_events() -> None:
     from quantpulse.news_intelligence.event_classifier import EventClassification, EventType
     from quantpulse.news_intelligence.sentiment import SentimentScore
@@ -2677,6 +2716,7 @@ class TestAlerting:
         today: date,
         seed=("hold",),
         short_interest_error: Exception | None = None,
+        benchmark_rows: int = 1,
     ):
         """`run()` with every upstream source mocked and the clock pinned.
 
@@ -2744,6 +2784,11 @@ class TestAlerting:
                 return_value=_empty_df(["date", "tone", "query"]),
             ),
             patch("refresh_data.discord.send", return_value=1) as send,
+            # The universe has no ^GSPC, so the real step writes nothing and the
+            # night closes "partial" -- which, since a partial night sends its own
+            # notice, puts a second message beside every digest these tests
+            # count. A clean night by default; `benchmark_rows=0` for a partial.
+            patch("refresh_data.refresh_benchmark_prices", return_value=benchmark_rows),
         ):
             clock.moment = datetime.combine(today, datetime.min.time())
             self.short_interest = short_interest
@@ -2760,6 +2805,84 @@ class TestAlerting:
                 **overrides,
             },
         )
+
+    # A "partial" night used to tell nobody: the job is green on purpose, and
+    # finding 27's notice fires only for a failed job (47's open note).
+
+    def _partial_run(self, engine: Engine, settings, *, benchmark: int = 0) -> tuple[Any, str]:
+        """`benchmark=0` makes the benchmark step write nothing, which closes the
+        night "partial"; `benchmark=1` is a clean night."""
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GITHUB_SERVER_URL": "https://github.com",
+                    "GITHUB_REPOSITORY": "o/r",
+                    "GITHUB_RUN_ID": "42",
+                },
+            ),
+        ):
+            with self._driven_run(
+                engine, settings=settings, today=date(2026, 7, 22), benchmark_rows=benchmark
+            ) as (send, _):
+                status = refresh_data.run(job_name="test_partial")
+        return send, status
+
+    def test_a_partial_night_sends_its_reasons_and_link(self, engine: Engine) -> None:
+        send, status = self._partial_run(engine, self._settings())
+        assert status == "partial"
+        notices = [c.args[1] for c in send.call_args_list if "finished partial" in c.args[1]]
+        assert len(notices) == 1, [c.args[1][:60] for c in send.call_args_list]
+        assert "step(s) that wrote nothing: benchmark_prices" in notices[0]
+        assert "https://github.com/o/r/actions/runs/42" in notices[0]
+
+    def test_a_clean_night_sends_no_partial_notice(self, engine: Engine) -> None:
+        send, status = self._partial_run(engine, self._settings(), benchmark=1)
+        assert status == "success"
+        assert not [c for c in send.call_args_list if "finished partial" in c.args[1]]
+
+    def test_without_a_webhook_a_partial_night_logs_one_line(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO):
+            send, status = self._partial_run(engine, self._settings(alert_discord_webhook_url=None))
+        assert status == "partial"
+        send.assert_not_called()
+        assert "not sending the partial-run notice" in caplog.text
+
+    def test_a_refusing_webhook_does_not_fail_a_finished_night(self, engine: Engine) -> None:
+        from quantpulse.alerting.discord import WebhookError
+
+        with patch("refresh_data.discord.send", side_effect=WebhookError("refused")):
+            _, status = self._partial_run(engine, self._settings())
+        assert status == "partial"
+
+    def test_a_classification_cut_short_marks_the_night_partial(
+        self, engine: Engine, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """47's margin note: tier-1 had ~13 minutes of slack on 2026-10-05. A night
+        the deadline cuts classification short now says so in the closing line
+        (and so sends the partial-run notice), instead of only a log line."""
+        real = refresh_data._persist_tier1_news
+
+        def short(results, universe, today, *, deadline=None, on_short_classification=None):
+            assert on_short_classification is not None, "run() must pass its degrade hook"
+            on_short_classification(312, 500)
+            return 0
+
+        with (
+            caplog.at_level(logging.INFO),
+            patch("refresh_data._persist_tier1_news", side_effect=short) as persist,
+        ):
+            with self._driven_run(engine, settings=self._settings(), today=self.WEEKLY_DAY):
+                status = refresh_data.run(job_name="test_short", force_weekly=True)
+
+        assert persist.called and real is not None
+        closing = next(
+            r.getMessage() for r in caplog.records if "test_short finished" in r.getMessage()
+        )
+        assert status == "partial"
+        assert "tier-1 classified 312 of 500 articles before its deadline" in closing, closing
 
     def test_the_harness_clock_does_not_break_the_backtest_step(
         self, engine: Engine, caplog: pytest.LogCaptureFixture

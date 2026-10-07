@@ -260,11 +260,11 @@ def classify_articles(
     if max_classified is not None:
         nonempty_positions = nonempty_positions[:max_classified]
     results: list[EventClassification] = [_empty_result()] * len(texts)
+    classified = 0
     if nonempty_positions:
         # Loaded before the loop so a cold weight download is never mistaken
         # for slow inference by the first chunk's deadline check.
         classifier = _load_classifier()
-        classified = 0
         slowest_chunk = 0.0
         for start in range(0, len(nonempty_positions), chunk_size):
             chunk_started = time.monotonic()
@@ -296,4 +296,9 @@ def classify_articles(
             classified += len(chunk)
             slowest_chunk = max(slowest_chunk, time.monotonic() - chunk_started)
 
-    return pd.Series(results, index=articles.index)
+    series = pd.Series(results, index=articles.index)
+    # How far it got, for a caller that must tell a full run from one the deadline
+    # cut short: the warning above reached only the log (finding 47's margin note).
+    series.attrs["classified"] = classified
+    series.attrs["eligible"] = len(nonempty_positions)
+    return series
