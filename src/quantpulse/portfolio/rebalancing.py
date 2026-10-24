@@ -1,6 +1,6 @@
 """Rebalancing trade-list generation -- target allocation to concrete orders (Section 27).
 
-Section 21 rates this row Sonnet/Medium ("arithmetic once a target allocation
+Section 21 rates this row Medium risk ("arithmetic once a target allocation
 exists") -- the hard part (getting to a defensible target allocation at all) is
 `optimization.py`'s job; this module's only job is turning that target, plus
 what the portfolio currently holds, into Section 27's own worked example:

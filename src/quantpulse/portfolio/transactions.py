@@ -1,6 +1,6 @@
 """Transaction log & FIFO tax-lot bookkeeping (Section 30).
 
-Section 21 rates this row Sonnet/Medium ("well-defined accounting logic, but
+Section 21 rates this row Medium risk ("well-defined accounting logic, but
 many small edge cases worth care"). Section 30 is explicit about the design:
 log every buy/sell as its own row and derive current holdings FROM that log,
 never maintain a holdings snapshot as separately-edited state -- so the engine

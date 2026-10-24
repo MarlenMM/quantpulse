@@ -1,6 +1,6 @@
 """Portfolio optimization -- mean-variance, HRP, Black-Litterman (Section 27).
 
-Section 21 marks this row **Opus / High** and names the failure mode exactly:
+Section 21 rates this row **High** risk and names the failure mode exactly:
 "getting the 'views' input, covariance estimation, and constraints wrong
 produces a target allocation that looks precise but is quietly unstable or
 unreasonable." An optimizer always returns weights that sum to 1 and always
@@ -59,7 +59,7 @@ by running the real library rather than by reading its docstrings:
 
 Scope: this row is the optimization *math* -- target weights, nothing else. The
 concrete **rebalancing trade list** ("sell 12 shares of X") is Section 21's own
-separate Sonnet row and is not here; neither is the portfolio bookkeeping that
+separate row and is not here; neither is the portfolio bookkeeping that
 would supply current share counts (Section 30). `kelly_position_fraction` is
 included because Section 27 raises it in this section and it has no Section-21
 row of its own -- leaving it unbuilt is how Section 28's overlay went missing

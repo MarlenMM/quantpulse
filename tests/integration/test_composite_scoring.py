@@ -342,7 +342,7 @@ class TestSection23ProfileTiltsAreActuallyApplied:
 
 
 def test_stored_foreign_gdelt_rows_do_not_reach_the_industry_tilt(session: Session) -> None:
-    """Handoff item E's leftovers. Ingestion keeps only English GDELT articles
+    """Backlog item E's leftovers. Ingestion keeps only English GDELT articles
     from 2026-10-07, but rows stored before that stay in the tilt's 21-day window.
     The composite drops the ones a language detector says are not English --
     GDELT's only: Google News rows are English by construction, and the detector

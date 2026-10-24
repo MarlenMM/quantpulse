@@ -12,7 +12,7 @@ it happens to spell out (Section 7.3). This module owns two things:
    auditable config entry.
 
 2. **The propagation rule.** How a Tier-2 (industry) or Tier-3 (macro) event
-   turns into a per-member score adjustment. Section 21 rates this Opus/High
+   turns into a per-member score adjustment. Section 21 rates this High risk
    precisely because the rule is a judgment call that's easy to get subtly
    wrong -- over- or under-propagating an event's impact. The rule here is
    deliberately conservative and carries three invariants worth stating

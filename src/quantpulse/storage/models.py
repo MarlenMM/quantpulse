@@ -83,7 +83,7 @@ class IndexMembershipHistory(Base):
     """Point-in-time index membership, for survivorship-bias-aware backtests (Section 5, 22).
 
     Table only in Phase 1 — populating it correctly during the cold-start
-    backfill is Phase 1's Opus-owned half of the work.
+    backfill is the harder half of Phase 1's work.
     """
 
     __tablename__ = "index_membership_history"
@@ -161,7 +161,7 @@ class PatternSignal(Base):
     """Detected chart/candlestick patterns (Section 13).
 
     Shared by candlestick detection (Phase 2, native library detectors) and
-    the geometric chart-pattern algorithms (Phase 2's Opus half, e.g.
+    the geometric chart-pattern algorithms (Phase 2's second half, e.g.
     head-and-shoulders) -- both normalize to this same shape.
     """
 
@@ -293,7 +293,7 @@ class MarketRegime(Base):
     macro_news_tone: Mapped[float | None] = mapped_column(Float)
     #: The day `macro_news_tone` was read. Today's date for a fresh reading; an
     #: earlier one when GDELT refused tonight and a reading up to three sessions
-    #: old was carried forward (handoff item A). NULL on rows from before.
+    #: old was carried forward (backlog item A). NULL on rows from before.
     #: `_Day`, not `date`: inside this class `date` is the column above.
     macro_tone_as_of: Mapped[_Day | None] = mapped_column(Date, nullable=True)
     yield_curve_spread: Mapped[float | None] = mapped_column(Float)  # 10Y-2Y, Section 28

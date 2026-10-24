@@ -1,6 +1,6 @@
 """Smart Money Signals: insider + institutional + options + short interest (Section 24).
 
-Combines the four raw ingestion clients from Phase 5's first Sonnet part
+Combines the four raw ingestion clients from the first part of Phase 5
 (`edgar_client.fetch_insider_transactions`, `edgar_13f_client.
 fetch_institutional_ownership_trend`, `options_client.fetch_options_signals`,
 `short_interest_client.fetch_short_interest`) into one per-symbol result,

@@ -1,6 +1,6 @@
 """Risk & portfolio analytics -- volatility, beta, Sharpe/Sortino, VaR, correlation (7.7).
 
-Section 21 marks this row **Opus / High** for one reason: "errors here mislead
+Section 21 rates this row **High** risk for one reason: "errors here mislead
 the user about real risk." Every number in this module is one a reader will act
 on -- a beta that says "this moves with the market," a VaR that says "a bad day
 costs you 2%," a correlation matrix that says "you're diversified." Each of

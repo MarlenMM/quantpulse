@@ -1,6 +1,6 @@
 """Price forecasting models -- baseline, statistical, and ML (Section 7.6).
 
-Section 21 flags forecasting as **Opus / High**: the subtlety here isn't in the
+Section 21 rates forecasting **High** risk: the subtlety here isn't in the
 libraries (statsmodels and scikit-learn do the fitting), it's in the framing.
 Three decisions, made once here, are what keep every downstream number honest:
 
@@ -30,15 +30,15 @@ Three decisions, made once here, are what keep every downstream number honest:
    which actually changes the fitted model.
 
 Scope note (Phase 7 is split across five Section-21 rows, in order): row 1
-(Opus) built the baseline/statistical/ML models above; row 2 (Opus) built the
+built the baseline/statistical/ML models above; row 2 built the
 walk-forward backtest and cost/survivorship-aware strategy engine
 (`analysis/backtest.py`), which also fills each forecast's own
 `historical_hit_rate` and owns persistence to the `forecasts` table (Section
-13); row 3 (Opus) hardened the cold-start backfill's survivorship-coverage
+13); row 3 hardened the cold-start backfill's survivorship-coverage
 reporting and index-reconstitution handling (`scripts/seed_initial_data.py`,
 `scripts/refresh_data.py`) -- unrelated files, not this module.
 
-This row (4, Sonnet -- "well-defined, standard technique") adds the **Monte
+This row (4, Medium risk -- "well-defined, standard technique") adds the **Monte
 Carlo** GBM fan-chart simulation below. It deliberately does *not* produce a
 `Forecast` or feed the backtest/`forecasts`-table pipeline: a GBM path
 calibrated to historical mean/volatility is the exact same random-walk-with-
@@ -47,7 +47,7 @@ it as a fourth competing model would just grade baseline against itself under
 simulation noise. Its actual job is different in *kind* -- a full day-by-day
 percentile path (the "fan chart" Section 7.6 calls "the most honest way to
 visually communicate 'possible price forecast'"), not a single point+band at
-one horizon -- so it gets its own result type. Row 5 (Opus, not yet built)
+one horizon -- so it gets its own result type. Row 5 (built separately)
 adds the bootstrap confidence intervals around the backtest's headline
 Sharpe/CAGR. Every function here is pure: prices in, results out; no storage
 or network.
@@ -821,7 +821,7 @@ def ml_forecast(
     regularized tree ensembles on tabular features match or beat deep sequence
     models, train in seconds, handle NaNs natively, and stay interpretable.
 
-    Leakage discipline (the whole point of Opus/High here):
+    Leakage discipline (why Section 21 rates this High risk):
 
     * The target `y_t = log_close(t + h) - log_close(t)` is built with
       `shift(-h)`, so the final `h` rows have no known target and are excluded

@@ -16,7 +16,7 @@ Two rules keep the guard honest:
   boundary rather than on every commit. The test count is only checked when the
   whole suite was collected -- a `-k` run sees a fraction of it.
 
-The dated records (`docs/SESSION_HANDOFF_*.md`, the backlog's numbered points)
+The dated records (the backlog's numbered points and its dated figures)
 are history and are not checked: "1,895 passed" was true on the day it says.
 """
 

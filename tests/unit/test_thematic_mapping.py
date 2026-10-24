@@ -38,7 +38,7 @@ def test_canonical_plan_examples_still_match_after_keyword_tightening() -> None:
 
 
 def test_broad_off_domain_phrasing_does_not_over_propagate() -> None:
-    # Precision guard (the Opus concern): a bare "export controls" or "capital
+    # Precision guard (the over-propagation risk): a bare "export controls" or "capital
     # requirements" story in an unrelated domain must NOT drag in chip/bank names.
     assert "semiconductors" not in tm.match_themes("US tightens steel export controls on imports")
     assert "banks" not in tm.match_themes(

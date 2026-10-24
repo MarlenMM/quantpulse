@@ -16,7 +16,7 @@ Two pieces, matching the plan's own split:
    headline from three weeks ago shouldn't carry the same weight as one from
    this morning" (Section 7.3 step 4). Exponential decay,
    `weight = 0.5 ** (age_days / half_life_days)`, against the per-event-type
-   half-life the Opus part's `event_classifier.EVENT_HALF_LIFE_DAYS` already
+   half-life the classifier's `event_classifier.EVENT_HALF_LIFE_DAYS` already
    defines -- an earnings surprise (5-day half-life) has faded to background
    noise well before a Fed decision (21-day half-life) has. Aggregating
    several articles for one symbol is then a decay-weighted average, not a

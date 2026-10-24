@@ -1041,7 +1041,7 @@ def refresh_institutional_ownership(session: Session, universe: pd.DataFrame, to
     return written
 
 
-#: Waits before the second and third macro-tone attempts (handoff item A).
+#: Waits before the second and third macro-tone attempts (backlog item A).
 #:
 #: GDELT answered the nightly's one request with HTTP 429 on roughly four nights
 #: in ten -- tone present on 22 of 36 regime days, August to September -- from
@@ -2270,7 +2270,7 @@ _ENGLISH = frozenset({"english", "eng", "en"})
 def _english_only(articles: pd.DataFrame) -> pd.DataFrame:
     """GDELT articles in English only -- the language FinBERT and BART read.
 
-    Handoff item E. GDELT's artlist is multilingual: of 3,761 tier-2 rows stored
+    Backlog item E. GDELT's artlist is multilingual: of 3,761 tier-2 rows stored
     from 2026-09-22, 347 GDELT titles were in Ukrainian, Russian, Serbian,
     Chinese, Malayalam and other non-Latin scripts, and about 79 more in Spanish,
     Portuguese, French or Italian -- each scored by an English sentiment model

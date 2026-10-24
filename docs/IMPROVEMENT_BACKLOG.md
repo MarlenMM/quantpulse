@@ -1,10 +1,10 @@
-# QuantPulse — improvement backlog and session handoff
+# QuantPulse — audit findings and engineering log
 
 An 18-point audit was run on **2026-09-03** against the live demo, the then-committed
 demo database, and the pipeline's own upstream sources. **All eighteen points are
-fixed and live**, and a second audit (points 19–48, §7) followed. This file is
-the handoff: what was done, what is left, and the things a new session would
-otherwise rediscover the hard way.
+fixed and live**, and a second audit (points 19–49 and lettered items A–F, §7)
+followed. This file records what each audit found, how every fix was made and
+verified, and the traps that cost real time along the way.
 
 **Counts** (tests, tables, migrations, endpoints, pages, glossary terms) live in
 the README's *By the numbers*, and `tests/unit/test_documented_counts.py` derives
@@ -209,7 +209,7 @@ Recorded because several of them explain why the code looks the way it does now.
    fetched a Tier-2 article. The 11 GICS sector baskets *are* in
    `thematic_baskets` (503 names covered), so the missing half really is only
    the fetch. **Monday 2026-09-07 22:00 UTC is still the test.**
-2. **Three repo secrets are still unset, and they are the user's to add** —
+2. **Three repo secrets are still unset, and they are the owner's to add** —
    never offer to obtain or enter a key or a webhook URL. `FRED_API_KEY`
    (fred.stlouisfed.org) fills the yield curve and macro series;
    `FINNHUB_API_KEY` (finnhub.io) fills short interest;
@@ -455,7 +455,7 @@ Done 2026-10-08.
   is complete either way. Mutation-checked three ways (a full run reported as
   short, the shortfall never reported, the classifier over-reporting).
 
-### Handoff item F — a stalled GDELT timeline was stamped as tonight's reading
+### Item F — a stalled GDELT timeline was stamped as tonight's reading
 
 Found and fixed 2026-10-07, while confirming item A on the 2026-10-05 weekly run.
 The stored tone for 2026-10-02 and 2026-10-05 was the same −0.8164; 16–18 Sep
@@ -473,10 +473,10 @@ refusal and a stall alike. Tests: a timeline ending three days back is dated by
 its point; one ending five sessions back is not used. Live confirmation still
 pending: GDELT refused every request from this machine on 2026-10-07 (3 of 3).
 
-### Handoff item E — tier-2 news scored foreign-language headlines with an English model
+### Item E — tier-2 news scored foreign-language headlines with an English model
 
 Done 2026-10-07. **Re-measured, and the first diagnosis was wrong:** the
-2026-10-02 handoff blamed the Google News fallback. In the published database, of
+2026-10-02 notes blamed the Google News fallback. In the published database, of
 3,761 tier-2 rows since 2026-09-22, **347 GDELT titles** were in non-Latin
 scripts (Ukrainian, Russian, Serbian, Chinese, Malayalam…) and about 79 more in
 Spanish, Portuguese, French or Italian; Google News contributed none — its 7
@@ -504,7 +504,7 @@ tier-2; it retires itself once no pre-fix row is in the window and can be
 deleted then. The Dashboard's 3-day news panel clears on its own. Caller-level
 test plus three mutations.
 
-### Handoff item A — the regime's macro tone: retry, then carry forward
+### Item A — the regime's macro tone: retry, then carry forward
 
 Done 2026-10-02; the owner chose **retry, then carry forward** over replacing the
 source. **Measured first:** the input is intermittent, not dead — GDELT answers
@@ -535,7 +535,7 @@ no-chaining rule, the sentence and its API round trip; mutation-checked seven
 ways. Finding 38's guard caught this commit's migration count (18 → 19) before
 the docs did.
 
-### Handoff item D — one company's insider filings failed every week
+### Item D — one company's insider filings failed every week
 
 Found 2026-10-02 under finding 37's noise: `PTC: … insider_transactions:
 unconverted data remains when parsing with format "%Y-%m-%d": "-05:00"`. Form 4
@@ -547,7 +547,7 @@ characters. The test's first draft gave every date an offset and passed without
 the fix; only a mix reproduces it. Live check after the fix: PTC 8 rows
 (2026-05-07 → 2026-09-15).
 
-### Handoff item B — the test clock broke the code under test
+### Item B — the test clock broke the code under test
 
 Done 2026-10-02. The refresh harnesses pinned the clock with
 `patch("refresh_data.datetime", wraps=datetime)`, which makes the module's
@@ -655,7 +655,7 @@ partial run skips that check; CI's bare `uv run pytest` always runs it.
 **Not counted:** the Playwright suites. Their tests are generated in loops (the
 static spec has 30 `test(` calls and 43 tests), so a count could only come from
 `playwright test --list`; the README now names the two suites without a number.
-Dated figures in the handoff and in §7 are history and are left alone.
+Dated figures in §3 and §7 are history and are left alone.
 
 **Mutation-checked six ways:** a wrong table count in ARCHITECTURE, a wrong
 glossary count in HOW_TO_USE, the README row reworded, wrong engine lines, a
@@ -672,7 +672,7 @@ things were under the noise:
 - **One real per-ticker failure** sat in the 503: `PTC: short_interest: … ;
   insider_transactions: unconverted data remains when parsing with format
   "%Y-%m-%d": "-05:00"` — an insider date with a UTC offset. Not fixed here; see
-  the handoff's open items.
+  item D below.
 - **Every per-ticker error marks the run "partial", and the closing line gave no
   reason for it.** So with no Finnhub key a weekly run with nothing else wrong
   would have closed `finished partial (N rows)`. The two recent weekly runs had
@@ -957,7 +957,7 @@ charts are labelled figures.
 
 **The palette — the audit missed this, probably because it ran in dark mode.**
 The light `--muted` (#78746a) was 4.39:1 on the page and 4.06 on sunken panels,
-under AA's 4.5. With the user's approval it is **#706c63** (4.93 / 4.56 / 5.23),
+under AA's 4.5. With the owner's approval it is **#706c63** (4.93 / 4.56 / 5.23),
 changed in all four copies (both light blocks, the chart fallback, Streamlit's
 light `grayColor`). Then the rating chips: text on its own 12% tint was Buy
 3.27–3.72, Hold 3.81–4.32, Sell 4.12–4.71 in light, and Strong Sell 3.37–3.80 in
@@ -1255,7 +1255,8 @@ exactly, but gave no source for `FINNHUB_API_KEY` or `FRED_API_KEY`, said the
 webhook unlocked only the data digest (it now carries point 27's notices too),
 and dated its status line 2026-09-06. It now has a *Where to get it* column, the
 unset behaviour of each, the Alpaca key's clock, and today's verified state.
-`tests/unit/test_readme_secrets.py` fails if any secret a workflow reads has no
+`tests/unit/test_readme_secrets.py` (since renamed `test_operations_secrets.py`, with the
+table moved to `docs/OPERATIONS.md`) fails if any secret a workflow reads has no
 row, or a row lacks what it unlocks or where to get it (the pre-fix README fails
 it; two mutations checked).
 
@@ -1398,7 +1399,7 @@ the data, and data moves. Assert that the page shows what the generated file
 says, not what it said the day the test was written.
 
 **An observation, not investigated:** the regime's 76.1 → 55.7 drop coincides
-with the macro-tone input (GDELT, handoff §4 item A) returning after two days
+with the macro-tone input (GDELT, item A) returning after two days
 absent, at −0.57, its most negative reading that week — so part of the move may
 be renormalization over four inputs instead of three rather than the market.
 Not attributed; worth a look alongside item A.

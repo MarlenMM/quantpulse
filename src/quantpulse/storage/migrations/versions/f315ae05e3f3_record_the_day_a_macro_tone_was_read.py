@@ -1,6 +1,6 @@
 """Record the day a market-regime row's macro tone was read
 
-Handoff item A. GDELT refuses the nightly's macro-tone request on roughly four
+Backlog item A. GDELT refuses the nightly's macro-tone request on roughly four
 nights in ten. The owner's call: retry, then carry the newest stored reading
 forward if it is at most three trading sessions old -- which needs the day each
 tone was read, so a carried value cannot be carried again past that limit and

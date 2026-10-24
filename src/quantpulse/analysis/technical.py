@@ -2,7 +2,7 @@
 relative strength, sector rotation, and anomaly detection (Section 7.1).
 
 Geometric chart-pattern detection (head-and-shoulders, triangles, etc.) is a
-separate, harder problem living in `analysis/patterns.py` (Phase 2's Opus half)
+separate, harder problem living in `analysis/patterns.py` (Phase 2's second half)
 -- candlestick patterns here are just normalized output from a library with
 60+ native detectors, no custom geometry.
 

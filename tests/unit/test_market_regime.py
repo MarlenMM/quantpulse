@@ -201,7 +201,7 @@ class TestCoverageIsDescribedHonestly:
         assert "no score to read" in note
 
     def test_a_carried_tone_is_dated(self) -> None:
-        """Handoff item A, the owner's call: a tone up to three sessions old is used
+        """Backlog item A, the owner's call: a tone up to three sessions old is used
         when tonight's is refused -- and the sentence says which day it is from."""
         from datetime import date
 

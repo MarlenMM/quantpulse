@@ -1,6 +1,6 @@
 """Backtest / Track Record — the algorithm's own honest history (Sections 7.6, 10, 12).
 
-Section 20 calls this "your strongest talking point in an interview," and
+Section 20 names this the page to lead with, and
 Section 7.6 is specific about what makes it credible rather than promotional:
 the strategy is compared against a benchmark, costs and a realistic rebalance
 cadence are stated rather than assumed away, and the headline Sharpe/CAGR carry

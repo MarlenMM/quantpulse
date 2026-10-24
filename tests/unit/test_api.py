@@ -882,7 +882,7 @@ class TestRegimeCoverageReachesTheClient:
             break
 
     def test_a_carried_macro_tone_is_dated_in_the_note(self, tmp_path) -> None:
-        """Handoff item A: the reader has to pass `macro_tone_as_of` through, or the
+        """Backlog item A: the reader has to pass `macro_tone_as_of` through, or the
         sentence cannot name the day a carried tone was read."""
         day = TODAY - timedelta(days=2)
         read_on = TODAY - timedelta(days=4)

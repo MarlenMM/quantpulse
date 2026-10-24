@@ -2,8 +2,8 @@
 
 Groups stocks that actually move together, regardless of official GICS
 sector -- e.g. two "different sector" stocks that are secretly both AI-capex
-plays. This is a standard technique on an existing library (Section 21:
-Sonnet/Medium), unlike the geometric chart-pattern work in `patterns.py`.
+plays. This is a standard technique on an existing library (Section 21 rates it
+Medium risk), unlike the geometric chart-pattern work in `patterns.py`.
 """
 
 from typing import Literal

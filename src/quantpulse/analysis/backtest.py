@@ -1,6 +1,6 @@
 """Backtesting engine -- walk-forward, look-ahead- & survivorship-bias-free, cost-aware (7.6).
 
-Section 21 marks this **Opus / Extra**: the single easiest place in the whole
+Section 21 rates this component's risk **Extra**, the highest: the easiest place in the whole
 project to fool yourself with a bug that looks like a great result. A backtest
 that quietly peeks at the future, or quietly runs only against the names that
 survived to today, or quietly ignores what trading actually costs, produces a

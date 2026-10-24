@@ -1,11 +1,8 @@
-# QuantPulse — Full Project Plan
+# QuantPulse — Design Plan
 ### An open-source, zero-cost stock research & portfolio-management engine
 
-> Working name: **QuantPulse**. Other options if you want to rename it: `Alphalytics`, `MarketMind`, `TickerSage`, `Argus Quant`. Everything below uses QuantPulse as a placeholder — a find-and-replace is all it takes to rename.
-
-**Status:** Planning document (no code written yet)
-**Author:** You + Claude
-**Last updated:** July 21, 2026
+**Status:** The original design plan, written on 21 July 2026 before the first commit and kept as the reference the code cites ("Section 21", "ADR 4.5"). Phases 0–12 are complete; the [README](README.md) describes the current system, and where the build went another way the code says so.
+**Author:** Marlen Melis (drafted with Claude)
 
 ---
 
@@ -20,7 +17,7 @@
 7. [The Analysis Engine (the real "brain")](#7-the-analysis-engine-the-real-brain)
 8. [Function 1 — Stock Screener & Recommendation Engine](#8-function-1--stock-screener--recommendation-engine)
 9. [Function 2 — Portfolio Manager](#9-function-2--portfolio-manager)
-10. [Bonus Features You Didn't Ask For (But Should Want)](#10-bonus-features-you-didnt-ask-for-but-should-want)
+10. [Additional Features](#10-additional-features)
 11. [LLM Integration Strategy (free tier only)](#11-llm-integration-strategy-free-tier-only)
 12. [UI/UX Design](#12-uiux-design)
 13. [Database Schema](#13-database-schema)
@@ -30,8 +27,8 @@
 17. [CI/CD & Free Deployment](#17-cicd--free-deployment)
 18. [Security & Secrets](#18-security--secrets)
 19. [Legal, Ethical & Compliance Notes](#19-legal-ethical--compliance-notes)
-20. [How to Present This on GitHub](#20-how-to-present-this-on-github)
-21. [Model & Effort Assignment Per Task](#21-model--effort-assignment-per-task)
+20. [Presentation on GitHub](#20-presentation-on-github)
+21. [Risk & Effort Rating Per Component](#21-risk--effort-rating-per-component)
 22. [Methodological Pitfalls to Avoid](#22-methodological-pitfalls-to-avoid)
 23. [Investor Profiles & Personas](#23-investor-profiles--personas)
 24. [Smart Money Signals (Insiders, Institutions, Options Positioning & Short Interest)](#24-smart-money-signals-insiders-institutions-options-positioning--short-interest)
@@ -366,7 +363,7 @@ Be honest in the README that price forecasting is fundamentally hard (efficient-
   - Show the model's own historical hit-rate/accuracy stat *alongside every individual forecast* in the UI, not just on a separate backtest page — a forecast without its own track record next to it invites more confidence than it's earned.
   - **Report whether the result is statistically meaningful, not just a number.** A backtest Sharpe ratio computed over a limited sample can look impressive purely by chance. Bootstrap a confidence interval around the headline Sharpe/CAGR (resample the return series with replacement, many times, and report the spread) so the track record page can honestly say "Sharpe 0.8, 90% CI [0.3, 1.3]" instead of implying false precision with a single number.
 
-*A note for anticipated interview questions*: why gradient-boosted trees instead of an LSTM/Transformer? At the data volume a free-tier solo project realistically has (hundreds of tickers, years not decades of history), classical ML on engineered tabular features consistently matches or beats deep learning for this kind of tabular financial prediction task in the literature, trains in minutes instead of hours on free compute, and is far more interpretable (Section 10's SHAP values). Deep sequence models are a legitimate future extension (Section 32) once you have a specific reason to believe they'd help, not a default.
+*A note on model choice*: why gradient-boosted trees instead of an LSTM/Transformer? At the data volume a free-tier solo project realistically has (hundreds of tickers, years not decades of history), classical ML on engineered tabular features consistently matches or beats deep learning for this kind of tabular financial prediction task in the literature, trains in minutes instead of hours on free compute, and is far more interpretable (Section 10's SHAP values). Deep sequence models are a legitimate future extension (Section 32) once you have a specific reason to believe they'd help, not a default.
 
 ### 7.7 Risk & Portfolio Analytics Module
 
@@ -413,11 +410,11 @@ A persistent disclaimer banner ("Educational tool, not financial advice — you 
 
 ---
 
-## 10. Bonus Features You Didn't Ask For (But Should Want)
+## 10. Additional Features
 
-- **Backtesting / track-record page**: the algorithm's own historical performance, shown transparently (Section 7.6) — arguably the single highest-value addition for both rigor and résumé credibility.
+- **Backtesting / track-record page**: the algorithm's own historical performance, shown transparently (Section 7.6) — arguably the single highest-value addition for both rigor and credibility.
 - **Paper trading simulator**: rather than building a fake-money ledger from scratch, use **Alpaca's free paper-trading API** (real market data, simulated order execution, zero real money, no cost) to let the app "trade" its own recommendations forward in time and track how they actually perform going forward, not just in backtest.
-- **Explainability**: SHAP values for the ML forecasting model's feature importances, shown per-stock ("this forecast is driven mostly by momentum and sector sentiment, less by fundamentals") — turns a black-box ML model into something you can defend in an interview.
+- **Explainability**: SHAP values for the ML forecasting model's feature importances, shown per-stock ("this forecast is driven mostly by momentum and sector sentiment, less by fundamentals") — turns a black-box ML model into something whose output can be explained and checked.
 - **Alerting**: a free Discord webhook or Gmail-SMTP email alert when a stock in your portfolio crosses a rating threshold or a new chart pattern triggers, sent by the same GitHub Actions job that refreshes data.
 - **Chatbot Q&A**: a small free-tier-LLM-powered chat box that can answer questions like "why is NVDA rated Buy?" by being fed the already-computed structured data as context (never asked to compute anything itself) — this is where "implement an LLM" naturally and cheaply fits in.
 - **Own-built Market Regime Index** (Section 5) as a homepage widget.
@@ -660,59 +657,57 @@ Rough estimate for a solo, non-professional builder working part-time: **12–16
 
 ---
 
-## 20. How to Present This on GitHub
+## 20. Presentation on GitHub
 
 - **README** with: one-paragraph pitch, a screenshot or short GIF of the dashboard, a **live demo link**, the architecture diagram (Mermaid renders natively in GitHub's README preview — reuse the one from Section 3), quickstart (`pip install -r requirements.txt && streamlit run app/Home.py`), a methodology/disclaimer section, and a roadmap section.
 - Add topics/tags to the repo (`python`, `streamlit`, `quantitative-finance`, `machine-learning`, `fintech`) for discoverability.
-- **MIT license** — standard, unambiguous for a portfolio piece.
+- **MIT license** — standard and unambiguous.
 - Consider a short (~60–90 second) screen-recording GIF or Loom link embedded near the top of the README; reviewers skim, and a moving demo gets far more attention than a wall of text.
-- The **Backtest/Track Record page** (Section 10) is your strongest talking point in an interview — lead with it.
+- The **Backtest/Track Record page** (Section 10) is the strongest evidence of rigor — lead with it.
 
 ---
 
-## 21. Model & Effort Assignment Per Task
+## 21. Risk & Effort Rating Per Component
 
-Use this as a guide for which Claude model + effort level to reach for at each stage (whether in this chat, Claude Code, or the API). General rule of thumb baked into these picks: **routine, well-trodden code → Sonnet at Low/Medium; anything where a subtle logical/statistical mistake would silently corrupt the results → Opus at High/Extra**, since those bugs (look-ahead bias, mis-normalized scores, off-by-one pattern detection) are exactly the kind that don't throw an error — they just quietly produce wrong numbers.
+How much risk and effort each component carries, rated before the build. The rule behind the ratings: **routine, well-trodden code is Low/Medium; anything where a subtle logical or statistical mistake would silently corrupt the results is High/Extra**, because those bugs (look-ahead bias, mis-normalized scores, off-by-one pattern detection) don't throw an error — they quietly produce wrong numbers. The High and Extra rows got the most review and the most adversarial tests.
 
-| Task | Model | Effort | Why |
-|---|---|---|---|
-| Repo scaffolding, config, boilerplate | Sonnet | Low | Well-trodden, low-risk |
-| Data ingestion clients (yfinance/Finnhub/FRED/EDGAR) | Sonnet | Medium | Standard API-wrapping work with some tricky edge cases |
-| Rate-limit/retry/caching layer design | Opus | Medium–High | One holistic design mistake here breaks every downstream module |
-| Technical indicators (library wrapper) | Sonnet | Low | Mostly calling `pandas-ta-classic` |
-| **Chart pattern detection algorithms** (head-and-shoulders, triangles, etc.) | **Opus** | **High** | Genuine geometric/algorithmic reasoning, many edge cases, easy to silently mis-detect |
-| Fundamental scoring module | Sonnet | Medium | Standard ratio math and sector-relative normalization |
-| Sector-specific fundamental config (banks/REITs/utilities substitutions) | Sonnet | Medium | Mostly encoding known domain conventions into config, not inventing new math |
-| GDELT/RSS ingestion clients (Tier 1–3 news) | Sonnet | Medium | API-wrapping work, similar shape to other ingestion clients |
-| Entity extraction (ticker/company matching + spaCy fallback) | Sonnet | Medium | Well-scoped NLP task with existing free tools |
-| **Event-type classification + thematic propagation logic** | **Opus** | **High** | Deciding how a Tier-2/3 event should propagate to a basket of stocks, and with what decay, is a genuine judgment call that's easy to get subtly wrong (over- or under-propagating an event's impact) |
-| Sentiment scoring + recency decay (FinBERT integration) | Sonnet | Medium–High | Integrating a pretrained model + decay-weighted aggregation logic |
-| Smart Money data wiring (insider/13F/options ingestion + aggregation) | Sonnet | Medium | Standard aggregation once the ingestion clients exist |
-| Investor Profile presets (Growth/Value/Income/Momentum weight configs) | Sonnet | Low–Medium | Picking different starting points on an existing weight table, not new logic |
-| **Composite scoring & ranking methodology (incl. industry/macro + smart-money weighting)** | **Opus** | **Extra** | This is the project's core intellectual contribution — normalization choices, weighting across seven categories now, and avoiding subtle data leakage all compound here |
-| Statistical/ML forecasting models | Opus | High | Real statistical subtlety (stationarity, feature leakage, overfitting) |
-| **Backtesting engine (walk-forward, look-ahead- and survivorship-bias-free, cost-aware)** | **Opus** | **Extra** | The easiest place in the whole project to fool yourself with a bug that looks like a great result — now also responsible for realistic transaction costs and rebalance cadence (Section 7.6) and honest universe history (Section 22) |
-| **Cold-start historical backfill + index-reconstitution handling** | **Opus** | **Medium–High** | Getting the survivorship-bias-aware universe history wrong quietly poisons every backtest run afterward |
-| Monte Carlo simulation | Sonnet | Medium | Well-defined, standard technique |
-| **Statistical significance testing on backtest metrics (bootstrap CI)** | Opus | Medium–High | Easy to implement the bootstrap mechanically wrong (e.g. resampling that breaks time-ordering) in a way that looks fine but isn't |
-| Portfolio risk analytics (beta, VaR, correlation) | Opus | High | Statistically sensitive; errors here mislead the user about real risk |
-| Correlation-based stock clustering (k-means/hierarchical on returns) | Sonnet | Medium | Standard technique, existing libraries (scikit-learn) |
-| **Portfolio optimization (mean-variance/HRP/Black-Litterman via PyPortfolioOpt)** | **Opus** | **High** | Getting the "views" input, covariance estimation, and constraints wrong produces a target allocation that looks precise but is quietly unstable or unreasonable |
-| Rebalancing trade-list generation | Sonnet | Medium | Arithmetic once a target allocation exists |
-| Portfolio transaction/tax-lot bookkeeping (FIFO, fractional shares, split handling) | Sonnet | Medium | Well-defined accounting logic, but many small edge cases worth care |
-| Rebalancing recommendation logic | Sonnet | Medium | Rule-based once the analytics exist |
-| LLM provider abstraction + prompt design | Sonnet | Medium | Standard integration work |
-| Streamlit UI build | Sonnet | Medium | Iterative, visual, quick to check by eye |
-| Accessibility & beginner-friendly polish (colorblind-safe indicators, tooltips, glossary) | Sonnet | Low | Well-scoped, checkable by eye |
-| React + FastAPI migration (stretch) | Sonnet | High | More moving parts, but still well-trodden patterns |
-| Test suite (unit + integration + property-based) | Sonnet | Low–Medium | Mechanical once behavior is defined |
-| DB migrations (Alembic), dependency pinning, pre-commit config | Sonnet | Low | Standard tooling setup |
-| Concurrency/parallelization of the nightly pipeline | Sonnet | Medium | Well-trodden `asyncio`/`concurrent.futures` patterns, but worth testing carefully for race conditions |
-| CI/CD workflows | Sonnet | Low | Config-driven, well-documented patterns |
-| README / architecture docs / diagrams | Sonnet | Low | Writing task, not reasoning-bound |
-| **Final holistic code + methodology review before calling it "done"** | Opus (or Fable if you want a fresh second opinion) | High | A last careful pass across the whole scoring/forecasting/backtest chain, looking specifically for look-ahead bias and silent normalization bugs |
-
-A note on **Fable**: it's Anthropic's newest model line (back in general availability since July 1, 2026, after a brief suspension for export-control compliance). It's a reasonable model to try for that final review pass if you want to compare it against Opus, but Opus 4.8 is the well-established, safe default for everything in this table — there's no need to route the core build through Fable.
+| Component | Rating | Why |
+|---|---|---|
+| Repo scaffolding, config, boilerplate | Low | Well-trodden, low-risk |
+| Data ingestion clients (yfinance/Finnhub/FRED/EDGAR) | Medium | Standard API-wrapping work with some tricky edge cases |
+| Rate-limit/retry/caching layer design | Medium–High | One holistic design mistake here breaks every downstream module |
+| Technical indicators (library wrapper) | Low | Mostly calling `pandas-ta-classic` |
+| **Chart pattern detection algorithms** (head-and-shoulders, triangles, etc.) | **High** | Genuine geometric/algorithmic reasoning, many edge cases, easy to silently mis-detect |
+| Fundamental scoring module | Medium | Standard ratio math and sector-relative normalization |
+| Sector-specific fundamental config (banks/REITs/utilities substitutions) | Medium | Mostly encoding known domain conventions into config, not inventing new math |
+| GDELT/RSS ingestion clients (Tier 1–3 news) | Medium | API-wrapping work, similar shape to other ingestion clients |
+| Entity extraction (ticker/company matching + spaCy fallback) | Medium | Well-scoped NLP task with existing free tools |
+| **Event-type classification + thematic propagation logic** | **High** | Deciding how a Tier-2/3 event should propagate to a basket of stocks, and with what decay, is a genuine judgment call that's easy to get subtly wrong (over- or under-propagating an event's impact) |
+| Sentiment scoring + recency decay (FinBERT integration) | Medium–High | Integrating a pretrained model + decay-weighted aggregation logic |
+| Smart Money data wiring (insider/13F/options ingestion + aggregation) | Medium | Standard aggregation once the ingestion clients exist |
+| Investor Profile presets (Growth/Value/Income/Momentum weight configs) | Low–Medium | Picking different starting points on an existing weight table, not new logic |
+| **Composite scoring & ranking methodology (incl. industry/macro + smart-money weighting)** | **Extra** | This is the project's core intellectual contribution — normalization choices, weighting across seven categories now, and avoiding subtle data leakage all compound here |
+| Statistical/ML forecasting models | High | Real statistical subtlety (stationarity, feature leakage, overfitting) |
+| **Backtesting engine (walk-forward, look-ahead- and survivorship-bias-free, cost-aware)** | **Extra** | The easiest place in the whole project to fool yourself with a bug that looks like a great result — now also responsible for realistic transaction costs and rebalance cadence (Section 7.6) and honest universe history (Section 22) |
+| **Cold-start historical backfill + index-reconstitution handling** | **Medium–High** | Getting the survivorship-bias-aware universe history wrong quietly poisons every backtest run afterward |
+| Monte Carlo simulation | Medium | Well-defined, standard technique |
+| **Statistical significance testing on backtest metrics (bootstrap CI)** | Medium–High | Easy to implement the bootstrap mechanically wrong (e.g. resampling that breaks time-ordering) in a way that looks fine but isn't |
+| Portfolio risk analytics (beta, VaR, correlation) | High | Statistically sensitive; errors here mislead the user about real risk |
+| Correlation-based stock clustering (k-means/hierarchical on returns) | Medium | Standard technique, existing libraries (scikit-learn) |
+| **Portfolio optimization (mean-variance/HRP/Black-Litterman via PyPortfolioOpt)** | **High** | Getting the "views" input, covariance estimation, and constraints wrong produces a target allocation that looks precise but is quietly unstable or unreasonable |
+| Rebalancing trade-list generation | Medium | Arithmetic once a target allocation exists |
+| Portfolio transaction/tax-lot bookkeeping (FIFO, fractional shares, split handling) | Medium | Well-defined accounting logic, but many small edge cases worth care |
+| Rebalancing recommendation logic | Medium | Rule-based once the analytics exist |
+| LLM provider abstraction + prompt design | Medium | Standard integration work |
+| Streamlit UI build | Medium | Iterative, visual, quick to check by eye |
+| Accessibility & beginner-friendly polish (colorblind-safe indicators, tooltips, glossary) | Low | Well-scoped, checkable by eye |
+| React + FastAPI migration (stretch) | High | More moving parts, but still well-trodden patterns |
+| Test suite (unit + integration + property-based) | Low–Medium | Mechanical once behavior is defined |
+| DB migrations (Alembic), dependency pinning, pre-commit config | Low | Standard tooling setup |
+| Concurrency/parallelization of the nightly pipeline | Medium | Well-trodden `asyncio`/`concurrent.futures` patterns, but worth testing carefully for race conditions |
+| CI/CD workflows | Low | Config-driven, well-documented patterns |
+| README / architecture docs / diagrams | Low | Writing task, not reasoning-bound |
+| **Final holistic code + methodology review before calling it "done"** | High | A last careful pass across the whole scoring/forecasting/backtest chain, looking specifically for look-ahead bias and silent normalization bugs |
 
 ---
 

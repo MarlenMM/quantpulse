@@ -8,7 +8,7 @@ zero-shot classifier (`facebook/bart-large-mnli` via HuggingFace
 (Section 7.3's closing note), same design stance as the spaCy NER in
 `entity_extraction.py`.
 
-Two judgment calls live here (the reason Section 21 rates this Opus/High):
+Two judgment calls live here (the reason Section 21 rates this High risk):
 
 1. **The taxonomy and how it's presented to the model.** The eight event
    types from Section 7.3 are given to the NLI model as natural-language
