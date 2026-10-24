@@ -22,8 +22,7 @@ implies this project has had a view on Apple.
 
 Never generated against `quantpulse.db` or `quantpulse_demo.db` — always a
 separate scratch file, so this has no effect on your own local data or the
-live-deployed demo database (see the root README's "Live Demo & Deployment"
-section). `scripts/seed_screenshot_db.py` refuses to write to either by name.
+live-deployed demo database (see [`docs/OPERATIONS.md`](../OPERATIONS.md)). `scripts/seed_screenshot_db.py` refuses to write to either by name.
 
 ## Refreshing them
 

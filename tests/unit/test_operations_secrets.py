@@ -1,10 +1,10 @@
-"""The README's secrets table must name every secret the workflows read (finding 28).
+"""The operations guide's secrets table must name every secret the workflows read (finding 28).
 
 Five features wait on secrets only the owner can add, so the table is the whole
 of the instructions for turning them on: the exact name, what it unlocks, and
 where to get it. It had drifted -- no source for two of the keys, and nothing
 about the pipeline notices the webhook now carries. A secret a workflow reads
-and the README does not name is a feature nobody can switch on.
+and `docs/OPERATIONS.md` does not name is a feature nobody can switch on.
 """
 
 import re
@@ -21,8 +21,8 @@ def _workflow_secrets() -> set[str]:
 
 
 def _table_rows() -> dict[str, list[str]]:
-    """Each row of the README's secrets table, keyed by every secret it names."""
-    text = (ROOT / "README.md").read_text()
+    """Each row of the operations guide's secrets table, keyed by every secret it names."""
+    text = (ROOT / "docs" / "OPERATIONS.md").read_text()
     start = text.index("| Secret | What it unlocks")
     rows: dict[str, list[str]] = {}
     for line in text[start:].splitlines()[2:]:
@@ -42,7 +42,7 @@ def test_the_workflows_read_the_secrets_this_test_expects() -> None:
 
 def test_every_secret_a_workflow_reads_has_a_row() -> None:
     missing = _workflow_secrets() - set(_table_rows())
-    assert not missing, f"README's secrets table does not name: {sorted(missing)}"
+    assert not missing, f"docs/OPERATIONS.md's secrets table does not name: {sorted(missing)}"
 
 
 def test_every_row_says_what_it_unlocks_and_where_to_get_it() -> None:

@@ -293,7 +293,7 @@ class MarketRegime(Base):
     macro_news_tone: Mapped[float | None] = mapped_column(Float)
     #: The day `macro_news_tone` was read. Today's date for a fresh reading; an
     #: earlier one when GDELT refused tonight and a reading up to three sessions
-    #: old was carried forward (handoff item A). NULL on rows from before.
+    #: old was carried forward (backlog item A). NULL on rows from before.
     #: `_Day`, not `date`: inside this class `date` is the column above.
     macro_tone_as_of: Mapped[_Day | None] = mapped_column(Date, nullable=True)
     yield_curve_spread: Mapped[float | None] = mapped_column(Float)  # 10Y-2Y, Section 28

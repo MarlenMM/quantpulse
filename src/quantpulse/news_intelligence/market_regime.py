@@ -274,7 +274,7 @@ def describe_regime_coverage(row: "dict[str, object] | pd.Series") -> str:
 def _carried_tone_date(row: "dict[str, object] | pd.Series") -> date | None:
     """The day a carried-forward macro tone was read, or None if it is the row's own.
 
-    Handoff item A: a refused GDELT request carries the newest reading of at most
+    Backlog item A: a refused GDELT request carries the newest reading of at most
     three sessions forward, and the coverage sentence has to say which day it is.
     """
     if _is_absent(row, "macro_news_tone"):

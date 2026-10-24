@@ -1,11 +1,8 @@
-# QuantPulse — Full Project Plan
+# QuantPulse — Design Plan
 ### An open-source, zero-cost stock research & portfolio-management engine
 
-> Working name: **QuantPulse**. Other options if you want to rename it: `Alphalytics`, `MarketMind`, `TickerSage`, `Argus Quant`. Everything below uses QuantPulse as a placeholder — a find-and-replace is all it takes to rename.
-
-**Status:** Planning document (no code written yet)
+**Status:** The original design plan, written on 21 July 2026 before the first commit and kept as the reference the code cites ("Section 21", "ADR 4.5"). Phases 0–12 are complete; the [README](README.md) describes the current system, and where the build went another way the code says so.
 **Author:** Marlen Melis
-**Last updated:** July 21, 2026
 
 ---
 
@@ -20,7 +17,7 @@
 7. [The Analysis Engine (the real "brain")](#7-the-analysis-engine-the-real-brain)
 8. [Function 1 — Stock Screener & Recommendation Engine](#8-function-1--stock-screener--recommendation-engine)
 9. [Function 2 — Portfolio Manager](#9-function-2--portfolio-manager)
-10. [Bonus Features You Didn't Ask For (But Should Want)](#10-bonus-features-you-didnt-ask-for-but-should-want)
+10. [Additional Features](#10-additional-features)
 11. [LLM Integration Strategy (free tier only)](#11-llm-integration-strategy-free-tier-only)
 12. [UI/UX Design](#12-uiux-design)
 13. [Database Schema](#13-database-schema)
@@ -30,7 +27,7 @@
 17. [CI/CD & Free Deployment](#17-cicd--free-deployment)
 18. [Security & Secrets](#18-security--secrets)
 19. [Legal, Ethical & Compliance Notes](#19-legal-ethical--compliance-notes)
-20. [How to Present This on GitHub](#20-how-to-present-this-on-github)
+20. [Presentation on GitHub](#20-presentation-on-github)
 21. [Risk & Effort Rating Per Component](#21-risk--effort-rating-per-component)
 22. [Methodological Pitfalls to Avoid](#22-methodological-pitfalls-to-avoid)
 23. [Investor Profiles & Personas](#23-investor-profiles--personas)
@@ -366,7 +363,7 @@ Be honest in the README that price forecasting is fundamentally hard (efficient-
   - Show the model's own historical hit-rate/accuracy stat *alongside every individual forecast* in the UI, not just on a separate backtest page — a forecast without its own track record next to it invites more confidence than it's earned.
   - **Report whether the result is statistically meaningful, not just a number.** A backtest Sharpe ratio computed over a limited sample can look impressive purely by chance. Bootstrap a confidence interval around the headline Sharpe/CAGR (resample the return series with replacement, many times, and report the spread) so the track record page can honestly say "Sharpe 0.8, 90% CI [0.3, 1.3]" instead of implying false precision with a single number.
 
-*A note for anticipated interview questions*: why gradient-boosted trees instead of an LSTM/Transformer? At the data volume a free-tier solo project realistically has (hundreds of tickers, years not decades of history), classical ML on engineered tabular features consistently matches or beats deep learning for this kind of tabular financial prediction task in the literature, trains in minutes instead of hours on free compute, and is far more interpretable (Section 10's SHAP values). Deep sequence models are a legitimate future extension (Section 32) once you have a specific reason to believe they'd help, not a default.
+*A note on model choice*: why gradient-boosted trees instead of an LSTM/Transformer? At the data volume a free-tier solo project realistically has (hundreds of tickers, years not decades of history), classical ML on engineered tabular features consistently matches or beats deep learning for this kind of tabular financial prediction task in the literature, trains in minutes instead of hours on free compute, and is far more interpretable (Section 10's SHAP values). Deep sequence models are a legitimate future extension (Section 32) once you have a specific reason to believe they'd help, not a default.
 
 ### 7.7 Risk & Portfolio Analytics Module
 
@@ -413,11 +410,11 @@ A persistent disclaimer banner ("Educational tool, not financial advice — you 
 
 ---
 
-## 10. Bonus Features You Didn't Ask For (But Should Want)
+## 10. Additional Features
 
-- **Backtesting / track-record page**: the algorithm's own historical performance, shown transparently (Section 7.6) — arguably the single highest-value addition for both rigor and résumé credibility.
+- **Backtesting / track-record page**: the algorithm's own historical performance, shown transparently (Section 7.6) — arguably the single highest-value addition for both rigor and credibility.
 - **Paper trading simulator**: rather than building a fake-money ledger from scratch, use **Alpaca's free paper-trading API** (real market data, simulated order execution, zero real money, no cost) to let the app "trade" its own recommendations forward in time and track how they actually perform going forward, not just in backtest.
-- **Explainability**: SHAP values for the ML forecasting model's feature importances, shown per-stock ("this forecast is driven mostly by momentum and sector sentiment, less by fundamentals") — turns a black-box ML model into something you can defend in an interview.
+- **Explainability**: SHAP values for the ML forecasting model's feature importances, shown per-stock ("this forecast is driven mostly by momentum and sector sentiment, less by fundamentals") — turns a black-box ML model into something whose output can be explained and checked.
 - **Alerting**: a free Discord webhook or Gmail-SMTP email alert when a stock in your portfolio crosses a rating threshold or a new chart pattern triggers, sent by the same GitHub Actions job that refreshes data.
 - **Chatbot Q&A**: a small free-tier-LLM-powered chat box that can answer questions like "why is NVDA rated Buy?" by being fed the already-computed structured data as context (never asked to compute anything itself) — this is where "implement an LLM" naturally and cheaply fits in.
 - **Own-built Market Regime Index** (Section 5) as a homepage widget.
@@ -660,13 +657,13 @@ Rough estimate for a solo, non-professional builder working part-time: **12–16
 
 ---
 
-## 20. How to Present This on GitHub
+## 20. Presentation on GitHub
 
 - **README** with: one-paragraph pitch, a screenshot or short GIF of the dashboard, a **live demo link**, the architecture diagram (Mermaid renders natively in GitHub's README preview — reuse the one from Section 3), quickstart (`pip install -r requirements.txt && streamlit run app/Home.py`), a methodology/disclaimer section, and a roadmap section.
 - Add topics/tags to the repo (`python`, `streamlit`, `quantitative-finance`, `machine-learning`, `fintech`) for discoverability.
-- **MIT license** — standard, unambiguous for a portfolio piece.
+- **MIT license** — standard and unambiguous.
 - Consider a short (~60–90 second) screen-recording GIF or Loom link embedded near the top of the README; reviewers skim, and a moving demo gets far more attention than a wall of text.
-- The **Backtest/Track Record page** (Section 10) is your strongest talking point in an interview — lead with it.
+- The **Backtest/Track Record page** (Section 10) is the strongest evidence of rigor — lead with it.
 
 ---
 

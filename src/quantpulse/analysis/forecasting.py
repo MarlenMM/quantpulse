@@ -47,7 +47,7 @@ it as a fourth competing model would just grade baseline against itself under
 simulation noise. Its actual job is different in *kind* -- a full day-by-day
 percentile path (the "fan chart" Section 7.6 calls "the most honest way to
 visually communicate 'possible price forecast'"), not a single point+band at
-one horizon -- so it gets its own result type. Row 5 (not yet built)
+one horizon -- so it gets its own result type. Row 5 (built separately)
 adds the bootstrap confidence intervals around the backtest's headline
 Sharpe/CAGR. Every function here is pure: prices in, results out; no storage
 or network.

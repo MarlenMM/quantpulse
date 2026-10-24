@@ -369,7 +369,7 @@ def _pinned_clock() -> type[datetime]:
     module's `datetime` into a MagicMock: `_coerce_date`'s `isinstance(value,
     datetime)` then raised "isinstance() arg 2 must be a type", and every weekly
     run through these harnesses closed with `failed step(s): backtest` -- a
-    failure of the test's making that also shadowed the closing-line guard (handoff
+    failure of the test's making that also shadowed the closing-line guard (backlog
     item B). A subclass is still a type, so `isinstance` keeps working.
     """
 
@@ -920,7 +920,7 @@ class TestTier2SourceFallback:
         session.flush()
         return rows, gdelt_fetch, google_fetch, scored
 
-    # Handoff item E: GDELT's artlist is multilingual. Of 3,761 tier-2 rows stored
+    # Backlog item E: GDELT's artlist is multilingual. Of 3,761 tier-2 rows stored
     # from 2026-09-22, 347 GDELT titles were in non-Latin scripts (Ukrainian,
     # Russian, Serbian, Chinese, Malayalam...) and ~79 more in Spanish, Portuguese,
     # French or Italian -- all scored by FinBERT, an English model, into the
@@ -2887,7 +2887,7 @@ class TestAlerting:
     def test_the_harness_clock_does_not_break_the_backtest_step(
         self, engine: Engine, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Handoff item B: pinning the clock used to break the code under test.
+        """Backlog item B: pinning the clock used to break the code under test.
 
         `patch("refresh_data.datetime", wraps=datetime)` makes the module's
         `datetime` a MagicMock, so `_coerce_date`'s `isinstance(value, datetime)`
@@ -3927,7 +3927,7 @@ class TestMacroSeriesAndTheFredKey:
 
 
 class TestMacroToneRetriesThenCarriesForward:
-    """Handoff item A, the owner's call.
+    """Backlog item A, the owner's call.
 
     GDELT answered the nightly's single macro-tone request with HTTP 429 on
     roughly four nights in ten (tone present on 22 of 36 regime days since

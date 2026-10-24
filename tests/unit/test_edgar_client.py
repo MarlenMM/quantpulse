@@ -415,7 +415,7 @@ def test_fetch_filing_excerpt_is_none_without_a_recent_filing(tmp_path: Path) ->
 
 
 def test_dates_with_a_utc_offset_are_read_as_their_day(tmp_path: Path) -> None:
-    """Handoff item D, found under finding 37's noise.
+    """Backlog item D, found under finding 37's noise.
 
     Form 4 dates are XML Schema dates, which may carry an offset: PTC's weekly
     fetch failed every week on `"2026-09-02-05:00"` ("unconverted data remains
