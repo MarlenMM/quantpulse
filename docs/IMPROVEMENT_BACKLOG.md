@@ -136,7 +136,7 @@ Read this before debugging anything. Each was learned by losing an hour to it.
   comparison is how to tell, not reading imports.
 - **`[skip ci]` anywhere in a commit message skips every push-triggered
   workflow** — including when the message is only *describing* a comment that
-  mentions it. On 2026-09-25 two consecutive pushes (`9f79591`, `c0f00dc`)
+  mentions it. On 2026-09-25 two consecutive pushes (`82fdc5e`, `04208b8`)
   created no CI or Pages run, with GitHub reporting every component
   operational, because their messages quoted the stale `[skip ci]` comment they
   were removing. The next push, without the string, ran normally. `ci.yml` has
@@ -153,19 +153,19 @@ Recorded because several of them explain why the code looks the way it does now.
 
 | # | Was | Fix | Commit |
 |---|---|---|---|
-| 1 | Beta regressed against an equal-weight proxy; NVDA read **0.78 (R² 0.06)** | Ingest `^GSPC`; one resolver (`risk.resolve_market_returns`) shared by all three surfaces. NVDA now **1.88 (R² 0.44)** | `29edf62` |
-| 2 | 13F had **never ingested a row** — it asked for the in-progress quarter, which SEC does not publish | Ask which window exists (`latest_published_window`). 489/503 names landed. A second bug (blank `NAMEOFISSUER` → float NaN) was hiding behind the first | `2e75b13` |
-| 3 | `industry_macro` weighed 10% and covered **24/503 names** | Sectors became first-class baskets with their own GDELT triggers. Membership alone was a half-fix that measured as no fix | `3c2632c` |
-| 4 | Track Record claimed to backtest "the algorithm's ratings"; it ranked a hand-rolled trailing return | Signal is now `scoring.score_momentum`; run records `signal_name`; Kelly sizes on **excess over benchmark** (0.0 = "do not take this bet") | `72f47d6` |
-| 5 | Ungraded forecasts sat beside graded ones — and carried the biggest numbers (252d max **+231%**) | Graded is the default table; ungraded behind a disclosure. `forecasting.is_graded` is the one rule | `5f3b2e5`, `7018be2` |
-| 6 | Demo announced its own staleness ("SENTIMENT 24 days ago") | Schedule restored. **The timer was never the problem** — 13 nights of red were a Playwright strict-mode bug in the *publish* job | `c194cb6` |
-| 7 | Whole document scrolled sideways at 375px (Dashboard 619px) | `minmax(0, 1fr)` in the base `.split`/`.split-even` rules | `63045a3` |
-| 8 | Regime said "built from four inputs" while one had always been null; short interest vanished silently | Server-composed coverage note, per row; short interest explains its absence | `d96cb02` |
-| 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `f12dab1` |
-| 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70 completed within 30 days, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `c94470e`, `e15c808`, `077e6b4` |
-| 11 | The Track Record page ranked the momentum category, never the published rating, and could not — 22 days of stored composite history against a 1,183-day window | Alpaca paper trading, forward. Top 20 Buy/Strong Buy, equal-weight, whole shares, weekly rebalance, daily equity snapshot. The endpoint is a module constant with no setting that can reach live money; nothing is annualised | `66a01c9`, `4d697e4`, `840feca` |
-| 12 | The radar showed seven sub-scores and never said which moved the rating | An exact decomposition: `composite - 50 = Σ (w/A)(s-50)`, verified to sum for all 503 names. One sentence built server-side, naming the drivers **and** the largest opposing category (that clause fires for 75% of names) | `e5fb095` + this |
-| 13 | The Portfolio Manager was entirely as-of-now | A History section: value over time, a **time-weighted** comparison against the S&P 500, and dividend income counted on the shares held at each ex-date. On the example portfolio a naive value ratio reports **+171.9%** where the time-weighted return is **+33.5%** — and inverts the verdict against the index | `ba157ae`, `2cef83a` + this |
+| 1 | Beta regressed against an equal-weight proxy; NVDA read **0.78 (R² 0.06)** | Ingest `^GSPC`; one resolver (`risk.resolve_market_returns`) shared by all three surfaces. NVDA now **1.88 (R² 0.44)** | `7e360d0` |
+| 2 | 13F had **never ingested a row** — it asked for the in-progress quarter, which SEC does not publish | Ask which window exists (`latest_published_window`). 489/503 names landed. A second bug (blank `NAMEOFISSUER` → float NaN) was hiding behind the first | `1d14de4` |
+| 3 | `industry_macro` weighed 10% and covered **24/503 names** | Sectors became first-class baskets with their own GDELT triggers. Membership alone was a half-fix that measured as no fix | `8a67b8b` |
+| 4 | Track Record claimed to backtest "the algorithm's ratings"; it ranked a hand-rolled trailing return | Signal is now `scoring.score_momentum`; run records `signal_name`; Kelly sizes on **excess over benchmark** (0.0 = "do not take this bet") | `7bef3be` |
+| 5 | Ungraded forecasts sat beside graded ones — and carried the biggest numbers (252d max **+231%**) | Graded is the default table; ungraded behind a disclosure. `forecasting.is_graded` is the one rule | `7696474`, `81b98a5` |
+| 6 | Demo announced its own staleness ("SENTIMENT 24 days ago") | Schedule restored. **The timer was never the problem** — 13 nights of red were a Playwright strict-mode bug in the *publish* job | `8cfea85` |
+| 7 | Whole document scrolled sideways at 375px (Dashboard 619px) | `minmax(0, 1fr)` in the base `.split`/`.split-even` rules | `e31dedc` |
+| 8 | Regime said "built from four inputs" while one had always been null; short interest vanished silently | Server-composed coverage note, per row; short interest explains its absence | `d1997a5` |
+| 9 | Every deep link answered **HTTP 404** with the app in the body | A real `index.html` per route (508 files), each stock page with its own title | `bc7e2a4` |
+| 10 | No alerting of any kind, while the refresh already computed every input for it | Discord webhook from the refresh job. Triggers chosen by counting: everything on a held/watchlisted name, a new formation there at confidence ≥ 70 completed within 30 days, and universe-wide only a rating *landing on* Strong Buy/Sell. "Any change" measured 96–195 a night — about twice Discord's 2,000-char limit | `8600126`, `6911067`, `afbb8e3` |
+| 11 | The Track Record page ranked the momentum category, never the published rating, and could not — 22 days of stored composite history against a 1,183-day window | Alpaca paper trading, forward. Top 20 Buy/Strong Buy, equal-weight, whole shares, weekly rebalance, daily equity snapshot. The endpoint is a module constant with no setting that can reach live money; nothing is annualised | `74b711b`, `95efe1e`, `d4f5754` |
+| 12 | The radar showed seven sub-scores and never said which moved the rating | An exact decomposition: `composite - 50 = Σ (w/A)(s-50)`, verified to sum for all 503 names. One sentence built server-side, naming the drivers **and** the largest opposing category (that clause fires for 75% of names) | `31ab68d` + this |
+| 13 | The Portfolio Manager was entirely as-of-now | A History section: value over time, a **time-weighted** comparison against the S&P 500, and dividend income counted on the shares held at each ex-date. On the example portfolio a naive value ratio reports **+171.9%** where the time-weighted return is **+33.5%** — and inverts the verdict against the index | `65c6cee`, `9af19dd` + this |
 | 14 | The SPA lacked CSV export, Compare mode and the watchlist | All three, client-side over data the screener payload already carries. The watchlist is `localStorage` — the API is read-only by design, so it is per-browser and says so. A parity test names which Streamlit feature each mirrors | this |
 | 15 | Four of seven categories barely moved the ranking, and nothing said so | An **Effective weights** panel in Settings: stated weight beside realised influence (rank correlation with the composite), plus the pair that causes it. Technical is 2nd by weight and **1st** by influence; fundamental is 1st by weight and 3rd. The obvious measure — variance share — would have recovered the weights exactly and shown nothing | this |
 | 16 | Three open Dependabot PRs, one the twice-breaking charting library | Routine three taken together (one CI run, no rebase churn). `plotly.js-dist-min` turned out to be **unused** — removing it left the largest chunk byte-identical — so it is gone and `plotly.js` is explicit at **4.1.0**, verified in a real browser across all four trace types | `ae8154e`, `a0edfc0` |
@@ -189,7 +189,7 @@ Recorded because several of them explain why the code looks the way it does now.
    `industry_macro` fell from 19/503 to **0/503**. The step's budget had been
    set from a cost model that counted model inference and ignored the network —
    17 serial queries against a rate-limited free API is what spends the half
-   hour. Fixed in `032a5ce` (deadline + keep what you fetched + rotate baskets
+   hour. Fixed in `de2272d` (deadline + keep what you fetched + rotate baskets
    by staleness, budget 50 min). **The next weekly run is the test**; a slow
    week now degrades to partial coverage rather than none.
 
@@ -197,7 +197,7 @@ Recorded because several of them explain why the code looks the way it does now.
    Monday 2026-09-07 was **Labor Day**. The scheduled run resolved the trading
    day in exchange time, found the market shut and logged
    `skipped_non_trading_day` — so the weekly branch did not run at all. That is
-   now fixed (`05688b6`): the weekly branch runs on the week's first *trading*
+   now fixed (`728bfae`): the weekly branch runs on the week's first *trading*
    day, so Tuesday carries it when Monday is closed. **Tonight's 22:00 UTC run
    is the test**, and it is the first one that can be.
 
@@ -601,7 +601,7 @@ PRs with two grouped ones — #33 (the React group: exactly #29+#30) and #34
 generated before #33 merged and was **conflicting**, so it was rebased by
 Dependabot and re-checked on the new head (static 43/43) before merging; a
 textual merge of two lockfile changes was not trusted. Squash-merged as
-`58615eb` and `d83445f`; CI and the Pages publish green on both. **On the live
+`9b7eda2` and `a381251`; CI and the Pages publish green on both. **On the live
 demo** (react 19.3.0, plotly.js 4.1.1, vite 8.3.1): NVDA's three figures drew
 the trace types they asked for (candlestick, scatterpolar, scatter) and the
 console had no errors.
@@ -1213,7 +1213,7 @@ top-level and may ask for anything, so CI and Pages were green on every commit
 and only the scheduled run broke. And the `notify` job that should have reported
 it could not start either — 27's own stated limit, met on its first night.
 
-**Fix** (`4b78f59`): `actions: read` on the nightly's `publish` job.
+**Fix** (`886711a`): `actions: read` on the nightly's `publish` job.
 **Guard:** `test_a_called_workflow_never_asks_for_more_than_its_caller_grants`
 checks every caller of a local reusable workflow against every callee job's
 request, and requires the caller to have an explicit block; on the pre-fix file
@@ -1314,7 +1314,7 @@ fails the job whether or not the webhook is set: the missing secret is not an
 error, the frozen site is, and a red run is something GitHub can email about
 (depending on notification settings).
 
-**Verified:** CI green on `bcb8450`; the next Pages run evaluated `notify` and
+**Verified:** CI green on `540f14b`; the next Pages run evaluated `notify` and
 skipped it on success; run locally, the live site (2026-09-23 prices) was within
 bounds. **Mutation-checked sixteen ways**, each failing its own test.
 
@@ -1358,7 +1358,7 @@ checkable: the last commit's date *is* the clock.
   workflow — no CI run, no Pages rebuild.
 
 **Verified end to end** rather than in a month: run `36034421003` (forced)
-committed `172e223` as `github-actions[bot]`, and no CI or Pages run followed
+committed `83df0c7` as `github-actions[bot]`, and no CI or Pages run followed
 it. **What remains unproven** is GitHub's side: that a bot commit resets the
 60-day clock is what every report says, not what GitHub documents. The limit is
 stated in `keepalive.yml`: if the schedule has already been disabled, nothing in
@@ -1372,7 +1372,7 @@ its first mutation — a literal file list would not have).
 
 Mutation-checked eleven ways, each failing its own test by name.
 
-**Trap, seen again:** the push of `9f79591` created no workflow runs at all,
+**Trap, seen again:** the push of `82fdc5e` created no workflow runs at all,
 with GitHub reporting every component operational — the quirk recorded in
 memory. `ci.yml` has no `workflow_dispatch`, so the only recovery is another
 push.
