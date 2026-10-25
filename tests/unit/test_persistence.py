@@ -513,10 +513,10 @@ class TestAdjClosePanelExcludesUnusablePrices:
 
     Real example from the cold-start backfill: `DEC` carries 732 bars whose
     `adj_close` is exactly 0.0 while its raw `close` is $1.44. Left in the
-    panel, `refresh_data._equal_weight_benchmark` rebases each name to its own
-    first observation -- so dividing by that zero makes the ENTIRE benchmark
-    index `inf`, and every strategy-vs-market number on the Track Record page
-    is compared against infinity.
+    panel, `refresh_data._equal_weight_benchmark` chains each day's mean
+    return -- so the return off that zero makes the ENTIRE benchmark index
+    `inf`, and every strategy-vs-market number on the Track Record page is
+    compared against infinity.
     """
 
     @staticmethod

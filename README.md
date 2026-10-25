@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/MarlenMM/quantpulse/actions/workflows/ci.yml)
 [![Live demo](https://img.shields.io/badge/live%20demo-marlenmm.github.io%2Fquantpulse-0f7a44.svg)](https://marlenmm.github.io/quantpulse/)
-[![Tests](https://img.shields.io/badge/tests-2%2C000%2B-0f7a44.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2%2C100%2B-0f7a44.svg)](tests/)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-750014.svg)](LICENSE)
 
@@ -24,7 +24,7 @@ data is labelled rather than hidden.
 
 | | |
 |---|---|
-| Automated tests | **2,000+** (unit, integration, and property-based via Hypothesis), plus two Playwright suites: one against a stubbed API, one against the real pre-rendered site |
+| Automated tests | **2,100+** (unit, integration, and property-based via Hypothesis), plus two Playwright suites: one against a stubbed API, one against the real pre-rendered site |
 | Core engine code | **21,000+** lines (`src/quantpulse/`) — ingestion, analysis, storage, API |
 | Free data sources integrated | **8** feed each refresh — Yahoo Finance, Finnhub, FRED, SEC EDGAR (filings + 13F), GDELT, Reddit, financial news RSS, Wikipedia — plus a 9th (a historical S&P 500 constituents dataset) used only for the one-time cold-start backfill |
 | Database | **26 tables**, **19 Alembic migrations**, every one reversible (`alembic downgrade` round-trips clean) |
@@ -235,7 +235,7 @@ rather than starting over. Expect roughly 300 MB.
 **Your own database refreshes when you ask it to** — from **⚙️ Settings → Run a
 refresh** in the app (the usual way: it runs in the background and tails its own
 log while you keep using the app) or by running the script above. The *public
-demo* is different and runs on a timer; see [Data and secrets](#data-and-secrets).
+demo* is different and runs on a timer; see [Data and secrets](docs/OPERATIONS.md#data-and-secrets).
 
 Three things are worth knowing before you start one by hand, and the page offers
 a checkbox for the last two:
@@ -251,7 +251,7 @@ a checkbox for the last two:
 
 ## Testing and quality
 
-- **2,000+ Python tests**: unit, integration, and property-based tests with
+- **2,100+ Python tests**: unit, integration, and property-based tests with
   Hypothesis for the invariants that matter: scores bounded and monotonic,
   missing categories dropped rather than scored as zero, FIFO lots conserving
   shares and cost basis, bootstrap intervals reproducible from a seed.
@@ -259,6 +259,8 @@ a checkbox for the last two:
   pre-rendered site, which the publish workflow runs before the demo updates.
 - **Golden files across languages**: the SPA's TypeScript port of the portfolio
   rules is pinned to the Python engine's own output.
+- **Architecture as a test**: `tests/unit/test_layering.py` fails if the analysis
+  engine imports a front end, the API or the LLM layer.
 - **Docs that cannot drift**: `tests/unit/test_documented_counts.py` derives the
   counts in this README (tests, tables, migrations, endpoints, pages, glossary
   terms) from the code and fails when they disagree.

@@ -194,7 +194,7 @@ def main() -> None:
             """
             When it does run, this page shows what Section 7.6 asks for:
 
-            - A ranked strategy vs a buy-and-hold benchmark, with the ranking
+            - A ranked strategy vs an equal-weight benchmark, with the ranking
               signal named
             - Sharpe, CAGR and max drawdown **with bootstrap confidence intervals**
             - The assumed transaction cost and rebalance cadence, stated explicitly
@@ -269,7 +269,7 @@ def main() -> None:
     st.caption(
         f"Transaction cost assumed: **{format_percent(latest['assumed_txn_cost'], digits=2)}** "
         "per unit of turnover — a conservative bid-ask stand-in. The benchmark is the "
-        "**equal-weight** universe held buy-and-hold, which is the comparison that isolates "
+        "**equal-weight** universe, rebalanced daily, which is the comparison that isolates "
         "the signal: this strategy equal-weights the names it picks, so measuring it against "
         "an equal-weight version of the whole universe asks *did ranking help*, with the "
         "weighting scheme held fixed. Against the cap-weighted index it would instead be "

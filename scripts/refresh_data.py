@@ -1833,27 +1833,43 @@ def _eligible_universe_fn(intervals: pd.DataFrame) -> Callable[[date], set[str]]
 
 
 def _equal_weight_benchmark(panel: pd.DataFrame) -> pd.Series:
-    """An equal-weighted index level from the panel, as a buy-and-hold market proxy.
+    """An equal-weighted index level for the panel's universe, as the market proxy.
 
-    Each name's adjusted close is rebased to its own first observation, then
-    averaged across whatever names exist on each date. A dedicated S&P 500 price
-    series isn't ingested, so this survivorship-aware average of the universe is
-    the honest stand-in for the buy-and-hold benchmark (Section 7.6).
+    The strategy trades an equal-weighted slice of the point-in-time universe, so
+    the comparison is that universe held equal-weight: each day's index return is
+    the mean of that day's returns across the names trading, chained into a level
+    that starts at 1.0. Delisted names count until their last bar, so their losses
+    stay in the benchmark (Section 22).
 
-    Names whose first observation is not strictly positive are dropped rather
-    than rebased. Dividing by a zero first price yields `inf` for that column,
-    and one such column drags the whole cross-sectional mean to `inf` -- a
-    single bad symbol silently destroying the benchmark every strategy number
-    is compared against. `persistence.read_adj_close_panel` already filters
-    these out; this is the second line of defence for any other caller.
+    Chaining returns rather than averaging each name's price rebased to its own
+    first observation is what keeps the level honest. That average jumped
+    whenever the set of names with a bar changed: a date on which only part of
+    the universe had a close re-averaged the index over a different set of
+    names, it brought every later listing in at 1.0 while the rest of the index
+    stood higher, and it dropped names from the average on the day they left.
+    The published run of 2026-10-19 reported the benchmark at -10.7% a year
+    after about +26% in every earlier weekly run, and the same prices re-read a
+    few days later gave +25%; chained, they give +20%, beside +19.7% for the
+    S&P 500 index itself over the same window.
+
+    Prices are forward-filled only inside each name's own life, so a missing bar
+    in the middle is a zero return that day (caught up the next), and a name is
+    never carried past its last trade. Names whose first observation is not
+    strictly positive are dropped: `persistence.read_adj_close_panel` already
+    filters these out, and this is the second line of defence for any other
+    caller.
     """
     positive = panel.where(panel > 0)
     first = positive.apply(lambda col: col.dropna().iloc[0] if col.notna().any() else np.nan)
     usable = first[first > 0].index
     if len(usable) == 0:
         return pd.Series(index=panel.index, dtype=float)
-    normalized = positive[usable].divide(first[usable], axis=1)
-    return normalized.mean(axis=1, skipna=True)
+    prices = positive[usable].sort_index()
+    alive = prices.ffill().notna() & prices.bfill().notna()
+    filled = prices.ffill().where(alive)
+    daily = filled.pct_change(fill_method=None).mean(axis=1, skipna=True)
+    level = (1.0 + daily.fillna(0.0)).cumprod()
+    return level.where(filled.notna().any(axis=1)).reindex(panel.index)
 
 
 def _momentum_signal(as_of: date, panel: pd.DataFrame) -> dict[str, float]:

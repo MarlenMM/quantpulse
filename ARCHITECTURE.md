@@ -17,8 +17,9 @@ returns DataFrames/dataclasses out — no Streamlit, no FastAPI, no UI
 framework anywhere in its import graph. That's what makes two independent
 front ends possible over one engine (`app/` and `frontend/` +
 `src/quantpulse/api/`) without duplicating a single line of scoring,
-forecasting, or risk logic, and it's asserted by the module layout itself,
-not just a convention someone could quietly violate.
+forecasting, or risk logic. It is not left to convention:
+`tests/unit/test_layering.py` reads every module's imports and fails if one
+reaches Streamlit, FastAPI, `app/`, `api/` or the LLM layer.
 
 ## Layers, outside in
 

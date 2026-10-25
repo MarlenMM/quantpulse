@@ -1333,7 +1333,7 @@ def test_ticker_fetches_run_concurrently_and_survive_one_failure(engine: Engine)
 
 def test_equal_weight_benchmark_survives_a_zero_first_price() -> None:
     # One symbol whose first observation is 0.0 used to turn the whole
-    # benchmark into `inf` (it is rebased by division), so every
+    # benchmark into `inf` (it was rebased by division), so every
     # strategy-vs-market comparison on the Track Record page was against
     # infinity. Real case: DEC, 732 bars of adj_close = 0.0.
     index = pd.date_range("2024-01-01", periods=4, freq="D")
@@ -1350,8 +1350,48 @@ def test_equal_weight_benchmark_survives_a_zero_first_price() -> None:
 
     assert np.isfinite(benchmark).all(), "a zero-priced symbol must not make the index infinite"
     assert benchmark.iloc[0] == pytest.approx(1.0)
-    # Exactly the mean of the two usable names' rebased levels.
-    assert benchmark.iloc[-1] == pytest.approx((13.0 / 10.0 + 60.0 / 50.0) / 2)
+    # Each day's mean return of the two usable names, chained.
+    daily = [(11 / 10 + 50 / 50) / 2, (12 / 11 + 55 / 50) / 2, (13 / 12 + 60 / 55) / 2]
+    assert benchmark.iloc[-1] == pytest.approx(float(np.prod(daily)))
+
+
+def test_equal_weight_benchmark_ignores_which_names_have_the_last_bar() -> None:
+    # The 2026-10-19 run published the benchmark at -10.7% a year after ~+26%
+    # every earlier week. Averaging rebased levels re-weights the index over
+    # whichever names have a bar on a date, so a night on which only part of
+    # the universe had its close moved the whole level. Chained returns don't.
+    index = pd.date_range("2024-01-01", periods=3, freq="D")
+    full = pd.DataFrame(
+        {
+            "UP": [10.0, 20.0, 22.0],  # doubled, then +10%
+            "FLAT": [10.0, 10.0, 11.0],  # flat, then +10%
+        },
+        index=index,
+    )
+    partial = full.copy()
+    partial.loc[index[-1], "UP"] = np.nan  # its last close has not arrived yet
+
+    level_full = refresh_data._equal_weight_benchmark(full)
+    level_partial = refresh_data._equal_weight_benchmark(partial)
+
+    # Day 2 is the mean of +100% and 0%; day 3 is +10% whichever names report it.
+    assert level_full.iloc[-1] == pytest.approx(1.5 * 1.1)
+    assert level_partial.iloc[-1] == pytest.approx(1.5 * 1.1)
+    # The old average of rebased levels: (2.2 + 1.1) / 2 = 1.65 with both, but
+    # 1.1 with only FLAT -- a third of the index gone in a night.
+
+
+def test_equal_weight_benchmark_does_not_move_when_a_name_lists() -> None:
+    index = pd.date_range("2024-01-01", periods=3, freq="D")
+    panel = pd.DataFrame(
+        {"OLD": [10.0, 15.0, 15.0], "NEW": [np.nan, np.nan, 40.0]},
+        index=index,
+    )
+
+    benchmark = refresh_data._equal_weight_benchmark(panel)
+
+    # NEW's first bar is not a return; the level carries on from OLD alone.
+    assert benchmark.tolist() == pytest.approx([1.0, 1.5, 1.5])
 
 
 def test_equal_weight_benchmark_is_empty_when_no_symbol_is_usable() -> None:

@@ -753,7 +753,7 @@ def read_adj_close_panel(
     # some delisted names (a real example: DEC carries 732 bars with
     # adj_close = 0.0 while its raw close is $1.44). Left in, one such symbol
     # poisons everything computed from the panel: `_equal_weight_benchmark`
-    # rebases each name to its first observation, so dividing by that zero
+    # chains each day's mean return, so the return off that zero is `inf` and
     # turns the ENTIRE benchmark index into `inf`, and any return computed
     # across a zero is `inf` or -100%. Excluded here, at the read boundary, so
     # already-stored bad rows are neutralized for every consumer rather than

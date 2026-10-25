@@ -104,7 +104,7 @@ _ROTATION_PANEL_DAYS = 150
 
 app = FastAPI(
     title="QuantPulse API",
-    version="0.1.0",
+    version="1.0.0",
     summary="Read-only access to QuantPulse's computed research data.",
     description=(
         "Serves the same computed numbers the Streamlit app shows. All analysis is "

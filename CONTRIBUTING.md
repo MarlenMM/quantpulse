@@ -17,8 +17,8 @@ is for anyone who wants to send one.
   22) needs that discussion before code, not after.
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) first if you're not sure where
   something belongs — the layering it describes (`analysis/` never imports
-  from a UI, etc.) is enforced by convention, not by tooling, so a PR that
-  crosses it will get asked to move code around.
+  from a UI, etc.) is enforced by `tests/unit/test_layering.py`, so a PR that
+  crosses it fails CI.
 
 ## Dev setup
 
@@ -39,14 +39,15 @@ uv run pre-commit install
 ```bash
 uv run ruff check .
 uv run ruff format .
-uv run mypy src scripts
+uv run mypy src scripts app
 uv run pytest
 ```
 
 All four need to pass clean — this is exactly what CI runs on every push and
 PR (`.github/workflows/ci.yml`), so running it locally first means no
-surprises. For the `frontend/` React app: `npm run typecheck` (no test suite
-exists there yet).
+surprises. For the `frontend/` React app: `npm run typecheck`, `npm run build`
+and `npm run test:e2e` (Playwright against a stubbed API; install the browser
+once with `npx playwright install chromium`).
 
 ## Tests
 
@@ -86,7 +87,7 @@ both earlier chart breakages, so don't merge a frontend bump on those alone.
 
 - Formatting/linting is `ruff` (config in `pyproject.toml`), not up for
   debate in review — run `ruff format .` and move on.
-- Type hints everywhere in `src/`/`scripts/` (mypy-checked in CI); `tests/`
+- Type hints everywhere in `src/`, `scripts/` and `app/` (mypy-checked in CI); `tests/`
   is intentionally not type-checked (see the mypy config's scope).
 - Default to **no comments** — code should read clearly from naming and
   structure. A comment is worth adding only when it explains a *why* that

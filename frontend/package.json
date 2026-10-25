@@ -1,7 +1,7 @@
 {
   "name": "quantpulse-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "React + TypeScript client for the QuantPulse API (ADR 4.1's stretch goal).",
   "scripts": {
